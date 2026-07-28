@@ -1,0 +1,19 @@
+digraph G {
+  graph [rankdir=TB, bgcolor="white", pad=0.3, nodesep=0.35, ranksep=0.55, fontname="Arial"];
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#d71920", penwidth=1.4, fontname="Arial", fontsize=10, margin="0.13,0.08"];
+  edge [color="#777777", penwidth=1.1, arrowsize=0.65];
+  ui [label="Workspace UI", fillcolor="#fff4f4"];
+  api [label="Presentation API", fillcolor="#fff4f4"];
+  orch [label="Durable Orchestrator", fillcolor="#fff4f4"];
+  {rank=same; ingest [label="Ingestion Worker"]; plan [label="Planning Worker"]; compose [label="Composition Worker"]; asset [label="Asset Worker"];}
+  {rank=same; pptx [label="Internal PPTX Composer\nNode.js / TypeScript"]; render [label="Rendering Worker"]; qa [label="Quality and Repair Worker"]; export [label="Export Worker"];}
+  {rank=same; gateway [label="Enterprise Model Gateway"]; registry [label="Template Registry"]; oracle [label="Oracle 23ai", shape=cylinder]; store [label="Object Storage", shape=cylinder]; redis [label="Queue / Events", shape=cylinder];}
+  ui -> api -> orch;
+  orch -> ingest; orch -> plan; orch -> compose; orch -> asset; orch -> render; orch -> qa; orch -> export;
+  compose -> pptx;
+  plan -> gateway; asset -> gateway; qa -> gateway;
+  compose -> registry; pptx -> registry;
+  ingest -> store; asset -> store; pptx -> store; render -> store; export -> store;
+  api -> oracle; orch -> oracle; registry -> oracle;
+  orch -> redis;
+}

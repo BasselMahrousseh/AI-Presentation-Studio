@@ -1,0 +1,216 @@
+openapi: 3.1.0
+info:
+  title: e& AI Presentation Studio API
+  version: 1.0.0
+  description: Internal API for projects, source ingestion, deck generation, editing, quality and export.
+servers:
+  - url: /api/presentation-studio/v1
+security:
+  - oidc: []
+paths:
+  /projects:
+    post:
+      operationId: createProject
+      summary: Create a presentation project
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Project'}
+        default: {$ref: '#/components/responses/Problem'}
+  /projects/{project_id}/decks:
+    post:
+      operationId: createDeck
+      summary: Create a logical deck
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [title]
+              properties:
+                title: {type: string, maxLength: 200}
+                template_version_id: {type: [string, 'null']}
+      responses:
+        '201': {description: Created}
+        default: {$ref: '#/components/responses/Problem'}
+  /decks/{deck_id}/generations:
+    post:
+      operationId: createGeneration
+      summary: Start outline or complete deck generation
+      parameters:
+        - $ref: '#/components/parameters/DeckId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGenerationRequest'
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/JobAccepted'}
+        default: {$ref: '#/components/responses/Problem'}
+  /jobs/{job_id}:
+    get:
+      operationId: getJob
+      summary: Read durable job status
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Job
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Job'}
+        default: {$ref: '#/components/responses/Problem'}
+  /jobs/{job_id}/events:
+    get:
+      operationId: streamJobEvents
+      summary: Stream progress using Server-Sent Events
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: {type: string}
+  /decks/{deck_id}/versions/{version_id}/slides/{slide_no}:regenerate:
+    post:
+      operationId: regenerateSlide
+      summary: Regenerate one slide and create a new deck version
+      parameters:
+        - $ref: '#/components/parameters/DeckId'
+        - name: version_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: slide_no
+          in: path
+          required: true
+          schema: {type: integer, minimum: 1}
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [instruction]
+              properties:
+                instruction: {type: string, maxLength: 2000}
+                preserve_locked_objects: {type: boolean, default: true}
+      responses:
+        '202': {description: Accepted}
+        default: {$ref: '#/components/responses/Problem'}
+components:
+  securitySchemes:
+    oidc:
+      type: openIdConnect
+      openIdConnectUrl: https://identity.example/.well-known/openid-configuration
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 8, maxLength: 200}
+    ProjectId:
+      name: project_id
+      in: path
+      required: true
+      schema: {type: string}
+    DeckId:
+      name: deck_id
+      in: path
+      required: true
+      schema: {type: string}
+  responses:
+    Problem:
+      description: Problem details
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+  schemas:
+    CreateProjectRequest:
+      type: object
+      additionalProperties: false
+      required: [title, classification]
+      properties:
+        title: {type: string, maxLength: 200}
+        description: {type: [string, 'null'], maxLength: 2000}
+        team_id: {type: [string, 'null']}
+        classification: {type: string, enum: [PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED]}
+    Project:
+      type: object
+      required: [project_id, title, classification, status, created_at]
+      properties:
+        project_id: {type: string}
+        title: {type: string}
+        classification: {type: string}
+        status: {type: string}
+        created_at: {type: string, format: date-time}
+    CreateGenerationRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, brief]
+      properties:
+        mode: {type: string, enum: [outline, full_deck]}
+        template_version_id: {type: [string, 'null']}
+        brief: {type: object}
+        source_ids:
+          type: array
+          items: {type: string}
+        options: {type: object}
+    JobAccepted:
+      type: object
+      required: [job_id, status, events_url]
+      properties:
+        job_id: {type: string}
+        status: {type: string, const: CREATED}
+        events_url: {type: string}
+    Job:
+      type: object
+      required: [job_id, status, progress, current_stage]
+      properties:
+        job_id: {type: string}
+        status: {type: string}
+        progress: {type: integer, minimum: 0, maximum: 100}
+        current_stage: {type: [string, 'null']}
+        result_resource_id: {type: [string, 'null']}
+        error: {$ref: '#/components/schemas/Problem'}
+    Problem:
+      type: object
+      required: [type, title, status, code, correlation_id]
+      properties:
+        type: {type: string}
+        title: {type: string}
+        status: {type: integer}
+        code: {type: string}
+        detail: {type: [string, 'null']}
+        correlation_id: {type: string}
+        retryable: {type: boolean}

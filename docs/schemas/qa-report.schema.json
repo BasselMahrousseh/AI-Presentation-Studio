@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.eand.local/aips/qa-report.schema.json",
+  "title": "QAReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "slide_id",
+    "score",
+    "passed",
+    "findings"
+  ],
+  "properties": {
+    "slide_id": {
+      "type": "string"
+    },
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "passed": {
+      "type": "boolean"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_id",
+          "category",
+          "severity",
+          "description"
+        ],
+        "properties": {
+          "finding_id": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "enum": [
+              "overflow",
+              "overlap",
+              "contrast",
+              "hierarchy",
+              "density",
+              "alignment",
+              "brand",
+              "factual",
+              "citation",
+              "rtl",
+              "image_quality",
+              "pptx_integrity"
+            ]
+          },
+          "severity": {
+            "enum": [
+              "info",
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "recommended_action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 1000
+          }
+        }
+      }
+    }
+  }
+}

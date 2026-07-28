@@ -1,0 +1,123 @@
+project:
+  id: eand-ai-presentation-studio
+  name: "e& AI Presentation Studio"
+  version: "1.0"
+  baseline_date: "2026-07-27"
+  status: engineering_baseline
+  owner: "AI Engineering & Factory"
+  delivery_model: internal_team_development
+
+mission: >-
+  Extend the existing e& GenAI Workspace with a governed on-premises capability
+  that generates, reviews, edits and exports high-quality native editable PPTX files.
+
+source_of_truth_order:
+  - adr
+  - project_spec
+  - api_and_schemas
+  - engineering_docs
+  - agents
+  - tests
+  - implementation
+
+scope:
+  in:
+    - prompt_to_presentation
+    - document_to_presentation
+    - existing_pptx_improvement
+    - outline_approval
+    - slide_level_regeneration
+    - native_editable_pptx
+    - pdf_and_png_rendering
+    - enterprise_templates
+    - deterministic_and_multimodal_qa
+    - english_arabic_and_bilingual
+    - source_lineage_and_citations
+    - internal_structured_edit_operations
+  out_initial_release:
+    - full_powerpoint_replacement
+    - real_time_multi_user_editing
+    - autonomous_external_publication
+    - macro_ole_activex_support
+    - foundation_model_fine_tuning
+    - external_presentation_platform
+
+architecture:
+  frontend: existing_genai_workspace
+  api: fastapi
+  orchestration: durable_job_state_machine
+  metadata_store: oracle_23ai
+  binary_store: enterprise_object_storage
+  queue_and_events: redis_or_approved_broker
+  pptx_composer:
+    ownership: internal
+    runtime: nodejs_typescript
+    primary_library: pptxgenjs
+    low_level_support: internal_ooxml_patch_modules
+  renderer: hardened_libreoffice_worker
+  model_gateway: eand_ai_sentinel
+  initial_editing: powerpoint_desktop_plus_workspace_structured_operations
+
+model_aliases:
+  reasoning: presentation-reasoning
+  image: presentation-image
+  embedding: presentation-embedding
+  visual_qa: presentation-visual-qa
+  reranker: presentation-reranker
+
+hard_constraints:
+  - no_public_ai_endpoint_calls
+  - no_unapproved_internet_egress
+  - no_external_presentation_runtime
+  - schema_validate_all_model_outputs
+  - source_documents_are_untrusted
+  - native_pptx_editability_primary
+  - immutable_published_versions
+  - server_side_authorization
+  - idempotency_for_mutations
+  - audit_for_sensitive_and_mutating_actions
+  - human_approval_for_publication_and_architecture_changes
+
+job_states:
+  - CREATED
+  - INGESTING
+  - PLANNING
+  - AWAITING_OUTLINE_APPROVAL
+  - GENERATING
+  - COMPOSING
+  - RENDERING
+  - INSPECTING
+  - REPAIRING
+  - READY
+  - EXPORTING
+  - COMPLETED
+  - FAILED
+  - CANCELLED
+
+quality_gates:
+  overall_score_minimum: 80
+  powerpoint_open_success_percent: 100
+  editable_core_object_percent: 90
+  max_auto_repair_iterations: 2
+  critical_security_findings_allowed: 0
+  high_security_findings_allowed: 0
+
+provisional_slos:
+  api_read_p95_ms: 1500
+  job_acceptance_p95_ms: 2000
+  ten_slide_text_deck_p95_seconds: 300
+  visual_deck_p95_seconds: 600
+
+roles:
+  - presentation_user
+  - presentation_reviewer
+  - template_author
+  - template_approver
+  - presentation_admin
+  - security_auditor
+
+versioning:
+  deck_versions_immutable: true
+  slide_edit_creates_new_deck_version: true
+  template_version_immutable_after_publish: true
+  prompt_model_schema_and_composer_versions_recorded: true

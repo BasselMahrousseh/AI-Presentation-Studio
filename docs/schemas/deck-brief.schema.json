@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.eand.local/aips/deck-brief.schema.json",
+  "title": "DeckBrief",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "title",
+    "audience",
+    "objective",
+    "language",
+    "slide_count",
+    "tone",
+    "classification"
+  ],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "audience": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "decision_sought": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 1000
+    },
+    "language": {
+      "enum": [
+        "en",
+        "ar",
+        "bilingual"
+      ]
+    },
+    "slide_count": {
+      "type": "integer",
+      "minimum": 3,
+      "maximum": 60
+    },
+    "tone": {
+      "enum": [
+        "technical",
+        "operational",
+        "concise"
+      ]
+    },
+    "classification": {
+      "enum": [
+        "PUBLIC",
+        "INTERNAL",
+        "CONFIDENTIAL",
+        "RESTRICTED"
+      ]
+    },
+    "source_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 500
+      },
+      "maxItems": 30
+    }
+  }
+}

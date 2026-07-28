@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.eand.local/aips/slide-spec.schema.json",
+  "title": "SlideSpec",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "slide_id",
+    "archetype",
+    "title",
+    "message",
+    "objects",
+    "direction"
+  ],
+  "properties": {
+    "slide_id": {
+      "type": "string"
+    },
+    "archetype": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 240
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 800
+    },
+    "direction": {
+      "enum": [
+        "ltr",
+        "rtl",
+        "mixed"
+      ]
+    },
+    "objects": {
+      "type": "array",
+      "maxItems": 40,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object_id",
+          "type"
+        ],
+        "properties": {
+          "object_id": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "text",
+              "table",
+              "chart",
+              "diagram",
+              "image",
+              "icon",
+              "callout",
+              "citation"
+            ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "source_chunk_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "locked": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      }
+    },
+    "speaker_notes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "requires_review": {
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

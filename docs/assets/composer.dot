@@ -1,0 +1,19 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad=0.25, nodesep=0.35, ranksep=0.5, fontname="Arial"];
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#d71920", penwidth=1.3, fontname="Arial", fontsize=10, margin="0.12,0.08"];
+  edge [color="#666666", penwidth=1.1, arrowsize=0.65];
+  spec [label="Validated SlideSpec", fillcolor="#fff4f4"];
+  layout [label="Layout Resolver"];
+  text [label="Text Measurement\nand Fitting"];
+  visual [label="Chart and\nDiagram Engines"];
+  builder [label="PPTX Object Builder\n(PptxGenJS abstraction)"];
+  patch [label="Reviewed OOXML\nPatch Modules"];
+  validate [label="Package and\nRelationship Validator"];
+  result [label="PPTX + Object Map\n+ Warnings", fillcolor="#f2f2f2"];
+  spec -> layout;
+  layout -> text;
+  layout -> visual;
+  text -> builder;
+  visual -> builder;
+  builder -> patch -> validate -> result;
+}

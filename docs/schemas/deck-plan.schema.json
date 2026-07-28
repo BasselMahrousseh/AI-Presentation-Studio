@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.eand.local/aips/deck-plan.schema.json",
+  "title": "DeckPlan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "deck_title",
+    "narrative",
+    "slides"
+  ],
+  "properties": {
+    "deck_title": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "narrative": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "slides": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 60,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "slide_id",
+          "sequence",
+          "purpose",
+          "message",
+          "archetype"
+        ],
+        "properties": {
+          "slide_id": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "purpose": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "archetype": {
+            "type": "string"
+          },
+          "evidence_chunk_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "visual_intent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          },
+          "requires_review": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      }
+    }
+  }
+}

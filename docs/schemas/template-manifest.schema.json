@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.eand.local/aips/template-manifest.schema.json",
+  "title": "TemplateManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "template_id",
+    "version",
+    "name",
+    "status",
+    "slide_size",
+    "languages",
+    "design_tokens",
+    "archetypes"
+  ],
+  "properties": {
+    "template_id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "review",
+        "approved",
+        "retired"
+      ]
+    },
+    "languages": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "en",
+          "ar",
+          "bilingual"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "slide_size": {
+      "type": "object",
+      "required": [
+        "width_in",
+        "height_in"
+      ],
+      "properties": {
+        "width_in": {
+          "type": "number"
+        },
+        "height_in": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    },
+    "design_tokens": {
+      "type": "object"
+    },
+    "archetypes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "layout_name",
+          "constraints"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "layout_name": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

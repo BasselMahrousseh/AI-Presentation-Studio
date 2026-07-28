@@ -1,0 +1,21 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad=0.3, nodesep=0.55, ranksep=0.75, fontname="Arial"];
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#d71920", penwidth=1.6, fontname="Arial", fontsize=11, margin="0.16,0.10"];
+  edge [color="#666666", penwidth=1.3, arrowsize=0.75, fontname="Arial", fontsize=9];
+  users [label="Authors and Reviewers", fillcolor="#f7f7f7"];
+  workspace [label="Existing e& GenAI Workspace\nUI, OIDC, RBAC, Upload, Audit", fillcolor="#fff4f4"];
+  api [label="Presentation API\nand Orchestrator", fillcolor="#fff4f4"];
+  model [label="Enterprise Model Gateway\nReasoning, Image, Embedding, Visual QA"];
+  composer [label="Internal PPTX Composer\nLayout, Charts, Diagrams, OOXML"];
+  retrieve [label="Template and Retrieval Services"];
+  data [label="Oracle 23ai + Object Storage", shape=cylinder, fillcolor="#f7f7f7"];
+  output [label="Editable PPTX, PDF and PNG Previews", fillcolor="#f7f7f7"];
+  users -> workspace -> api;
+  api -> model;
+  api -> composer;
+  api -> retrieve;
+  model -> data;
+  composer -> data;
+  retrieve -> data;
+  data -> output;
+}

@@ -1,0 +1,20 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad=0.25, nodesep=0.25, ranksep=0.5, fontname="Arial"];
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#d71920", penwidth=1.2, fontname="Arial", fontsize=8.5, margin="0.09,0.05"];
+  edge [color="#666666", penwidth=1.0, arrowsize=0.55];
+  created [label="CREATED"];
+  ingest [label="INGESTING"];
+  plan [label="PLANNING"];
+  approve [label="OUTLINE\nAPPROVAL", fillcolor="#fff4f4"];
+  gen [label="GENERATING"];
+  comp [label="COMPOSING"];
+  render [label="RENDERING"];
+  inspect [label="INSPECTING"];
+  repair [label="REPAIRING", fillcolor="#fff4f4"];
+  ready [label="READY"];
+  export [label="EXPORTING"];
+  done [label="COMPLETED", fillcolor="#f2f2f2"];
+  created -> ingest -> plan -> approve -> gen -> comp -> render -> inspect -> ready -> export -> done;
+  inspect -> repair [label=" below threshold"];
+  repair -> comp [label=" bounded loop"];
+}
