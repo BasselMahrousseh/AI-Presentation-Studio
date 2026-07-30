@@ -1,11 +1,27 @@
 from fastapi import FastAPI
 
-app = FastAPI()
+from routers import (
+    admin,
+    assets,
+    decks,
+    jobs,
+    projects,
+    templates,
+)
+
+app = FastAPI(
+    title="Presentation Studio API",
+    version="1.0.0"
+)
+
+app.include_router(projects.router)
+app.include_router(decks.router)
+app.include_router(jobs.router)
+app.include_router(templates.router)
+app.include_router(assets.router)
+app.include_router(admin.router)
+
 
 @app.get("/")
 async def root():
-    return {"message": "Hello, World!"}
-
-@app.get("/hello/{name}")
-async def hello(name: str):
-    return {"message": f"Hello, {name}!"}
+    return {"status": "Presentation Studio API is running"}

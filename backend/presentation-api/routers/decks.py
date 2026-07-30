@@ -1,4 +1,13 @@
+# #FIX PROJECT ID 
+# MIGHT NEED TO IMPLEMENT RABBITMQ/REDIS + CELERY
+#SETUP DATABASES
+
+
 from fastapi import APIRouter
+from input.inputClasses import DeckGeneration
+from database.models import Job 
+import uuid
+from services.deckService import addJobToQueue
 
 router = APIRouter(
     prefix="/decks",
@@ -6,9 +15,32 @@ router = APIRouter(
 )
 
 @router.post("/{deck_id}/generations")
-async def start_generation(deck_id: str):
-    pass
+async def start_generation(generation: DeckGeneration):
+    deck_id = generation.deck_id
+    language = generation.language
+    prompt = generation.prompt
 
+    # #Calls an end point with prompt as input -> returns deck brief
+    # #Uses deck brief to call again to generate deck plan
+    # #uses deck plan to call again to generate slide spec
+
+
+    job = Job(
+        JOB_ID=2,
+        PROJECT_ID=1,
+        TYPE="FULL_DECK_GENERATION",
+        STATUS="CREATED",
+        CURRENT_STAGE="INITIAL",
+        PROGRESS=0
+    )
+    
+    addJobToQueue(job,generation.prompt)
+
+    return {
+        "job_id": job.JOB_ID,
+        "status": job.STATUS,
+        "message": "Generation started"
+    }
 
 @router.get("/{deck_id}/versions/{version_id}")
 async def get_deck_version(
