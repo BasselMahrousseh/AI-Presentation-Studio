@@ -1,0 +1,52 @@
+{
+  "slides": [
+    {
+      "slide_id": "s-01",
+      "archetype": "title",
+      "language": "en",
+      "direction": "ltr",
+      "objects": [
+        {
+          "id": "title-1",
+          "type": "text",
+          "role": "title",
+          "text": "AI Coding Agent Weekly Update",
+          "locked": false
+        },
+        {
+          "id": "subtitle-1",
+          "type": "text",
+          "role": "subtitle",
+          "text": "CTIO Leadership Briefing",
+          "locked": false
+        }
+      ],
+      "speaker_notes": "Opening slide. Keep intro under 30 seconds."
+    },
+    {
+      "slide_id": "s-04",
+      "archetype": "technical_comparison",
+      "language": "en",
+      "direction": "ltr",
+      "objects": [
+        {
+          "id": "title-1",
+          "type": "text",
+          "role": "title",
+          "text": "Architecture Options",
+          "locked": false
+        },
+        {
+          "id": "table-1",
+          "type": "table",
+          "role": "comparison",
+          "columns": ["Option", "Benefits", "Constraints"],
+          "rows": [
+            ["A", "Fast to implement", "Limited scalability"],
+            ["B", "Highly scalable", "Longer build time"]
+          ]
+        }
+      ]
+    }
+  ]
+}

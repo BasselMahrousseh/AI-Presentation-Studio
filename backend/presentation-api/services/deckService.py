@@ -1,7 +1,7 @@
 import asyncio
 import os
 from pathlib import Path
-
+import httpx
 from input.inputClasses import DeckBrief, DeckPlan, SlideSpec
 from openai import AzureOpenAI
 from dotenv import load_dotenv
@@ -24,9 +24,30 @@ def addJobToQueue(job,prompt):
     db.append(job)
     print(f"Job added to queue: {job.JOB_ID}")
     # asyncio.create_task(startJob(job.JOB_ID))
-    deck_brief = startJob(job.JOB_ID,prompt)
+    res= startJob(job.JOB_ID,prompt)
+    slideSpecs = res["slide_specs"]
+
+    slideSpecCollection = {
+        "slides": [slide.model_dump() for slide in slideSpecs]      
+    }
+
+    # Create an output directory if it doesn't exist
+    output_dir = Path("output")
+    output_dir.mkdir(exist_ok=True)
+
+    # Save JSON file
+    json_path = output_dir / f"{job.JOB_ID}_slide_specs.json"
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(slideSpecCollection, f, indent=4)
+
+    print(f"Saved JSON to: {json_path.resolve()}")
+    # print(f"Slide Spec Collection: {json.dumps(slideSpecCollection, indent=2)}")
+    ppt = sendRequestToPPTComposer(slideSpecCollection)
+
+    return ppt
     # print(deck_brief)
-    return job
+    # return job
 
 def getJobFromQueue(job_id):
     for job in db:
@@ -40,10 +61,10 @@ def startJob(job_id,prompt):
     job.STATUS = "IN_PROGRESS"
 
     deck_brief = generate_deck_brief(prompt)
-    print(deck_brief.model_dump_json(indent=2))
+    # print(deck_brief.model_dump_json(indent=2))
 
     deck_plan = generate_deck_plan(deck_brief)
-    print(deck_plan.model_dump_json(indent=2))
+    # print(deck_plan.model_dump_json(indent=2))
 
     slide_specs = generate_slide_specs(deck_plan)
     for slide in slide_specs:
@@ -151,7 +172,70 @@ For every slide:
 - Include semantic objects only.
 - Do NOT include coordinates.
 - Do NOT include pixel positions.
-- Describe the required text, tables, diagrams, charts and images.
+- Describe the required text, tables, diagrams and callouts.
+- Only use object types supported by the SlideSpec schema.
+
+For diagram objects, you MUST include a "diagram_type".
+
+The ONLY supported diagram types are:
+
+1. "pipeline"
+
+Required structure:
+
+{{
+    "diagram_type": "pipeline",
+    "steps": [
+        "Step 1",
+        "Step 2",
+        "Step 3"
+    ]
+}}
+
+2. "grid"
+
+Required structure:
+
+{{
+    "diagram_type": "grid",
+    "items": [
+        {{
+            "use_case": "Enterprise Search",
+            "technologies": [
+                "Technology 1",
+                "Technology 2",
+                "Technology 3"
+            ]
+        }}
+    ]
+}}
+
+Do not create any other diagram_type.
+
+Do not create diagram objects without diagram_type.
+
+Do not invent custom diagram structures such as:
+- sections
+- highlights
+- axes
+- components
+- flows
+- relationships
+- trends
+
+Only use the structures explicitly defined above.
+
+The allowed SlideObject types are:
+- text
+- table
+- diagram
+- callout
+
+Do not generate:
+- chart
+- image
+- icon
+- citation
 
 Return ONLY valid JSON.
 
@@ -174,8 +258,20 @@ The JSON should be an object with the following format:
     data = json.loads(response.choices[0].message.content)
 
     print("Finished generating Slide Specs.")
-
+    print(json.dumps(data, indent=2))
     return [
         SlideSpec.model_validate(slide)
         for slide in data["slides"]
     ]
+
+def sendRequestToPPTComposer(slide_specs: list[SlideSpec]):
+    # This function would send the slide_specs to the PPT Composer service
+    # and return the generated PowerPoint file or a link to it.
+    response = httpx.post(
+        "http://localhost:4000/compose",
+        json=slide_specs
+    )
+
+    response.raise_for_status()
+
+    return response.content

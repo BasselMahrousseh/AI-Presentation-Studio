@@ -3,7 +3,7 @@
 #SETUP DATABASES
 
 
-from fastapi import APIRouter
+from fastapi import APIRouter,Response
 from input.inputClasses import DeckGeneration
 from database.models import Job 
 import uuid
@@ -34,13 +34,18 @@ async def start_generation(generation: DeckGeneration):
         PROGRESS=0
     )
     
-    addJobToQueue(job,generation.prompt)
+    ppt = addJobToQueue(job,generation.prompt)
 
-    return {
-        "job_id": job.JOB_ID,
-        "status": job.STATUS,
-        "message": "Generation started"
-    }
+    # return {
+    #     "job_id": job.JOB_ID,
+    #     "status": job.STATUS,
+    #     "message": "Generation started"
+    # }
+
+    return Response(
+        content=ppt,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
 
 @router.get("/{deck_id}/versions/{version_id}")
 async def get_deck_version(

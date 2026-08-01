@@ -1,0 +1,583 @@
+{
+    "slides": [
+        {
+            "slide_id": "slide_01",
+            "archetype": "title_slide",
+            "title": "Introduction to Kubernetes for Backend Developers",
+            "message": "Kubernetes enables backend developers to build, deploy, scale, and operate containerized services consistently across environments.",
+            "direction": "ltr",
+            "objects": [
+                {
+                    "object_id": "title_text",
+                    "type": "text",
+                    "role": "headline",
+                    "text": "Introduction to Kubernetes for Backend Developers",
+                    "data": null,
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "subtitle_text",
+                    "type": "text",
+                    "role": "subheadline",
+                    "text": "Learn how Kubernetes simplifies deployment, scaling, and operations for containerized backend services.",
+                    "data": null,
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "goals_callout",
+                    "type": "callout",
+                    "role": "learning_goals",
+                    "text": "Topics include Kubernetes architecture, core primitives, deployments, scaling, observability, and production tradeoffs.",
+                    "data": null,
+                    "source_chunk_ids": [],
+                    "locked": false
+                }
+            ],
+            "speaker_notes": null,
+            "requires_review": false
+        },
+        {
+            "slide_id": "slide_02",
+            "archetype": "concept_overview",
+            "title": "From Virtual Machines to Container Orchestration",
+            "message": "Containers improve portability and efficiency, while orchestration platforms automate deployment, scaling, networking, and resilience across distributed systems.",
+            "direction": "ltr",
+            "objects": [
+                {
+                    "object_id": "vm_vs_container_table",
+                    "type": "table",
+                    "role": "comparison",
+                    "text": null,
+                    "data": {
+                        "columns": [
+                            "Aspect",
+                            "Virtual Machines",
+                            "Containers"
+                        ],
+                        "rows": [
+                            [
+                                "Isolation",
+                                "Full guest OS",
+                                "Shared host kernel"
+                            ],
+                            [
+                                "Startup Time",
+                                "Minutes",
+                                "Seconds"
+                            ],
+                            [
+                                "Resource Usage",
+                                "Heavyweight",
+                                "Lightweight"
+                            ],
+                            [
+                                "Portability",
+                                "Moderate",
+                                "High"
+                            ],
+                            [
+                                "Deployment Density",
+                                "Lower",
+                                "Higher"
+                            ]
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "orchestration_pipeline",
+                    "type": "diagram",
+                    "role": "workflow",
+                    "text": null,
+                    "data": {
+                        "diagram_type": "pipeline",
+                        "steps": [
+                            "Package Application in Containers",
+                            "Deploy Across Multiple Servers",
+                            "Manage Networking and Discovery",
+                            "Scale Based on Demand",
+                            "Recover from Failures Automatically"
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "challenge_callout",
+                    "type": "callout",
+                    "role": "key_point",
+                    "text": "As container counts grow, orchestration becomes essential for reliability and operational efficiency.",
+                    "data": null,
+                    "source_chunk_ids": [],
+                    "locked": false
+                }
+            ],
+            "speaker_notes": null,
+            "requires_review": false
+        },
+        {
+            "slide_id": "slide_03",
+            "archetype": "architecture_diagram",
+            "title": "Kubernetes Architecture",
+            "message": "Kubernetes consists of a control plane that manages cluster state and worker nodes that run application workloads.",
+            "direction": "ltr",
+            "objects": [
+                {
+                    "object_id": "architecture_pipeline",
+                    "type": "diagram",
+                    "role": "architecture_flow",
+                    "text": null,
+                    "data": {
+                        "diagram_type": "pipeline",
+                        "steps": [
+                            "kubectl or API Request",
+                            "API Server",
+                            "Scheduler",
+                            "etcd Cluster State",
+                            "Worker Node with Kubelet",
+                            "Running Pods and Containers"
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "component_descriptions",
+                    "type": "table",
+                    "role": "reference",
+                    "text": null,
+                    "data": {
+                        "columns": [
+                            "Component",
+                            "Responsibility"
+                        ],
+                        "rows": [
+                            [
+                                "API Server",
+                                "Entry point for cluster management"
+                            ],
+                            [
+                                "Scheduler",
+                                "Assigns workloads to nodes"
+                            ],
+                            [
+                                "etcd",
+                                "Stores cluster configuration and state"
+                            ],
+                            [
+                                "Kubelet",
+                                "Manages containers on worker nodes"
+                            ],
+                            [
+                                "Pods",
+                                "Run application containers"
+                            ]
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                }
+            ],
+            "speaker_notes": null,
+            "requires_review": false
+        },
+        {
+            "slide_id": "slide_04",
+            "archetype": "building_blocks",
+            "title": "Core Kubernetes Objects",
+            "message": "Pods, Deployments, Services, Ingress, and Persistent Volumes form the foundation for deploying and exposing reliable backend applications.",
+            "direction": "ltr",
+            "objects": [
+                {
+                    "object_id": "core_objects_pipeline",
+                    "type": "diagram",
+                    "role": "object_relationships",
+                    "text": null,
+                    "data": {
+                        "diagram_type": "pipeline",
+                        "steps": [
+                            "Pods Run Containers",
+                            "Deployments Manage Pod Replicas",
+                            "Services Expose Applications Internally",
+                            "Ingress Routes External Traffic",
+                            "Persistent Volumes Store Data"
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "object_summary_table",
+                    "type": "table",
+                    "role": "definitions",
+                    "text": null,
+                    "data": {
+                        "columns": [
+                            "Object",
+                            "Purpose"
+                        ],
+                        "rows": [
+                            [
+                                "Pod",
+                                "Smallest deployable unit"
+                            ],
+                            [
+                                "Deployment",
+                                "Declarative application management"
+                            ],
+                            [
+                                "Service",
+                                "Stable networking endpoint"
+                            ],
+                            [
+                                "Ingress",
+                                "HTTP routing and external access"
+                            ],
+                            [
+                                "Persistent Volume",
+                                "Durable storage abstraction"
+                            ]
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                }
+            ],
+            "speaker_notes": null,
+            "requires_review": false
+        },
+        {
+            "slide_id": "slide_05",
+            "archetype": "process_flow",
+            "title": "Kubernetes Deployment Workflow",
+            "message": "A typical Kubernetes workflow packages code into containers, stores images in a registry, and deploys workloads declaratively to a cluster.",
+            "direction": "ltr",
+            "objects": [
+                {
+                    "object_id": "deployment_pipeline",
+                    "type": "diagram",
+                    "role": "ci_cd_flow",
+                    "text": null,
+                    "data": {
+                        "diagram_type": "pipeline",
+                        "steps": [
+                            "Developer Commits Code",
+                            "CI Builds Container Image",
+                            "Push Image to Registry",
+                            "Apply Kubernetes YAML",
+                            "Cluster Pulls Image",
+                            "Application Runs in Pods"
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "workflow_callout",
+                    "type": "callout",
+                    "role": "best_practice",
+                    "text": "Declarative infrastructure enables repeatable deployments across development, staging, and production environments.",
+                    "data": null,
+                    "source_chunk_ids": [],
+                    "locked": false
+                }
+            ],
+            "speaker_notes": null,
+            "requires_review": false
+        },
+        {
+            "slide_id": "slide_06",
+            "archetype": "code_example",
+            "title": "Declarative YAML Configuration",
+            "message": "Kubernetes resources are defined declaratively in YAML files that describe desired application state and networking behavior.",
+            "direction": "ltr",
+            "objects": [
+                {
+                    "object_id": "deployment_yaml",
+                    "type": "text",
+                    "role": "code_snippet",
+                    "text": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: backend-api\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: backend-api\n  template:\n    metadata:\n      labels:\n        app: backend-api\n    spec:\n      containers:\n      - name: api\n        image: backend-api:v1",
+                    "data": null,
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "service_yaml",
+                    "type": "text",
+                    "role": "code_snippet",
+                    "text": "apiVersion: v1\nkind: Service\nmetadata:\n  name: backend-service\nspec:\n  selector:\n    app: backend-api\n  ports:\n  - port: 80\n    targetPort: 8080\n  type: ClusterIP",
+                    "data": null,
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "yaml_callout",
+                    "type": "callout",
+                    "role": "explanation",
+                    "text": "YAML manifests describe the desired cluster state, and Kubernetes continuously works to maintain that state.",
+                    "data": null,
+                    "source_chunk_ids": [],
+                    "locked": false
+                }
+            ],
+            "speaker_notes": null,
+            "requires_review": false
+        },
+        {
+            "slide_id": "slide_07",
+            "archetype": "technical_explainer",
+            "title": "Scaling and Self-Healing",
+            "message": "Kubernetes supports horizontal scaling, resource-based autoscaling, and self-healing to maintain application performance under varying load.",
+            "direction": "ltr",
+            "objects": [
+                {
+                    "object_id": "scaling_pipeline",
+                    "type": "diagram",
+                    "role": "autoscaling_flow",
+                    "text": null,
+                    "data": {
+                        "diagram_type": "pipeline",
+                        "steps": [
+                            "Traffic Increases",
+                            "Metrics Server Detects Load",
+                            "Horizontal Pod Autoscaler Adjusts Replicas",
+                            "New Pods Start Automatically",
+                            "Load Balancer Distributes Requests"
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "scaling_table",
+                    "type": "table",
+                    "role": "capabilities",
+                    "text": null,
+                    "data": {
+                        "columns": [
+                            "Feature",
+                            "Description"
+                        ],
+                        "rows": [
+                            [
+                                "Horizontal Scaling",
+                                "Adds or removes pod replicas"
+                            ],
+                            [
+                                "Autoscaling",
+                                "Responds to CPU or memory metrics"
+                            ],
+                            [
+                                "Self-Healing",
+                                "Restarts failed containers automatically"
+                            ],
+                            [
+                                "Load Balancing",
+                                "Distributes traffic across healthy pods"
+                            ]
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                }
+            ],
+            "speaker_notes": null,
+            "requires_review": false
+        },
+        {
+            "slide_id": "slide_08",
+            "archetype": "timeline_flow",
+            "title": "Rolling Updates and Rollbacks",
+            "message": "Rolling updates and rollback capabilities allow backend teams to release changes gradually while minimizing downtime and operational risk.",
+            "direction": "ltr",
+            "objects": [
+                {
+                    "object_id": "rolling_update_pipeline",
+                    "type": "diagram",
+                    "role": "deployment_sequence",
+                    "text": null,
+                    "data": {
+                        "diagram_type": "pipeline",
+                        "steps": [
+                            "Deploy New Application Version",
+                            "Replace Old Pods Gradually",
+                            "Monitor Health Checks",
+                            "Complete Rollout Successfully",
+                            "Rollback if Errors Occur"
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "deployment_safety_callout",
+                    "type": "callout",
+                    "role": "operational_benefit",
+                    "text": "Rolling deployments reduce downtime and allow teams to validate changes incrementally before full release.",
+                    "data": null,
+                    "source_chunk_ids": [],
+                    "locked": false
+                }
+            ],
+            "speaker_notes": null,
+            "requires_review": false
+        },
+        {
+            "slide_id": "slide_09",
+            "archetype": "tooling_overview",
+            "title": "Observability in Kubernetes",
+            "message": "Observability tools such as Prometheus, Grafana, and centralized logging help teams monitor application health and troubleshoot distributed systems.",
+            "direction": "ltr",
+            "objects": [
+                {
+                    "object_id": "observability_grid",
+                    "type": "diagram",
+                    "role": "tooling_matrix",
+                    "text": null,
+                    "data": {
+                        "diagram_type": "grid",
+                        "items": [
+                            {
+                                "use_case": "Metrics Collection",
+                                "technologies": [
+                                    "Prometheus",
+                                    "Node Exporter",
+                                    "Kube State Metrics"
+                                ]
+                            },
+                            {
+                                "use_case": "Visualization",
+                                "technologies": [
+                                    "Grafana",
+                                    "Dashboards",
+                                    "Alerting"
+                                ]
+                            },
+                            {
+                                "use_case": "Centralized Logging",
+                                "technologies": [
+                                    "Elasticsearch",
+                                    "Fluentd",
+                                    "Kibana"
+                                ]
+                            },
+                            {
+                                "use_case": "Tracing",
+                                "technologies": [
+                                    "Jaeger",
+                                    "OpenTelemetry",
+                                    "Distributed Traces"
+                                ]
+                            }
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "observability_callout",
+                    "type": "callout",
+                    "role": "importance",
+                    "text": "Distributed systems require unified visibility into metrics, logs, and traces to diagnose failures effectively.",
+                    "data": null,
+                    "source_chunk_ids": [],
+                    "locked": false
+                }
+            ],
+            "speaker_notes": null,
+            "requires_review": false
+        },
+        {
+            "slide_id": "slide_10",
+            "archetype": "pros_cons_case_study",
+            "title": "Benefits, Tradeoffs, and Adoption Scenarios",
+            "message": "Kubernetes provides scalability and operational consistency for modern backend systems, but introduces complexity that must be justified by application and organizational needs.",
+            "direction": "ltr",
+            "objects": [
+                {
+                    "object_id": "pros_cons_table",
+                    "type": "table",
+                    "role": "comparison",
+                    "text": null,
+                    "data": {
+                        "columns": [
+                            "Benefits",
+                            "Tradeoffs"
+                        ],
+                        "rows": [
+                            [
+                                "Scalable infrastructure",
+                                "Operational complexity"
+                            ],
+                            [
+                                "Consistent deployments",
+                                "Steeper learning curve"
+                            ],
+                            [
+                                "Self-healing workloads",
+                                "Resource overhead"
+                            ],
+                            [
+                                "Cloud portability",
+                                "More tooling to manage"
+                            ]
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "use_cases_grid",
+                    "type": "diagram",
+                    "role": "production_examples",
+                    "text": null,
+                    "data": {
+                        "diagram_type": "grid",
+                        "items": [
+                            {
+                                "use_case": "Microservices Platforms",
+                                "technologies": [
+                                    "Containers",
+                                    "Service Discovery",
+                                    "Autoscaling"
+                                ]
+                            },
+                            {
+                                "use_case": "API Backends",
+                                "technologies": [
+                                    "Ingress",
+                                    "Load Balancing",
+                                    "Rolling Updates"
+                                ]
+                            },
+                            {
+                                "use_case": "Data Processing",
+                                "technologies": [
+                                    "Batch Jobs",
+                                    "Resource Scheduling",
+                                    "Distributed Workloads"
+                                ]
+                            }
+                        ]
+                    },
+                    "source_chunk_ids": [],
+                    "locked": false
+                },
+                {
+                    "object_id": "closing_callout",
+                    "type": "callout",
+                    "role": "summary",
+                    "text": "Kubernetes delivers the most value for teams operating distributed applications at scale with strong automation and reliability requirements.",
+                    "data": null,
+                    "source_chunk_ids": [],
+                    "locked": false
+                }
+            ],
+            "speaker_notes": null,
+            "requires_review": false
+        }
+    ]
+}

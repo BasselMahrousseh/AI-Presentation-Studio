@@ -1,0 +1,62 @@
+{
+  "slide_id": "slide-001",
+  "archetype": "technical_architecture",
+  "title": "AI Presentation Studio Architecture",
+  "message": "The system uses a multi-stage AI pipeline to transform user prompts into editable PowerPoint presentations.",
+  "direction": "ltr",
+  "objects": [
+    {
+      "object_id": "obj-title-1",
+      "type": "text",
+      "role": "title",
+      "text": "AI Presentation Studio Architecture",
+      "data": null,
+      "source_chunk_ids": [],
+      "locked": false
+    },
+    {
+      "object_id": "obj-body-1",
+      "type": "text",
+      "role": "body",
+      "text": "A user prompt is converted into a DeckBrief, then a DeckPlan, followed by SlideSpecs before composing the final PPTX.",
+      "data": null,
+      "source_chunk_ids": [],
+      "locked": false
+    },
+    {
+      "object_id": "obj-diagram-1",
+      "type": "diagram",
+      "role": "architecture",
+      "text": null,
+      "data": {
+        "layout": "left_to_right",
+        "nodes": [
+          { "id": "user", "label": "User" },
+          { "id": "brief", "label": "DeckBrief" },
+          { "id": "plan", "label": "DeckPlan" },
+          { "id": "slides", "label": "SlideSpecs" },
+          { "id": "pptx", "label": "PPTX" }
+        ],
+        "edges": [
+          { "from": "user", "to": "brief" },
+          { "from": "brief", "to": "plan" },
+          { "from": "plan", "to": "slides" },
+          { "from": "slides", "to": "pptx" }
+        ]
+      },
+      "source_chunk_ids": ["doc-architecture-01"],
+      "locked": false
+    },
+    {
+      "object_id": "obj-citation-1",
+      "type": "citation",
+      "role": "reference",
+      "text": "Source: Internal AI Presentation Studio Design Specification",
+      "data": null,
+      "source_chunk_ids": ["doc-architecture-01"],
+      "locked": true
+    }
+  ],
+  "speaker_notes": "Explain how each stage transforms the presentation before the composition worker creates the editable PPTX.",
+  "requires_review": false
+}

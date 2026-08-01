@@ -1,0 +1,72 @@
+{
+  "slides": [
+    {
+      "slide_id": "slide_01",
+      "archetype": "title",
+      "title": "Understanding Retrieval-Augmented Generation (RAG) for Software Engineers",
+      "message": "RAG combines information retrieval with LLM generation to improve factual accuracy, freshness, and enterprise usability of AI systems.",
+      "direction": "ltr",
+      "objects": [
+        { "object_id": "title_text", "type": "text", "role": "headline", "text": "Understanding Retrieval-Augmented Generation (RAG) for Software Engineers", "data": null, "source_chunk_ids": [], "locked": false },
+        { "object_id": "subtitle_text", "type": "text", "role": "subheadline", "text": "Grounding large language models with external knowledge for accurate, current, and enterprise-ready AI applications", "data": null, "source_chunk_ids": [], "locked": false },
+        { "object_id": "rag_pipeline_diagram", "type": "diagram", "role": "hero_visual", "text": null, "data": { "diagram_type": "pipeline", "steps": ["User Query", "Retriever", "Knowledge Base / Vector Store", "Prompt Augmentation", "LLM Generation", "Grounded Response"], "annotations": ["Retrieval", "Grounding", "Generation"] }, "source_chunk_ids": [], "locked": false },
+        { "object_id": "learning_objectives", "type": "text", "role": "supporting_points", "text": "Topics covered: limitations of standalone LLMs, RAG architecture, retrieval workflow, implementation tradeoffs, operational practices, and emerging trends", "data": null, "source_chunk_ids": [], "locked": false }
+      ],
+      "speaker_notes": null,
+      "requires_review": false
+    },
+    {
+      "slide_id": "slide_02",
+      "archetype": "comparison",
+      "title": "Why Standalone LLMs Need Retrieval",
+      "message": "Standalone LLMs struggle with stale knowledge, hallucinations, and lack of domain grounding.",
+      "direction": "ltr",
+      "objects": [
+        { "object_id": "comparison_title", "type": "text", "role": "headline", "text": "Standalone LLMs vs. RAG-Enabled Systems", "data": null, "source_chunk_ids": [], "locked": false },
+        { "object_id": "comparison_table", "type": "table", "role": "comparison", "text": null, "data": { "columns": ["Capability", "Standalone LLM", "RAG-Enabled System"], "rows": [["Knowledge Freshness", "Limited to training cutoff", "Accesses current indexed data"], ["Factual Accuracy", "Prone to hallucinations", "Grounded in retrieved sources"], ["Domain Expertise", "Weak on proprietary knowledge", "Uses enterprise-specific content"], ["Explainability", "Limited traceability", "Can cite retrieved context"], ["Operational Updates", "Requires retraining", "Refresh via indexing pipelines"]] }, "source_chunk_ids": [], "locked": false },
+        { "object_id": "problem_callout", "type": "callout", "role": "key_takeaway", "text": "RAG separates knowledge retrieval from model training, enabling dynamic and explainable AI responses.", "data": null, "source_chunk_ids": [], "locked": false }
+      ],
+      "speaker_notes": null,
+      "requires_review": false
+    },
+    {
+      "slide_id": "slide_03",
+      "archetype": "architecture",
+      "title": "Core Architecture of a RAG System",
+      "message": "A RAG system integrates embeddings, vector databases, retrievers, orchestration logic, and LLMs.",
+      "direction": "ltr",
+      "objects": [
+        { "object_id": "architecture_diagram", "type": "diagram", "role": "main_architecture", "text": null, "data": { "diagram_type": "system_architecture", "components": [{ "name": "Data Sources", "details": ["Documents", "Wikis", "APIs", "Databases"] }, { "name": "Ingestion Pipeline", "details": ["Parsing", "Chunking", "Metadata enrichment"] }, { "name": "Embedding Model", "details": ["Vector generation"] }, { "name": "Vector Database", "details": ["Indexed embeddings", "Metadata storage"] }, { "name": "Retriever", "details": ["Similarity search", "Filtering", "Ranking"] }, { "name": "Prompt Orchestrator", "details": ["Context assembly", "Prompt templates"] }, { "name": "LLM", "details": ["Grounded response generation"] }], "flows": [["Data Sources", "Ingestion Pipeline"], ["Ingestion Pipeline", "Embedding Model"], ["Embedding Model", "Vector Database"], ["User Query", "Retriever"], ["Retriever", "Vector Database"], ["Vector Database", "Prompt Orchestrator"], ["Prompt Orchestrator", "LLM"]] }, "source_chunk_ids": [], "locked": false },
+        { "object_id": "architecture_notes", "type": "text", "role": "supporting_points", "text": "The architecture is modular, allowing independent optimization of retrieval, storage, orchestration, and generation layers.", "data": null, "source_chunk_ids": [], "locked": false }
+      ],
+      "speaker_notes": null,
+      "requires_review": false
+    },
+    {
+      "slide_id": "slide_06",
+      "archetype": "benefits",
+      "title": "Benefits of Retrieval-Augmented Generation",
+      "message": "RAG improves factual grounding and reduces hallucinations.",
+      "direction": "ltr",
+      "objects": [
+        { "object_id": "benefit_matrix", "type": "table", "role": "benefits", "text": null, "data": { "columns": ["RAG Capability", "Engineering Benefit", "Business Outcome"], "rows": [["Grounded retrieval", "Higher factual accuracy", "Increased trust in AI systems"], ["Live knowledge access", "Current information availability", "Faster operational updates"], ["Domain-specific context", "Enterprise relevance", "Better decision support"]] }, "source_chunk_ids": [], "locked": false },
+        { "object_id": "benefit_icons", "type": "icon", "role": "visual_support", "text": null, "data": { "icons": ["accuracy", "database", "shield", "search", "analytics"] }, "source_chunk_ids": [], "locked": false },
+        { "object_id": "summary_callout", "type": "callout", "role": "summary", "text": "RAG enables AI systems to act more like knowledge-aware assistants than static pretrained models.", "data": null, "source_chunk_ids": [], "locked": false }
+      ],
+      "speaker_notes": null,
+      "requires_review": false
+    },
+    {
+      "slide_id": "slide_08",
+      "archetype": "examples",
+      "title": "Production Use Cases for RAG",
+      "message": "Organizations use RAG across many domains.",
+      "direction": "ltr",
+      "objects": [
+        { "object_id": "use_case_grid", "type": "diagram", "role": "examples_grid", "text": null, "data": { "diagram_type": "grid", "items": [{ "title": "Enterprise Search", "description": "Internal knowledge retrieval across documents and wikis" }, { "title": "Customer Support", "description": "Grounded chatbot responses using support articles" }, { "title": "Developer Copilots", "description": "Codebase-aware assistance and documentation lookup" }, { "title": "Healthcare Knowledge Access", "description": "Retrieval of clinical guidance and medical references" }, { "title": "Compliance Workflows", "description": "Policy-aware question answering and audit support" }, { "title": "Legal Research", "description": "Case and regulation retrieval for legal analysis" }] }, "source_chunk_ids": [], "locked": false }
+      ],
+      "speaker_notes": null,
+      "requires_review": false
+    }
+  ]
+}
