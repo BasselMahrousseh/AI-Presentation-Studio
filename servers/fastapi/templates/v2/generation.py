@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from json import JSONDecodeError
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any, Callable
 
 from llmai import get_client
@@ -21,6 +22,7 @@ from llmai.shared import (
     ToolResponseMessage,
     UserMessage,
 )
+from llmai.shared.errors import LLMRateLimitError
 from pydantic import BaseModel, ValidationError
 
 from templates.v2.models.layouts import (
@@ -40,8 +42,26 @@ from utils.asset_directory_utils import resolve_image_path_to_filesystem
 from utils.llm_config import get_llm_config
 from utils.llm_provider import get_model
 
-DEFAULT_VALIDATION_RETRIES = 5
-MAX_PARALLEL_SLIDE_LAYOUTS = 10
+def _positive_int_env(name: str, default: int, maximum: int) -> int:
+    """Read a bounded positive integer while keeping invalid env values safe."""
+    try:
+        return max(1, min(int(os.getenv(name, str(default))), maximum))
+    except ValueError:
+        return default
+
+
+DEFAULT_VALIDATION_RETRIES = _positive_int_env(
+    "TEMPLATE_VALIDATION_RETRIES", default=5, maximum=10
+)
+MAX_PARALLEL_SLIDE_LAYOUTS = _positive_int_env(
+    "TEMPLATE_MAX_PARALLEL_SLIDE_LAYOUTS", default=10, maximum=10
+)
+RATE_LIMIT_BACKOFF_SECONDS = _positive_int_env(
+    "TEMPLATE_RATE_LIMIT_BACKOFF_SECONDS", default=5, maximum=60
+)
+RATE_LIMIT_RETRIES = _positive_int_env(
+    "TEMPLATE_RATE_LIMIT_RETRIES", default=8, maximum=20
+)
 MAX_PREVIEW_SLIDE_CALLS = 2
 CONTENT_IMAGE_PLACEHOLDER_URL = "/static/images/replaceable_template_image.png"
 CONTENT_ICON_PLACEHOLDER_URL = "/static/icons/placeholder.svg"
@@ -999,6 +1019,32 @@ def _replace_content_image_url_in_element(element: Any) -> None:
         _replace_content_image_urls_in_elements(children)
 
 
+def _generate_with_rate_limit_backoff(
+    *, client: Any, generate_kwargs: dict[str, Any], label: str
+) -> Any:
+    """Retry provider 429s without spending the layout-validation budget."""
+    for rate_limit_attempt in range(1, RATE_LIMIT_RETRIES + 1):
+        try:
+            return client.generate(**generate_kwargs)
+        except LLMRateLimitError as exc:
+            if rate_limit_attempt >= RATE_LIMIT_RETRIES:
+                raise
+            delay_seconds = min(
+                RATE_LIMIT_BACKOFF_SECONDS * (2 ** (rate_limit_attempt - 1)), 60
+            )
+            LOGGER.warning(
+                "[templates.v2.llm] %s: rate limited retry=%d/%d; retrying "
+                "in %ss error=%s",
+                label,
+                rate_limit_attempt,
+                RATE_LIMIT_RETRIES,
+                delay_seconds,
+                exc,
+            )
+            sleep(delay_seconds)
+    raise RuntimeError("Unreachable rate-limit retry state")
+
+
 def _strip_decorative_fields(value: Any) -> Any:
     if isinstance(value, dict):
         return {
@@ -1060,7 +1106,9 @@ def _generate_preview_candidate(
                         ),
                     }
                 )
-            response = client.generate(**generate_kwargs)
+            response = _generate_with_rate_limit_backoff(
+                client=client, generate_kwargs=generate_kwargs, label=label
+            )
             tool_call = None
             if preview_tool_available:
                 tool_call = next(

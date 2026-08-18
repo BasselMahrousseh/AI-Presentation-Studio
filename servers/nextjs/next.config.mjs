@@ -16,6 +16,13 @@ const nextConfig = {
           "127.0.0.1",
           "localhost",
         ],
+        experimental: {
+          // Large custom templates can require multiple Chromium passes. Keep
+          // the browser-to-FastAPI rewrite open long enough for the supported
+          // 50-slide template-preview cap (36-slide decks commonly exceed five
+          // minutes on a local machine).
+          proxyTimeout: 900_000,
+        },
       }
     : {}),
 

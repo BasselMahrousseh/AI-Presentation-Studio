@@ -407,3 +407,20 @@ def get_openai_compat_image_api_key_env():
 
 def get_openai_compat_image_model_env():
     return os.getenv("OPENAI_COMPAT_IMAGE_MODEL")
+
+
+# Azure OpenAI Image Provider
+def get_azure_openai_image_endpoint_env():
+    return os.getenv("AZURE_OPENAI_IMAGE_ENDPOINT")
+
+
+def get_azure_openai_image_api_key_env():
+    return os.getenv("AZURE_OPENAI_IMAGE_API_KEY")
+
+
+def get_azure_openai_image_api_version_env():
+    return os.getenv("AZURE_OPENAI_IMAGE_API_VERSION")
+
+
+def get_azure_openai_image_deployment_env():
+    return os.getenv("AZURE_OPENAI_IMAGE_DEPLOYMENT")

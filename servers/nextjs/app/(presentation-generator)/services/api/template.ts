@@ -167,6 +167,21 @@ class TemplateService {
         }
     }
 
+    static async getAsyncTaskStatus(taskId: string): Promise<AsyncTaskResponse> {
+        try {
+            const response = await fetch(
+                getApiUrl(`/api/v1/async-tasks/status/${encodeURIComponent(taskId)}`),
+            );
+            return await ApiResponseHandler.handleResponse(
+                response,
+                "Failed to check template creation status",
+            );
+        } catch (error) {
+            console.error("Failed to check template creation status", error);
+            throw error;
+        }
+    }
+
     static async getProcessingTemplateCreateTasks(createdAtFrom: Date): Promise<TemplateCreateTaskResponse[]> {
         try {
             const params = new URLSearchParams({

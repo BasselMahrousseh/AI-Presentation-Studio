@@ -75,7 +75,12 @@ LOGGER = logging.getLogger(__name__)
 _TEMPLATE_LAYOUT_PATCH_LOCKS: dict[str, asyncio.Lock] = {}
 _TEMPLATE_LAYOUT_PATCH_LOCKS_GUARD = asyncio.Lock()
 ASYNC_TASK_TYPE_TEMPLATE_CREATE = "template.create"
-SLIDE_LAYOUT_GENERATION_MAX_TOKENS = 16000
+try:
+    SLIDE_LAYOUT_GENERATION_MAX_TOKENS = max(
+        1, min(int(os.getenv("TEMPLATE_SLIDE_LAYOUT_MAX_TOKENS", "16000")), 16000)
+    )
+except ValueError:
+    SLIDE_LAYOUT_GENERATION_MAX_TOKENS = 16000
 
 
 class InitTemplateRequest(BaseModel):

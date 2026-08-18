@@ -19,6 +19,7 @@ from templates.v2.generation import (
     CONTENT_ICON_PLACEHOLDER_URL,
     CONTENT_IMAGE_PLACEHOLDER_URL,
     GENERATE_SLIDE_LAYOUT_SYSTEM_PROMPT,
+    _generate_with_rate_limit_backoff,
     _generate_preview_candidate,
     _messages_for_json_repair_retry,
     _messages_for_model_validation_retry,
@@ -353,6 +354,32 @@ def test_generate_slide_layout_passes_max_tokens_when_provided(monkeypatch):
 
     assert result == SlideLayout.model_validate(_generated_layout())
     assert client.calls[0]["max_tokens"] == 16000
+
+
+def test_rate_limit_backoff_does_not_consume_layout_validation_attempts(monkeypatch):
+    from llmai.shared.errors import LLMRateLimitError
+
+    class RateLimitedClient:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                    raise LLMRateLimitError(429, "too many requests")
+            return "generated"
+
+    client = RateLimitedClient()
+    monkeypatch.setattr("templates.v2.generation.sleep", lambda _seconds: None)
+    monkeypatch.setattr("templates.v2.generation.RATE_LIMIT_RETRIES", 2)
+
+    assert (
+        _generate_with_rate_limit_backoff(
+            client=client, generate_kwargs={"model": "test"}, label="slide 1"
+        )
+        == "generated"
+    )
+    assert client.calls == 2
 
 
 def test_generate_slide_layout_uses_json_schema_response_for_google(monkeypatch):

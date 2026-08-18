@@ -11,7 +11,7 @@ interface PresentonSplashLoaderProps {
 export const PRESENTON_SPLASH_MIN_DURATION_MS = 3000;
 
 const SPLASH_ANIMATION_MS = 2600;
-const SPLASH_MASK_SRC = "/Presenton_Splash.png";
+const SPLASH_MASK_SRC = "/";
 
 let splashSessionStartedAt: number | null = null;
 let splashMaskReadyPromise: Promise<void> | null = null;

@@ -34,24 +34,20 @@ const Header = () => {
       : "BACK";
 
   return (
-    <div className="w-full   sticky top-0 z-50 py-7 "
-      style={{
-        background: "linear-gradient(180deg, #FFF 0%, rgba(255, 255, 255, 0.00) 110.67%)",
-
-      }}
-    >
+    <div className="w-full sticky top-0 z-50 py-7 bg-gradient-to-b from-white to-transparent dark:from-[#0b0b0b]">
       <Wrapper className="px-5 sm:px-10 lg:px-20">
         <div className="flex items-center justify-between py-1">
           <div className="flex items-center gap-3">
             <Link href="/dashboard" onClick={() => trackEvent(MixpanelEvent.Navigation, { from: pathname, to: "/dashboard" })}>
               <img
-                src="/logo-with-bg.png"
-                alt="Presentation logo"
-                className="h-[40px] w-[40px]"
+                src="/presentation-studio-logo.png"
+                alt="e& logo"
+                className="h-[40px] w-auto"
               />
             </Link>
+            <span className="text-sm font-bold tracking-tight text-[#111111] dark:text-white">Presentation Studio</span>
           </div>
-          <div className="flex items-center">
+          <div className="flex items-center gap-4">
             {showHeaderBack ? (
               <Link
                 href={backHref}

@@ -1,8 +1,7 @@
-import Link from "next/link";
 import Index from "./frontend/index";
 export const metadata = {
-  title: "Frontend Workspace | Presenton",
-  description: "A standalone workspace for the custom frontend.",
+  title: "Presentation Studio",
+  description: "Presentation Studio workspace.",
 };
 
 /**
@@ -14,7 +13,7 @@ export const metadata = {
 export default function FrontendPage() {
   return (
     <div>
-        <Index></Index>
+      <Index />
     </div>
   );
 }

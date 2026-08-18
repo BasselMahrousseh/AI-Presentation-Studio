@@ -45,6 +45,10 @@ from utils.get_env import (
     get_deepseek_api_key_env,
     get_deepseek_base_url_env,
     get_deepseek_model_env,
+    get_azure_openai_image_endpoint_env,
+    get_azure_openai_image_api_key_env,
+    get_azure_openai_image_api_version_env,
+    get_azure_openai_image_deployment_env,
 )
 from utils.get_env import get_google_api_key_env
 from utils.get_env import get_ollama_model_env
@@ -101,6 +105,17 @@ def _check_image_provider_configuration() -> None:
         workflow_json = get_comfyui_workflow_env()
         if not workflow_json:
             raise Exception("COMFYUI_WORKFLOW must be provided")
+
+    elif selected_image_provider == ImageProvider.AZURE_OPENAI:
+        required = {
+            "AZURE_OPENAI_IMAGE_ENDPOINT": get_azure_openai_image_endpoint_env(),
+            "AZURE_OPENAI_IMAGE_API_KEY": get_azure_openai_image_api_key_env(),
+            "AZURE_OPENAI_IMAGE_API_VERSION": get_azure_openai_image_api_version_env(),
+            "AZURE_OPENAI_IMAGE_DEPLOYMENT": get_azure_openai_image_deployment_env(),
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            raise Exception(f"{', '.join(missing)} must be provided")
 
 
 async def check_llm_and_image_provider_api_or_model_availability():

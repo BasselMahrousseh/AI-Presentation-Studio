@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  FolderUp,
   Loader2,
   Sparkles,
   Trash2,
@@ -207,9 +208,9 @@ function TemplateStudioTitle({ compact = false }: { compact?: boolean }) {
     <div
       className={`px-4 text-center ${compact ? "pt-[88px] sm:pt-[96px] 2xl:pt-[112px]" : "pt-[96px] sm:pt-[108px] 2xl:pt-[128px]"}`}
     >
-      <h1 className="font-unbounded text-[36px] font-normal leading-none tracking-[-1.2px] text-[#101323] sm:text-[48px] sm:tracking-[-1.4px] md:text-[56px] 2xl:text-[68px] 2xl:tracking-[-1.8px]">
+      {/* <h1 className="font-unbounded text-[36px] font-normal leading-none tracking-[-1.2px] text-[#101323] sm:text-[48px] sm:tracking-[-1.4px] md:text-[56px] 2xl:text-[68px] 2xl:tracking-[-1.8px]">
         Template Studio
-      </h1>
+      </h1> */}
       <p className="mx-auto mt-3 max-w-[480px] text-center font-syne text-[15px] font-normal leading-[1.4] text-[#101323CC] sm:mt-4 sm:max-w-[520px] sm:text-[16px] 2xl:mt-5 2xl:max-w-[600px] 2xl:text-[18px]">
         Upload your PPTX file to extract slides and convert them to a template
         which you can use to generate AI presentations.
@@ -333,12 +334,9 @@ function UploadPanel({
                 </div>
               ) : (
                 <div className="flex h-full flex-col py-[28px] 2xl:py-[36px] items-center justify-center">
-                  <img
-                    src="/upload_icon.png"
-                    alt=""
-                    className="h-[42px] w-[55px] 2xl:h-[52px] 2xl:w-[68px]"
-                    draggable={false}
-                  />
+                  <div className="flex h-[52px] w-[64px] items-center justify-center rounded-2xl bg-[#fff0f0] text-[#e60000] 2xl:h-[64px] 2xl:w-[78px]">
+                    <FolderUp className="h-7 w-7 2xl:h-9 2xl:w-9" strokeWidth={1.8} />
+                  </div>
                   <p className="mt-3 2xl:mt-4 text-sm 2xl:text-base font-normal text-[#808080]">
                     Drag &amp; Drop your files here
                   </p>
@@ -363,17 +361,17 @@ function UploadPanel({
           </div>
         </div>
 
-        <ul className="mx-auto mt-6 2xl:mt-8 flex max-w-[480px] 2xl:max-w-[600px] items-center justify-between gap-5 2xl:gap-8">
+        {/* <ul className="mx-auto mt-6 2xl:mt-8 flex max-w-[480px] 2xl:max-w-[600px] items-center justify-between gap-5 2xl:gap-8">
           {["Test in Real Time", "Max 100MB", "5min Generation"].map((item) => (
             <li key={item} className="flex items-center gap-2 2xl:gap-2.5">
               <span className="h-2.5 w-2.5 2xl:h-3 2xl:w-3 rounded-full bg-[#EBE9FE]" />
               <span className="text-[13px] 2xl:text-[15px] font-normal text-[#3A3A3A]">{item}</span>
             </li>
           ))}
-        </ul>
+        </ul> */}
       </section>
 
-      <div className="mt-auto w-full pb-5 2xl:pb-8 pt-12 2xl:pt-16">
+      {/* <div className="mt-auto w-full pb-5 2xl:pb-8 pt-12 2xl:pt-16">
         <div className="mx-auto flex max-w-[558px] 2xl:max-w-[700px] items-center gap-2 2xl:gap-3 rounded-[6px] bg-[#F4F7FB] px-3 2xl:px-4 py-2 2xl:py-2.5 text-[11px] 2xl:text-[13px] leading-tight text-[#505462]">
           <span className="flex h-[14px] w-[14px] 2xl:h-4 2xl:w-4 shrink-0 items-center justify-center rounded-full bg-[#0B4FBD] text-[10px] 2xl:text-[11px] font-bold text-white">
             i
@@ -384,7 +382,7 @@ function UploadPanel({
             poor results or fail.
           </p>
         </div>
-      </div>
+      </div> */}
     </main>
   );
 }
@@ -1495,6 +1493,7 @@ const CustomTemplatePage = () => {
   const [reviewSlideIndex, setReviewSlideIndex] = useState(0);
   const [templateModalMode, setTemplateModalMode] = useState<"create" | "save" | null>(null);
   const [isSubmittingTemplate, setIsSubmittingTemplate] = useState(false);
+  const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
   const [googleFontOptions, setGoogleFontOptions] =
     useState<GoogleFontOption[]>(GOOGLE_FONT_OPTIONS);
   const [selectedFallbackFonts, setSelectedFallbackFonts] = useState<
@@ -1594,7 +1593,7 @@ const CustomTemplatePage = () => {
   );
 
   useEffect(() => {
-    showTemplateV2ModelWarningIfNeeded(llmConfig);
+    // showTemplateV2ModelWarningIfNeeded(llmConfig);
     return () => {
       dismissTemplateV2ModelWarning();
     };
@@ -1789,7 +1788,7 @@ const CustomTemplatePage = () => {
           source: "template_studio_create_async",
           slide_count: state.previewData.slide_image_urls.length,
         });
-        await TemplateService.createTemplate({
+        const task = await TemplateService.createTemplate({
           pptx_url: state.previewData.modified_pptx_url,
           slide_image_urls: state.previewData.slide_image_urls,
           fonts: {
@@ -1799,13 +1798,32 @@ const CustomTemplatePage = () => {
           name,
           description: description || null,
         });
-        notify.success(
-          "Template generation started",
-          "You can track the template status from the Templates page.",
-        );
         setTemplateModalMode(null);
-        router.push("/templates?tab=custom");
+        setIsCreatingTemplate(true);
+
+        let taskStatus = task.status;
+        while (taskStatus === "pending") {
+          await new Promise((resolve) => window.setTimeout(resolve, 1500));
+          const updatedTask = await TemplateService.getAsyncTaskStatus(task.id);
+          taskStatus = updatedTask.status;
+
+          if (taskStatus === "error") {
+            throw new Error(
+              typeof updatedTask.error === "string"
+                ? updatedTask.error
+                : "Template creation could not be completed.",
+            );
+          }
+        }
+
+        if (taskStatus !== "completed") {
+          throw new Error("Template creation could not be completed.");
+        }
+
+        router.replace("/");
       } catch (error) {
+        setIsCreatingTemplate(false);
+        setTemplateModalMode("create");
         notify.error(
           "Failed to create template",
           error instanceof Error ? error.message : "An unexpected error occurred",
@@ -1898,7 +1916,7 @@ const CustomTemplatePage = () => {
   return (
     <div className="relative min-h-screen bg-white">
       <div className={""}>
-        <StudioTopBar activeStep={activeStep} />
+        {/* <StudioTopBar activeStep={activeStep} /> */}
 
         {showUpload ? (
           <UploadPanel
@@ -1925,7 +1943,7 @@ const CustomTemplatePage = () => {
             isAutoContinuing={isAutoPreviewQueued}
           />
         ) : null}
-
+        
         {showPreview ? (
           <PreviewPanel
             previewUrls={previewUrls}
@@ -1967,6 +1985,28 @@ const CustomTemplatePage = () => {
         onSave={handleTemplateModalSubmit}
       />
 
+      {isCreatingTemplate ? (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-white"
+          role="status"
+          aria-live="polite"
+          aria-label="Creating template"
+        >
+          <div className="flex flex-col items-center gap-5 text-center font-syne">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#F4F3FF]">
+              <Loader2 className="h-8 w-8 animate-spin text-[#5146E5]" />
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold text-[#25272F]">
+                Creating template.....
+              </h2>
+              <p className="mt-2 text-sm text-[#7E818C]">
+                This may take a moment.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
     </div>
   );

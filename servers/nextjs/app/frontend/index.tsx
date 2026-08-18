@@ -40,6 +40,10 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { useTemplateSummaries } from "../(presentation-generator)/hooks/useTemplateSummaries";
+import { TemplateThumbnailPreview } from "../(presentation-generator)/components/TemplateListUi";
+import Header from "@/components/Header";
+
 
 type View = "dashboard" | "create" | "generating" | "editor";
 
@@ -120,14 +124,18 @@ function DeckCard({ deck, index, onClick }: { deck: typeof recentDecks[number]; 
 function CreateView({
   onGenerate,
   onBack,
+  selectedTemplateId,
+  onSelectTemplateId,
 }: {
-  onGenerate: (prompt: string) => Promise<void>;
+  onGenerate: (prompt: string, templateId: string) => Promise<void>;
   onBack: () => void;
+  selectedTemplateId: string;
+  onSelectTemplateId: (templateId: string) => void;
 }) {
   const [prompt, setPrompt] = useState("");
 
   return (
-    <main className="create-shell">
+    <main className="create-shell flex min-h-screen w-full items-center justify-center px-5 py-12 sm:px-8">
       {/* <button
         onClick={onBack}
         className="mb-8 flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700"
@@ -136,11 +144,11 @@ function CreateView({
         Back to workspace
       </button> */}
 
-      <div className="mx-auto max-w-[800px]">
+      <div className="mx-auto w-full max-w-[800px]">
         <div className="mb-9">
-          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[#e9efff] text-[#3567d6]">
+          {/* <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[#e9efff] text-[#3567d6]">
             <WandSparkles size={19} />
-          </div>
+          </div> */}
 
           <h1 className="text-[30px] font-semibold tracking-[-0.04em] text-slate-900">
             Create a new presentation
@@ -151,13 +159,13 @@ function CreateView({
           </p>
         </div>
 
-        <div className="prompt-card">
+        <div className="presentation-studio-prompt rounded-2xl border border-black/10 bg-[#fafafa] p-5 shadow-[0_18px_45px_rgba(0,0,0,0.08)] transition-shadow focus-within:border-[#e60000]/50 focus-within:shadow-[0_18px_45px_rgba(230,0,0,0.13)] dark:border-white/10 dark:bg-[#0d0d0d]">
           <div className="mb-3 flex items-center justify-between">
-            <label className="text-sm font-semibold text-slate-800">
+            <label className="text-sm font-semibold text-slate-800 dark:text-white">
               What do you want to present?
             </label>
 
-            <span className="text-[11px] text-slate-400">
+            <span className="rounded-full bg-[#fff0f0] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#d40000] dark:bg-[#3a1010] dark:text-[#ff7777]">
               AI assisted
             </span>
           </div>
@@ -166,21 +174,25 @@ function CreateView({
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="Describe the presentation you want to create..."
-            className="min-h-[180px] resize-none border-0 bg-transparent px-0 text-[15px] leading-7 shadow-none placeholder:text-slate-400 focus-visible:ring-0"
+            className="min-h-[180px] resize-none rounded-xl border border-slate-200 bg-white px-4 py-3 text-[15px] leading-7 text-slate-900 shadow-inner shadow-black/[0.02] placeholder:text-slate-400 focus-visible:border-[#e60000] focus-visible:ring-2 focus-visible:ring-[#e60000]/15 dark:border-white/10 dark:bg-[#171717] dark:text-white dark:placeholder:text-zinc-500"
           />
 
-          <div className="mt-5 flex flex-col justify-between gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center">
-            <p className="max-w-[500px] text-xs leading-5 text-slate-400">
+          <div className="mt-4 flex flex-col justify-between gap-3 border-t border-slate-200 pt-4 dark:border-white/10 sm:flex-row sm:items-center">
+            <p className="max-w-[500px] text-xs leading-5 text-slate-500 dark:text-zinc-400">
               Try: “Create a 10-slide presentation explaining how
               Retrieval-Augmented Generation works for software engineers.”
             </p>
 
-            <button className="flex w-fit items-center gap-1.5 text-xs font-semibold text-[#3567d6]">
+            <button className="flex w-fit items-center gap-1.5 text-xs font-semibold text-[#e60000] transition-colors hover:text-[#b80000] dark:text-[#ff6262]">
               <Sparkles size={14} />
               Improve prompt
             </button>
           </div>
         </div>
+        <TemplatePicker
+          selectedTemplateId={selectedTemplateId}
+          onSelectTemplateId={onSelectTemplateId}
+        />
 
         <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-5">
           <p className="hidden text-xs text-slate-400 sm:block">
@@ -188,7 +200,7 @@ function CreateView({
           </p>
 
           <Button
-            onClick={() => onGenerate(prompt)}
+            onClick={() => onGenerate(prompt,selectedTemplateId)}
             className="h-11 w-full rounded-lg bg-[#3567d6] px-6 text-sm font-semibold shadow-[0_6px_16px_rgba(53,103,214,.2)] hover:bg-[#2d5cc8] sm:ml-auto sm:w-auto"
           >
             <Sparkles size={16} />
@@ -331,12 +343,107 @@ function Editor({
     </div>
   );
 }
+
+const CUSTOM_TEMPLATE_VALUE = "__create_custom_template__";
+
+function TemplatePicker({
+  selectedTemplateId,
+  onSelectTemplateId,
+}: {
+  selectedTemplateId: string;
+  onSelectTemplateId: (templateId: string) => void;
+}) {
+  const router = useRouter();
+  const { defaultTemplates, customTemplates, loading } = useTemplateSummaries();
+  const templates = useMemo(
+    () => [...defaultTemplates, ...customTemplates],
+    [defaultTemplates, customTemplates]
+  );
+  const selectedTemplate = templates.find(
+    (template) => template.id === selectedTemplateId
+  );
+
+  const handleSelection = (value: string) => {
+    onSelectTemplateId(value);
+    if (value === CUSTOM_TEMPLATE_VALUE) {
+      router.push("/custom-template");
+    }
+  };
+
+  return (
+    <div className="mt-8 w-full text-[#101828]">
+      <div className="w-full">
+        <div className="border-t border-slate-200 pt-5">
+          <label htmlFor="template-picker" className="block text-sm font-semibold text-[#344054]">
+            Saved templates
+          </label>
+          <select
+            id="template-picker"
+            value={selectedTemplateId}
+            disabled={loading}
+            onChange={(event) => handleSelection(event.target.value)}
+            className="mt-2 h-12 w-full rounded-xl border border-[#D0D5DD] bg-transparent px-4 text-sm font-medium text-[#101828] outline-none transition focus:border-[#7A5AF8] focus:ring-4 focus:ring-[#7A5AF8]/15 disabled:cursor-wait"
+          >
+            <option value="">
+              {loading ? "Loading saved templates..." : "Select a template"}
+            </option>
+            {defaultTemplates.length > 0 && (
+              <optgroup label="Built-in templates">
+                {defaultTemplates.map((template) => (
+                  <option key={template.id} value={template.id}>{template.name}</option>
+                ))}
+              </optgroup>
+            )}
+            {customTemplates.length > 0 && (
+              <optgroup label="Your custom templates">
+                {customTemplates.map((template) => (
+                  <option key={template.id} value={template.id}>{template.name}</option>
+                ))}
+              </optgroup>
+            )}
+            <optgroup label="Create">
+              <option value={CUSTOM_TEMPLATE_VALUE}>Create a custom template...</option>
+            </optgroup>
+          </select>
+
+          {selectedTemplate && (
+            <div className="mt-6 overflow-hidden rounded-2xl border border-[#EAECF0]">
+              <div className="aspect-video p-3">
+                <TemplateThumbnailPreview
+                  thumbnail={selectedTemplate.thumbnail}
+                  templateName={selectedTemplate.name}
+                />
+              </div>
+              {/* <div className="flex flex-col gap-4 border-t border-[#EAECF0] p-5 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-base font-bold text-[#101828]">{selectedTemplate.name}</p>
+                  <p className="mt-1 text-sm text-[#667085]">
+                    {selectedTemplate.description || `${selectedTemplate.layout_count ?? 0} available layouts`}
+                  </p>
+                </div>
+                <Button
+                  onClick={() => router.push(`/template-preview?templateV2Id=${encodeURIComponent(selectedTemplate.id)}`)}
+                  className="h-10 rounded-xl bg-[#6D5DD3] px-4 hover:bg-[#5D4FC2]"
+                >
+                  Open template <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div> */}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Index() {
   const [view, setView] = useState<View>("dashboard");
 
   const [pptxBlob, setPptxBlob] = useState<Blob | null>(null);
   const [loading, setLoading] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const router = useRouter();
+
   // ADD THIS:
   // Use this when starting a new presentation.
   // It clears any old PPTX before opening the prompt page.
@@ -353,12 +460,13 @@ export default function Index() {
     setView("dashboard");
   };
 
-  const generatePresentation = async (prompt: string) => {
+  const generatePresentation = async (prompt: string, temp: string) => {
   try {
     setView("generating");
 
     const body = {
       content: prompt,
+      template: temp
     };
 
     const response = await fetch("http://127.0.0.1:8000/api/v1/ppt/presentation/generate", {
@@ -392,6 +500,8 @@ export default function Index() {
           onGenerate={generatePresentation}
           // onGenerate={() => setView("generating")}
           onBack={backToDashboard}
+          selectedTemplateId={selectedTemplateId}
+          onSelectTemplateId={setSelectedTemplateId}
         />
       );
     }
@@ -413,15 +523,18 @@ export default function Index() {
   }, [view]);
 
   if (view === "editor" || view === "generating") {
-    return <div className="flex h-screen flex-col">{content}</div>;
+    return <div className="black-theme flex h-screen flex-col"><Header />{content}</div>;
   }
 
   return (
-    <div className="flex min-h-screen w-full items-center justify-center">
+    <div className="black-theme flex min-h-screen w-full flex-col">
+      <Header />
       <CreateView
           onGenerate={generatePresentation}
           // onGenerate={() => setView("generating")}
           onBack={backToDashboard}
+          selectedTemplateId={selectedTemplateId}
+          onSelectTemplateId={setSelectedTemplateId}
         />
       {/* <Sidebar view={view} setView={setView} />
 
@@ -433,6 +546,7 @@ export default function Index() {
 
         {content}
       </div> */}
+
     </div>
   );
 }

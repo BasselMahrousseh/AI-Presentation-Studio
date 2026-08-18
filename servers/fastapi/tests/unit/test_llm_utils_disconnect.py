@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from llmai.shared import ResponseStreamCompletionChunk, ResponseStreamContentChunk
+from llmai.shared.errors import LLMRateLimitError
 
 from utils.llm_utils import generate_structured_with_schema_retries
 
@@ -59,6 +60,40 @@ def test_regular_generation_keeps_existing_retry_behavior(monkeypatch):
     assert result == {"result": "ok"}
     assert len(client.calls) == 2
     assert all(call["stream"] is False for call in client.calls)
+
+
+def test_rate_limits_retry_without_using_parse_retry_budget(monkeypatch):
+    monkeypatch.setenv("LLM", "ollama")
+
+    class RateLimitedClient:
+        def __init__(self):
+            self.calls = []
+
+        def generate(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) < 3:
+                raise LLMRateLimitError(429, "backend busy")
+            return SimpleNamespace(content={"result": "ok"})
+
+    client = RateLimitedClient()
+
+    with (
+        patch("utils.llm_utils.STRUCTURED_RATE_LIMIT_RETRIES", 3),
+        patch("utils.llm_utils.asyncio.sleep", new=AsyncMock()) as sleep,
+    ):
+        result = asyncio.run(
+            generate_structured_with_schema_retries(
+                client,
+                "test-model",
+                messages=[],
+                response_format=object(),
+                json_schema={},
+            )
+        )
+
+    assert result == {"result": "ok"}
+    assert len(client.calls) == 3
+    assert [call.args[0] for call in sleep.await_args_list] == [2, 4]
 
 
 def test_disconnect_cancels_generation_without_retrying(monkeypatch):

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import threading
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from typing import Any, Optional
@@ -15,6 +16,7 @@ from llmai.shared import (
     UserMessage,
     normalize_content_parts,
 )
+from llmai.shared.errors import LLMRateLimitError
 
 from utils.llm_config import get_extra_body
 from utils.schema_utils import get_schema_validation_errors
@@ -22,7 +24,30 @@ from utils.schema_utils import get_schema_validation_errors
 
 LOGGER = logging.getLogger(__name__)
 CLIENT_DISCONNECT_POLL_SECONDS = 0.1
+STRUCTURED_RATE_LIMIT_RETRIES = 5
+STRUCTURED_RATE_LIMIT_BACKOFF_SECONDS = 2
+STRUCTURED_RATE_LIMIT_MAX_BACKOFF_SECONDS = 60
 DisconnectChecker = Callable[[], Awaitable[bool]]
+
+
+def _positive_int_env(name: str, default: int, maximum: int) -> int:
+    """Read a bounded positive integer while keeping invalid env values safe."""
+    try:
+        return max(1, min(int(os.getenv(name, str(default))), maximum))
+    except ValueError:
+        return default
+
+
+STRUCTURED_RATE_LIMIT_RETRIES = _positive_int_env(
+    "LLM_STRUCTURED_RATE_LIMIT_RETRIES",
+    default=STRUCTURED_RATE_LIMIT_RETRIES,
+    maximum=10,
+)
+STRUCTURED_RATE_LIMIT_BACKOFF_SECONDS = _positive_int_env(
+    "LLM_STRUCTURED_RATE_LIMIT_BACKOFF_SECONDS",
+    default=STRUCTURED_RATE_LIMIT_BACKOFF_SECONDS,
+    maximum=60,
+)
 
 
 async def _raise_if_client_disconnected(
@@ -60,6 +85,40 @@ async def _generate_structured_content(
     if content is not None:
         return content
     return extract_structured_content("".join(streamed_text))
+
+
+async def _generate_structured_content_with_rate_limit_backoff(
+    client: Any,
+    *,
+    disconnect_checker: Optional[DisconnectChecker],
+    **kwargs: Any,
+) -> Optional[dict]:
+    """Retry transient provider 429s without using response-format retry budget."""
+    for rate_limit_attempt in range(1, STRUCTURED_RATE_LIMIT_RETRIES + 1):
+        try:
+            return await _generate_structured_content(
+                client,
+                disconnect_checker=disconnect_checker,
+                **kwargs,
+            )
+        except LLMRateLimitError as exc:
+            if rate_limit_attempt >= STRUCTURED_RATE_LIMIT_RETRIES:
+                raise
+
+            delay_seconds = min(
+                STRUCTURED_RATE_LIMIT_BACKOFF_SECONDS
+                * (2 ** (rate_limit_attempt - 1)),
+                STRUCTURED_RATE_LIMIT_MAX_BACKOFF_SECONDS,
+            )
+            LOGGER.warning(
+                "Structured LLM generation rate limited; retrying %d/%d in %ss: %s",
+                rate_limit_attempt,
+                STRUCTURED_RATE_LIMIT_RETRIES,
+                delay_seconds,
+                exc,
+            )
+            await _raise_if_client_disconnected(disconnect_checker)
+            await asyncio.sleep(delay_seconds)
 
 
 def get_generate_kwargs(
@@ -146,7 +205,7 @@ async def generate_structured_with_schema_retries(
         content: Optional[dict] = None
         for attempt in range(3):
             await _raise_if_client_disconnected(disconnect_checker)
-            content = await _generate_structured_content(
+            content = await _generate_structured_content_with_rate_limit_backoff(
                 client,
                 disconnect_checker=disconnect_checker,
                 **get_generate_kwargs(

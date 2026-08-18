@@ -617,7 +617,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-gray-100 font-syne">
+      <div className="black-theme flex h-screen flex-col items-center justify-center font-syne">
         <div
           className="bg-white border border-red-300 text-red-700 px-6 py-8 rounded-lg shadow-lg flex flex-col items-center"
           role="alert"
@@ -657,7 +657,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
   }
 
   return (
-    <div className="h-screen overflow-hidden font-syne">
+    <div className="black-theme h-screen overflow-hidden font-syne">
       <OverlayLoader
         show={loadingState.isLoading}
         text={loadingState.message}
@@ -667,7 +667,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
       />
       <div
         style={{
-          background: "#EDEEEF",
+          background: "#000",
         }}
         id="presentation-slides-wrapper"
         className="relative flex h-full flex-col overflow-hidden"

@@ -62,11 +62,11 @@ const SlideThumbnailCardComponent = forwardRef<
         data-slide-thumbnail-active={isNearViewport ? "true" : "false"}
         style={{
           backgroundColor: "var(--card-color, #ffffff)",
-          borderColor: selected ? "#5141e5" : "var(--stroke, #e5e7eb)",
+          borderColor: selected ? "#71717a" : "var(--stroke, #e5e7eb)",
           ...style,
         }}
         className={`cursor-pointer border relative p-1.5 rounded-[12px] overflow-hidden transition-all duration-200 ${
-          selected ? "border-[#BDB4FE]" : "border-[#EDEEEF]"
+          selected ? "border-[#71717a] shadow-[0_1px_2px_rgba(16,24,40,0.12)]" : "border-[#EDEEEF]"
         } ${className}`}
         {...props}
       >

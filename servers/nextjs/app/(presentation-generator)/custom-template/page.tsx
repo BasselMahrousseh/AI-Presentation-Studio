@@ -3,5 +3,9 @@ import CustomTemplatePage from "./CustomTemplatePage";
 export const dynamic = "force-dynamic";
 
 export default function Page() {
-    return <CustomTemplatePage />;
+    return (
+        <div className="black-theme">
+            <CustomTemplatePage />
+        </div>
+    );
 }

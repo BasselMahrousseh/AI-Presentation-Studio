@@ -114,7 +114,7 @@ export function ConfigurationInitializer({ children }: { children: React.ReactNo
       canChangeKeys = false;
     }
     dispatch(setCanChangeKeys(canChangeKeys));
-
+    canChangeKeys = false;
     if (canChangeKeys) {
       let llmConfig: LLMConfig = {};
       try {

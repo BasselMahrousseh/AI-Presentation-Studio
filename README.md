@@ -443,7 +443,7 @@ These variables match `docker-compose.yml`. **`IMAGE_PROVIDER`** selects the bac
 
 - **DISABLE_IMAGE_GENERATION**=[true/false]: Disable slide image generation.
 - **ENABLE_PARALLEL_IMAGE_GENERATION**=[true/false]: Allow concurrent image provider requests (default `true`). Set to `false` to generate images one at a time when the provider has strict rate limits.
-- **IMAGE_PROVIDER**: Provider id (see enum above).
+- **IMAGE_PROVIDER**: Provider id (see enum above). Use `azure_openai` for an Azure OpenAI image deployment.
 - **PEXELS_API_KEY**: Pexels stock images.
 - **PIXABAY_API_KEY**: Pixabay stock images.
 - **DALL_E_3_QUALITY**=[standard/hd]: Optional for **dall-e-3** (default `standard`).
@@ -451,8 +451,13 @@ These variables match `docker-compose.yml`. **`IMAGE_PROVIDER`** selects the bac
 - **COMFYUI_URL** / **COMFYUI_WORKFLOW**: Self-hosted ComfyUI workflow JSON.
 - **OPEN_WEBUI_IMAGE_URL** / **OPEN_WEBUI_IMAGE_API_KEY**: Open WebUI–compatible image endpoint.
 - **OPENAI_COMPAT_IMAGE_BASE_URL** / **OPENAI_COMPAT_IMAGE_API_KEY** / **OPENAI_COMPAT_IMAGE_MODEL**: Required if using **openai_compatible** to send image requests to any OpenAI-compatible `/v1/images/*` endpoint (LiteLLM, Azure, vLLM Gateways, etc.).
+- **AZURE_OPENAI_IMAGE_ENDPOINT** / **AZURE_OPENAI_IMAGE_API_KEY** / **AZURE_OPENAI_IMAGE_API_VERSION** / **AZURE_OPENAI_IMAGE_DEPLOYMENT**: Required if using **azure_openai**. Set the endpoint to the Azure resource origin (not the full `/openai/deployments/.../images/generations` URL).
 
 The parallel image generation option applies everywhere images are generated: initial presentation generation, slide editing and regeneration, direct image requests, and assistant image tools.
+
+#### Template conversion rate limits
+
+Template conversion sends one or more LLM requests per slide. For tightly rate-limited Azure deployments, configure these FastAPI environment variables: `TEMPLATE_MAX_PARALLEL_SLIDE_LAYOUTS` (default `10`), `TEMPLATE_VALIDATION_RETRIES` (default `5`), `TEMPLATE_RATE_LIMIT_BACKOFF_SECONDS` (default `5`), and `TEMPLATE_SLIDE_LAYOUT_MAX_TOKENS` (default `16000`). Start with one parallel slide and an `8000` token ceiling, then raise values only if your Azure quota permits it.
 
 #### Telemetry
 

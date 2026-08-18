@@ -9,7 +9,7 @@ import aiohttp
 from fastapi import HTTPException
 from google import genai
 from google.genai import types
-from openai import NOT_GIVEN, AsyncOpenAI
+from openai import NOT_GIVEN, AsyncAzureOpenAI, AsyncOpenAI
 from models.image_prompt import ImagePrompt
 from models.sql.image_asset import ImageAsset
 from utils.get_env import (
@@ -21,6 +21,10 @@ from utils.get_env import (
     get_openai_compat_image_base_url_env,
     get_openai_compat_image_api_key_env,
     get_openai_compat_image_model_env,
+    get_azure_openai_image_endpoint_env,
+    get_azure_openai_image_api_key_env,
+    get_azure_openai_image_api_version_env,
+    get_azure_openai_image_deployment_env,
     is_parallel_image_generation_enabled,
 )
 from utils.get_env import get_pixabay_api_key_env
@@ -37,6 +41,7 @@ from utils.image_provider import (
     is_comfyui_selected,
     is_open_webui_selected,
     is_openai_compatible_selected,
+    is_azure_openai_selected,
 )
 from utils.asset_directory_utils import absolute_fastapi_asset_url
 from utils.image_generation_error import normalize_image_generation_error
@@ -88,6 +93,8 @@ class ImageGenerationService:
             return self.generate_image_open_webui
         elif is_openai_compatible_selected():
             return self.generate_image_openai_compatible
+        elif is_azure_openai_selected():
+            return self.generate_image_azure_openai
         return None
 
     def is_stock_provider_selected(self):
@@ -906,4 +913,50 @@ class ImageGenerationService:
         else:
             raise Exception("OpenAI-compatible provider returned no image data")
 
+        return image_path
+
+    async def generate_image_azure_openai(
+        self, prompt: str, output_directory: str
+    ) -> str:
+        """Generate an image through an Azure OpenAI image deployment."""
+        endpoint = get_azure_openai_image_endpoint_env()
+        api_key = get_azure_openai_image_api_key_env()
+        api_version = get_azure_openai_image_api_version_env()
+        deployment = get_azure_openai_image_deployment_env()
+        if not all((endpoint, api_key, api_version, deployment)):
+            raise ValueError(
+                "AZURE_OPENAI_IMAGE_ENDPOINT, AZURE_OPENAI_IMAGE_API_KEY, "
+                "AZURE_OPENAI_IMAGE_API_VERSION and "
+                "AZURE_OPENAI_IMAGE_DEPLOYMENT must be set."
+            )
+
+        client = AsyncAzureOpenAI(
+            azure_endpoint=endpoint,
+            api_version=api_version,
+            api_key=api_key,
+        )
+        response = await client.images.generate(
+            model=deployment,
+            prompt=prompt,
+            n=1,
+            size="1024x1024",
+        )
+        item = response.data[0]
+        image_path = os.path.join(output_directory, f"{uuid.uuid4()}.png")
+        if item.b64_json:
+            with open(image_path, "wb") as f:
+                f.write(base64.b64decode(item.b64_json))
+        elif item.url:
+            async with aiohttp.ClientSession(trust_env=True) as session:
+                download = await session.get(
+                    item.url, timeout=aiohttp.ClientTimeout(total=120)
+                )
+                if download.status != 200:
+                    raise Exception(
+                        f"Failed to download image from Azure OpenAI: {download.status}"
+                    )
+                with open(image_path, "wb") as f:
+                    f.write(await download.read())
+        else:
+            raise Exception("Azure OpenAI returned no image data")
         return image_path
