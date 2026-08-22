@@ -598,7 +598,7 @@ const generatePresentation = async (
           smart_template: useEandTemplate ? "eand" : undefined,
           include_title_slide: true,
           include_table_of_contents: false,
-          n_slides: 10
+          n_slides: 3
         }),
       }
     );

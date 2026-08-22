@@ -20,6 +20,7 @@ import {
 import type { RootState } from "@/store/store";
 import { MixpanelEvent, trackEvent } from "@/utils/mixpanel";
 import ImageEditor from "./ImageEditor";
+import SmartChartEditor, { type SmartChartDraft } from "./SmartChartEditor";
 import SmartHtmlSlide from "./SmartHtmlSlide";
 import { useSmartChartInjection } from "./useSmartChartInjection";
 
@@ -35,6 +36,113 @@ type SelectionRect = {
   width: number;
   height: number;
 };
+
+type SmartChartOverride = {
+  type: string;
+  labels: string[];
+  datasets: Array<{
+    label: string;
+    data: number[];
+    backgroundColor: string[];
+    borderColor: string[];
+  }>;
+};
+
+type ChartRuntime = {
+  config?: { type?: unknown };
+  data?: {
+    labels?: unknown[];
+    datasets?: Array<{
+      label?: unknown;
+      data?: unknown[];
+      backgroundColor?: unknown;
+      borderColor?: unknown;
+    }>;
+  };
+};
+
+const CHART_OVERRIDE_RUNNER = `(function () {
+  var node = document.querySelector('script[data-presenton-chart-overrides]');
+  if (!node || !window.Chart || typeof window.Chart.getChart !== 'function') return;
+  var overrides;
+  try { overrides = JSON.parse(node.textContent || '{}'); } catch (_) { return; }
+  Object.keys(overrides).forEach(function (canvasId) {
+    var canvas = document.getElementById(canvasId);
+    var chart = canvas && window.Chart.getChart(canvas);
+    var override = overrides[canvasId];
+    if (!chart || !override) return;
+    if (override.type) chart.config.type = override.type;
+    if (Array.isArray(override.labels)) chart.data.labels = override.labels;
+    if (Array.isArray(override.datasets)) {
+      chart.data.datasets = chart.data.datasets.map(function (existing, index) {
+        var dataset = override.datasets[index];
+        return dataset ? Object.assign({}, existing, dataset) : existing;
+      });
+    }
+    chart.update('none');
+  });
+})();`;
+
+function chartColor(value: unknown): string {
+  if (typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)) {
+    return value;
+  }
+  return "#E60000";
+}
+
+function chartDraftFromCanvas(canvas: HTMLCanvasElement): SmartChartDraft | null {
+  const chart = (window as Window & {
+    Chart?: { getChart?: (canvas: HTMLCanvasElement) => ChartRuntime | undefined };
+  }).Chart?.getChart?.(canvas);
+  const dataset = chart?.data?.datasets?.[0];
+  const labels = chart?.data?.labels;
+  const type = chart?.config?.type;
+  if (!canvas.id || !dataset || !Array.isArray(labels) || typeof type !== "string") {
+    return null;
+  }
+  const values = (dataset.data ?? []).map((value) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : 0;
+  });
+  const background = Array.isArray(dataset.backgroundColor)
+    ? dataset.backgroundColor
+    : Array.from({ length: Math.max(labels.length, values.length) }, () => dataset.backgroundColor);
+  const fallback = chartColor(dataset.borderColor);
+  return {
+    canvasId: canvas.id,
+    type,
+    labels: labels.map((label) => String(label ?? "")),
+    datasetLabel: typeof dataset.label === "string" ? dataset.label : "Series",
+    values: values.length ? values : labels.map(() => 0),
+    colors: labels.map((_, index) => chartColor(background[index] ?? fallback)),
+  };
+}
+
+function chartOverridesFromHtml(html: string): Record<string, SmartChartOverride> {
+  const documentFragment = new DOMParser().parseFromString(html, "text/html");
+  const raw = documentFragment.querySelector("script[data-presenton-chart-overrides]")?.textContent;
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, SmartChartOverride>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function withChartOverrides(
+  html: string,
+  overrides: Record<string, SmartChartOverride>
+): string {
+  const withoutExistingOverrides = html
+    .replace(/<script\b[^>]*data-presenton-chart-overrides[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<script\b[^>]*data-presenton-chart-override-runner[^>]*>[\s\S]*?<\/script>/gi, "")
+    .trim();
+  const payload = JSON.stringify(overrides).replace(/</g, "\\u003c");
+  return `${withoutExistingOverrides}\n<script type="application/json" data-presenton-chart-overrides>${payload}</script>\n<script data-presenton-chart-override-runner>${CHART_OVERRIDE_RUNNER}</script>`;
+}
 
 const EXCLUDED_TEXT_TAGS = new Set([
   "SCRIPT",
@@ -104,6 +212,7 @@ export default function SmartHtmlEditor({
         .slice(2)}`
   );
   const [activeMedia, setActiveMedia] = useState<ActiveMedia | null>(null);
+  const [activeChart, setActiveChart] = useState<SmartChartDraft | null>(null);
   const hoveredElementRef = useRef<HTMLElement | null>(null);
   const selectedElementRef = useRef<HTMLElement | null>(null);
   const [hoverRect, setHoverRect] = useState<SelectionRect | null>(null);
@@ -133,6 +242,7 @@ export default function SmartHtmlEditor({
       const container = containerRef.current;
       if (!container || !container.contains(target)) return null;
       if (target.closest("script, style, noscript")) return null;
+      if (target.closest("canvas")) return null;
 
       const explicitRoot = target.closest<HTMLElement>(
         "[data-select-root], [data-card], .card"
@@ -325,6 +435,23 @@ export default function SmartHtmlEditor({
 
   useEffect(() => {
     const container = containerRef.current;
+    if (!container || !tailwindReady) return;
+    const handleChartClick = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const canvas = target?.closest("canvas");
+      if (!(canvas instanceof HTMLCanvasElement) || !container.contains(canvas)) return;
+      const draft = chartDraftFromCanvas(canvas);
+      if (!draft) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setActiveChart(draft);
+    };
+    container.addEventListener("click", handleChartClick, true);
+    return () => container.removeEventListener("click", handleChartClick, true);
+  }, [tailwindReady]);
+
+  useEffect(() => {
+    const container = containerRef.current;
     if (!container || !tailwindReady || !enableHtmlSelector) {
       hoveredElementRef.current = null;
       selectedElementRef.current = null;
@@ -488,6 +615,28 @@ export default function SmartHtmlEditor({
     window.setTimeout(saveHtml, 0);
   };
 
+  const applyChartChanges = (draft: SmartChartDraft) => {
+    const overrides = chartOverridesFromHtml(html);
+    overrides[draft.canvasId] = {
+      type: draft.type,
+      labels: draft.labels,
+      datasets: [{
+        label: draft.datasetLabel,
+        data: draft.values,
+        backgroundColor: draft.colors,
+        borderColor: draft.colors,
+      }],
+    };
+    dispatch(
+      updateSlideHtmlContent({
+        slideIndex: slide.index ?? 0,
+        slideId: slide.id,
+        html: withChartOverrides(html, overrides),
+      })
+    );
+    setActiveChart(null);
+  };
+
   if (!tailwindReady) {
     return <SmartHtmlSlide fixedSize fonts={fonts} html={html} title={title} />;
   }
@@ -521,7 +670,17 @@ export default function SmartHtmlEditor({
         .smart-html-editor[data-smart-selecting="true"] * {
           cursor: crosshair !important;
         }
+        .smart-html-editor canvas {
+          cursor: pointer;
+        }
       `}</style>
+      {activeChart && (
+        <SmartChartEditor
+          chart={activeChart}
+          onApply={applyChartChanges}
+          onClose={() => setActiveChart(null)}
+        />
+      )}
       {enableHtmlSelector &&
         typeof document !== "undefined" &&
         createPortal(

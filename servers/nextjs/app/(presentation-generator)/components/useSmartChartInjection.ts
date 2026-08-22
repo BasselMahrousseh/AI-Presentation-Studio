@@ -41,6 +41,7 @@ export function useSmartChartInjection({
         const rootId = JSON.stringify(instanceId);
         const sourceDocument = new DOMParser().parseFromString(html, "text/html");
         sourceDocument.querySelectorAll<HTMLScriptElement>("script").forEach((source) => {
+          if (source.type.toLowerCase() === "application/json") return;
           const sourceCode = source.textContent?.trim();
           if (!sourceCode) return;
 
