@@ -152,7 +152,11 @@ function CreateView({
   selectedTemplateId,
   onSelectTemplateId,
 }: {
-  onGenerate: (prompt: string, templateId: string) => Promise<void>;
+  onGenerate: (
+    prompt: string,
+    templateId: string,
+    useEandTemplate: boolean
+  ) => Promise<void>;
   onBack: () => void;
   selectedTemplateId: string;
   onSelectTemplateId: (templateId: string) => void;
@@ -224,13 +228,23 @@ function CreateView({
             You can edit everything after generation.
           </p>
 
-          <Button
-            onClick={() => onGenerate(prompt,selectedTemplateId)}
-            className="h-11 w-full rounded-lg bg-[#e60000] px-6 text-sm font-semibold shadow-[0_6px_16px_rgba(230,0,0,.2)] hover:bg-[#c40000] sm:ml-auto sm:w-auto"
-          >
-            <Sparkles size={16} />
-            Generate presentation
-          </Button>
+          <div className="flex w-full flex-col gap-2 sm:ml-auto sm:w-auto sm:flex-row">
+            <Button
+              variant="outline"
+              onClick={() => onGenerate(prompt, selectedTemplateId, false)}
+              className="h-11 w-full rounded-lg border-[#d0d5dd] bg-white px-5 text-sm font-semibold text-slate-700 hover:bg-slate-50 sm:w-auto"
+            >
+              <Sparkles size={16} />
+              Generate presentation
+            </Button>
+            <Button
+              onClick={() => onGenerate(prompt, selectedTemplateId, true)}
+              className="h-11 w-full rounded-lg bg-[#e60000] px-5 text-sm font-semibold shadow-[0_6px_16px_rgba(230,0,0,.2)] hover:bg-[#c40000] sm:w-auto"
+            >
+              <Sparkles size={16} />
+              Generate with e&amp; template
+            </Button>
+          </div>
         </div>
       </div>
     </main>
@@ -563,11 +577,13 @@ export default function Index() {
     };
   });
 
-const generatePresentation = async (prompt: string, temp: string) => {
+const generatePresentation = async (
+  prompt: string,
+  temp: string,
+  useEandTemplate: boolean
+) => {
   try {
     setView("generating");
-
-    const communityDesignId = Number(temp);
 
     // 1. Save the Smart presentation configuration.
     const response = await fetch(
@@ -579,9 +595,10 @@ const generatePresentation = async (prompt: string, temp: string) => {
           content: prompt,
           language: "English",
           generation_mode: "smart",
+          smart_template: useEandTemplate ? "eand" : undefined,
           include_title_slide: true,
           include_table_of_contents: false,
-          n_slides: 5
+          n_slides: 10
         }),
       }
     );

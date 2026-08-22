@@ -112,6 +112,14 @@ from utils.llm_calls.generate_smart_presentation import (
     generate_smart_presentation,
     resolve_smart_slide_count,
 )
+from utils.smart_brand_templates import (
+    EAND_SMART_TEMPLATE_ID,
+    apply_smart_brand_template,
+    build_eand_thank_you_slide,
+    build_eand_title_slide,
+    get_eand_content_slide_count,
+    normalize_smart_template_id,
+)
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -1454,6 +1462,7 @@ async def create_presentation(
     web_search: Annotated[bool, Body()] = False,
     generation_mode: Annotated[Literal["standard", "smart"], Body()] = "standard",
     community_design_ids: Annotated[Optional[List[int]], Body()] = None,
+    smart_template: Annotated[Optional[str], Body()] = None,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
 
@@ -1476,11 +1485,22 @@ async def create_presentation(
     )
 
     normalized_community_ids = normalize_community_ids(community_design_ids)
+    normalized_smart_template = normalize_smart_template_id(smart_template)
     if generation_mode != "smart" and normalized_community_ids:
         raise HTTPException(
             status_code=400,
             detail="Community references are available only in Smart mode",
         )
+    if generation_mode != "smart" and normalized_smart_template:
+        raise HTTPException(
+            status_code=400,
+            detail="Smart brand templates are available only in Smart mode",
+        )
+    if (
+        normalized_smart_template == EAND_SMART_TEMPLATE_ID
+        and n_slides is not None
+    ):
+        get_eand_content_slide_count(n_slides)
     if generation_mode == "smart" and not (
         content.strip() or file_paths or normalized_community_ids
     ):
@@ -1514,15 +1534,17 @@ async def create_presentation(
         web_search=web_search,
         generation_mode=generation_mode,
         community_design_ids=normalized_community_ids or None,
+        smart_template=normalized_smart_template,
     )
 
     sql_session.add(presentation)
     await sql_session.commit()
 
     logger.info(
-        "[smart-workflow] created presentation_id=%s mode=%s requested_slides=%s stored_slides=%s files=%s community_references=%s",
+        "[smart-workflow] created presentation_id=%s mode=%s requested_slides=%s stored_slides=%s files=%s community_references=%s smart_template=%s",
         presentation.id, generation_mode, n_slides, presentation.n_slides,
         len(validated_file_paths or []), normalized_community_ids or [],
+        normalized_smart_template or "none",
     )
 
     search_route, actual_search_provider = get_web_search_route()
@@ -1766,11 +1788,17 @@ async def _stream_smart_presentation(
             source_context = source_context[:90_000]
 
         slide_count = resolve_smart_slide_count(presentation.n_slides)
+        is_eand_template = presentation.smart_template == EAND_SMART_TEMPLATE_ID
+        generated_slide_count = (
+            get_eand_content_slide_count(slide_count)
+            if is_eand_template
+            else slide_count
+        )
         presentation.n_slides = slide_count
         presentation.fonts = reference_fonts or {
             "Inter": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
         }
-        logger.info("[smart-workflow] smart_generation_ready presentation_id=%s resolved_slides=%s source_context_chars=%s fonts=%s", presentation_id, slide_count, len(source_context), list(presentation.fonts.keys()))
+        logger.info("[smart-workflow] smart_generation_ready presentation_id=%s resolved_slides=%s generated_content_slides=%s source_context_chars=%s fonts=%s", presentation_id, slide_count, generated_slide_count, len(source_context), list(presentation.fonts.keys()))
         yield SSEResponse(
             event="response",
             data=json.dumps({"type": "fonts", "fonts": presentation.fonts}),
@@ -1786,25 +1814,29 @@ async def _stream_smart_presentation(
         generation_events: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
 
         async def emit_slide(index: int, slide: dict[str, str]) -> None:
-            if index < 0 or index >= slide_count:
+            if index < 0 or index >= generated_slide_count:
                 return
-            streamed_slide = streamed_slides.get(index)
+            persisted_index = index + 1 if is_eand_template else index
+            rendered_html = apply_smart_brand_template(
+                presentation.smart_template, slide["html"]
+            )
+            streamed_slide = streamed_slides.get(persisted_index)
             if streamed_slide is None:
                 streamed_slide = SlideModel(
                     presentation=presentation_id,
                     layout_group="smart-html",
                     layout="smart-html",
-                    index=index,
+                    index=persisted_index,
                     content={"title": slide["title"]},
-                    html_content=slide["html"],
+                    html_content=rendered_html,
                     speaker_note="",
                 )
-                streamed_slides[index] = streamed_slide
+                streamed_slides[persisted_index] = streamed_slide
             else:
                 streamed_slide.content = {"title": slide["title"]}
-                streamed_slide.html_content = slide["html"]
+                streamed_slide.html_content = rendered_html
                 streamed_slide.speaker_note = ""
-            logger.info("[smart-workflow] smart_slide_emitted presentation_id=%s index=%s title=%r html_chars=%s", presentation_id, index, slide["title"], len(slide["html"]))
+            logger.info("[smart-workflow] smart_slide_emitted presentation_id=%s index=%s title=%r html_chars=%s", presentation_id, persisted_index, slide["title"], len(slide["html"]))
             await generation_events.put(("slide", streamed_slide))
 
         async def emit_metrics(metrics: TextGenerationMetrics) -> None:
@@ -1814,18 +1846,22 @@ async def _stream_smart_presentation(
         generation_task = asyncio.create_task(
             generate_smart_presentation(
                 content=presentation.content,
-                n_slides=slide_count,
+                n_slides=generated_slide_count,
                 language=presentation.language,
                 tone=presentation.tone,
                 verbosity=presentation.verbosity,
                 instructions=presentation.instructions,
-                include_title_slide=presentation.include_title_slide,
+                # e& provides its own fixed title slide outside the model output.
+                include_title_slide=(
+                    False if is_eand_template else presentation.include_title_slide
+                ),
                 include_table_of_contents=presentation.include_table_of_contents,
                 source_context=source_context,
                 community_design_context=community_context,
                 fonts=presentation.fonts,
                 on_slide=emit_slide,
                 on_metrics=emit_metrics,
+                smart_template=presentation.smart_template,
             )
         )
 
@@ -1872,16 +1908,47 @@ async def _stream_smart_presentation(
 
         presentation.title = deck["title"]
         slides: list[SlideModel] = []
+
+        if is_eand_template:
+            title_slide = SlideModel(
+                presentation=presentation_id,
+                layout_group="smart-html",
+                layout="smart-html",
+                index=0,
+                content={"title": deck["title"]},
+                html_content=build_eand_title_slide(
+                    deck["title"], presentation.content
+                ),
+                speaker_note="",
+            )
+            slides.append(title_slide)
+            yield SSEResponse(
+                event="response",
+                data=json.dumps(
+                    {
+                        "type": "slide_html",
+                        "index": title_slide.index,
+                        "slide_id": str(title_slide.id),
+                        "html": title_slide.html_content,
+                        "slide": title_slide.model_dump(mode="json"),
+                    }
+                ),
+            ).to_string()
+
         for index, slide in enumerate(deck["slides"]):
-            final_slide = streamed_slides.get(index)
+            rendered_html = apply_smart_brand_template(
+                presentation.smart_template, slide["html"]
+            )
+            persisted_index = index + 1 if is_eand_template else index
+            final_slide = streamed_slides.get(persisted_index)
             if final_slide is None:
                 final_slide = SlideModel(
                     presentation=presentation_id,
                     layout_group="smart-html",
                     layout="smart-html",
-                    index=index,
+                    index=persisted_index,
                     content={"title": slide["title"]},
-                    html_content=slide["html"],
+                    html_content=rendered_html,
                     speaker_note="",
                 )
                 yield SSEResponse(
@@ -1889,7 +1956,7 @@ async def _stream_smart_presentation(
                     data=json.dumps(
                         {
                             "type": "slide_html",
-                            "index": index,
+                            "index": persisted_index,
                             "slide_id": str(final_slide.id),
                             "html": final_slide.html_content,
                             "slide": final_slide.model_dump(mode="json"),
@@ -1898,9 +1965,33 @@ async def _stream_smart_presentation(
                 ).to_string()
             else:
                 final_slide.content = {"title": slide["title"]}
-                final_slide.html_content = slide["html"]
+                final_slide.html_content = rendered_html
                 final_slide.speaker_note = ""
             slides.append(final_slide)
+
+        if is_eand_template:
+            thank_you_slide = SlideModel(
+                presentation=presentation_id,
+                layout_group="smart-html",
+                layout="smart-html",
+                index=slide_count - 1,
+                content={"title": "Thank you"},
+                html_content=build_eand_thank_you_slide(),
+                speaker_note="",
+            )
+            slides.append(thank_you_slide)
+            yield SSEResponse(
+                event="response",
+                data=json.dumps(
+                    {
+                        "type": "slide_html",
+                        "index": thank_you_slide.index,
+                        "slide_id": str(thank_you_slide.id),
+                        "html": thank_you_slide.html_content,
+                        "slide": thank_you_slide.model_dump(mode="json"),
+                    }
+                ),
+            ).to_string()
 
         await sql_session.execute(
             delete(SlideModel).where(

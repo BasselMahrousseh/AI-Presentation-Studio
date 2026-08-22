@@ -36,6 +36,7 @@ from utils.llm_utils import (
     stream_generate_events,
 )
 from utils.smart_slide_layout import inspect_smart_slide_layout
+from utils.smart_brand_templates import get_smart_brand_prompt
 
 LOGGER = logging.getLogger(__name__)
 
@@ -314,6 +315,7 @@ def get_smart_messages(
     fonts: Optional[dict[str, str]] = None,
     completed_slides: Optional[Sequence[dict[str, str]]] = None,
     retry_error: Optional[str] = None,
+    smart_template: Optional[str] = None,
 ) -> list[Message]:
     completed_slides = completed_slides or []
     remaining_count = n_slides - len(completed_slides)
@@ -337,6 +339,7 @@ def get_smart_messages(
         if community_design_context.strip()
         else ""
     )
+    brand_context = get_smart_brand_prompt(smart_template)
     user_prompt = (
         f"""
 {"Continue the presentation in one response." if completed_slides else "Generate the complete presentation in one response."}
@@ -361,6 +364,7 @@ Include a visible table-of-contents slide: {include_table_of_contents}
 Source context:
 {source_context or "No source documents supplied"}
 {reference_context}
+{brand_context}
 """
     ).strip()
     return [
@@ -724,13 +728,14 @@ async def generate_smart_presentation(
     fonts: Optional[dict[str, str]] = None,
     on_slide: SmartSlideCallback | None = None,
     on_metrics: SmartMetricsCallback | None = None,
+    smart_template: Optional[str] = None,
 ) -> dict[str, Any]:
     client = get_client(config=get_llm_config(use_openai_responses_api=True))
     model = get_model()
     LOGGER.info(
-        "[smart-generation] start model=%s slides=%s language=%s source_context=%s community_reference=%s fonts=%s",
+        "[smart-generation] start model=%s slides=%s language=%s source_context=%s community_reference=%s smart_template=%s fonts=%s",
         model, n_slides, language or "auto", bool(source_context),
-        bool(community_design_context), list((fonts or {}).keys()),
+        bool(community_design_context), smart_template or "none", list((fonts or {}).keys()),
     )
     reasoning, configured_thinking_support = get_smart_reasoning_config(model)
     accepted_slides: list[dict[str, str]] = []
@@ -757,7 +762,11 @@ async def generate_smart_presentation(
             fonts=fonts,
             completed_slides=accepted_slides,
             retry_error=retry_error,
+            smart_template=smart_template,
         )
+
+        print(messages)
+
         parser = SmartSlideStreamParser()
         attempt_slides: list[dict[str, str]] = []
         streamed_response = ""

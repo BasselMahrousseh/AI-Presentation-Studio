@@ -130,6 +130,27 @@ def test_smart_retry_prompt_includes_layout_validation_feedback():
     assert "Slide content uses overflow-y-auto" in prompt
 
 
+def test_smart_prompt_uses_the_eand_brand_contract_without_embedding_the_shell():
+    messages = get_smart_messages(
+        content="Build a strategy deck",
+        n_slides=2,
+        language="English",
+        tone=None,
+        verbosity=None,
+        instructions=None,
+        include_title_slide=True,
+        include_table_of_contents=False,
+        source_context="",
+        community_design_context="",
+        smart_template="eand",
+    )
+
+    prompt = str(messages[1].content)
+    assert "e& BRAND TEMPLATE CONTRACT" in prompt
+    assert "y=640 to y=720" in prompt
+    assert "eand-footer-bar.png" not in prompt
+
+
 def test_smart_reasoning_uses_low_effort_for_openai(monkeypatch):
     monkeypatch.setattr(
         "utils.llm_calls.generate_smart_presentation.disable_thinking",

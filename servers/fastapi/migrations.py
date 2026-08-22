@@ -32,7 +32,8 @@ REVISION_PRIMARY_ADMIN_SLOT = "e1b3c5d7f9a2"
 REVISION_SMART_GENERATION = "f3a7c1d9e5b2"
 REVISION_PRESENTON_CLOUD_PROVIDER = "c6e8f1a3b5d7"
 REVISION_SMART_MODE_BACKFILL = "d2f4a6b8c0e1"
-REVISION_HEAD = REVISION_SMART_MODE_BACKFILL
+REVISION_SMART_TEMPLATE = "e4a6c8d0f2b1"
+REVISION_HEAD = REVISION_SMART_TEMPLATE
 
 
 async def migrate_database_on_startup() -> None:
@@ -136,6 +137,10 @@ def _infer_revision_from_schema(
         for table in owned_tables
     )
     if "provider_settings" in tables and "user" in tables and ownership_ready:
+        if "presentations" in tables and _has_column(
+            inspector, "presentations", "smart_template"
+        ):
+            return REVISION_SMART_TEMPLATE
         if "presenton_cloud_provider" in tables:
             return REVISION_PRESENTON_CLOUD_PROVIDER
         if "presentations" in tables and _has_column(
