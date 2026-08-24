@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 EAND_SMART_TEMPLATE_ID = "eand"
 EAND_FIXED_SLIDE_COUNT = 2
+EAND_TITLE_SUBTITLE = "e& presentation"
 SUPPORTED_SMART_TEMPLATE_IDS = frozenset({EAND_SMART_TEMPLATE_ID})
 
 _SECTION_CLOSE_RE = re.compile(r"</section>\s*$", re.IGNORECASE)
@@ -134,6 +135,17 @@ e& BRAND TEMPLATE CONTRACT
 This presentation is rendered on a fixed e& corporate page shell after you
 respond. Do not create, mention, or modify its logo, Confidential label, or
 coloured footer bar. Use a white slide background.
+
+COLOUR PALETTE (required)
+- Use e& red #E00600 for primary emphasis, key numbers, rules, and calls to action.
+- Use dark blue #0B1F3A for large panels, section headers, and secondary emphasis.
+- Use white #FFFFFF as the primary canvas and card background, and black #000000
+  for body copy and fine detail.
+- Keep the deck visually restrained: do not introduce other brand colours such as
+  purple, green, orange, teal, or bright blue. When a lighter surface is needed,
+  use white with a black or dark-blue border rather than a new tinted colour.
+- Use red sparingly against white or dark blue for high-contrast emphasis; never
+  use red for long paragraphs of body text.
 
 Generate only the main content layer. Keep all meaningful content within x=64
 to x=1216 and y=48 to y=630. The area from y=640 to y=720 is reserved for the

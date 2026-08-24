@@ -2,6 +2,7 @@ import pytest
 from fastapi import HTTPException
 
 from utils.smart_brand_templates import (
+    EAND_TITLE_SUBTITLE,
     apply_smart_brand_template,
     build_eand_thank_you_slide,
     build_eand_title_slide,
@@ -25,6 +26,10 @@ def test_eand_template_is_normalized_and_described_without_source_markup():
     prompt = get_smart_brand_prompt("eand")
     assert "fixed e& corporate page shell" in prompt
     assert "y=640 to y=720" in prompt
+    assert "#E00600" in prompt
+    assert "#0B1F3A" in prompt
+    assert "#FFFFFF" in prompt
+    assert "#000000" in prompt
     assert "eand-logo.png" not in prompt
 
 
@@ -64,6 +69,15 @@ def test_eand_fixed_title_and_thank_you_slides_use_the_supplied_assets():
     assert 'data-slide-type="closing"' in thank_you_slide
     assert "/smart-templates/eand/eand-thank-you-background.png" in thank_you_slide
     assert "Thank you" in thank_you_slide
+
+
+def test_eand_title_subtitle_is_a_safe_brand_label():
+    title_slide = build_eand_title_slide(
+        "Board update", EAND_TITLE_SUBTITLE
+    )
+
+    assert "e&amp; presentation" in title_slide
+    assert "Generate a 12-slide strategy deck" not in title_slide
 
 
 def test_eand_deck_reserves_two_fixed_slides():

@@ -1,4 +1,5 @@
 import os
+import tempfile
 from typing import Optional, Union
 
 from fastapi import HTTPException
@@ -11,7 +12,9 @@ import uuid
 class TempFileService:
 
     def __init__(self):
-        self.base_dir = get_temp_directory_env() or "/tmp/presenton"
+        self.base_dir = get_temp_directory_env() or os.path.join(
+            tempfile.gettempdir(), "presenton"
+        )
         self.cleanup_base_dir()
         os.makedirs(self.base_dir, exist_ok=True)
 

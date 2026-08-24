@@ -109,11 +109,13 @@ from services.community_presentations import (
     normalize_community_ids,
 )
 from utils.llm_calls.generate_smart_presentation import (
+    determine_smart_slide_count,
     generate_smart_presentation,
     resolve_smart_slide_count,
 )
 from utils.smart_brand_templates import (
     EAND_SMART_TEMPLATE_ID,
+    EAND_TITLE_SUBTITLE,
     apply_smart_brand_template,
     build_eand_thank_you_slide,
     build_eand_title_slide,
@@ -1787,8 +1789,21 @@ async def _stream_smart_presentation(
         if len(source_context) > 90_000:
             source_context = source_context[:90_000]
 
-        slide_count = resolve_smart_slide_count(presentation.n_slides)
         is_eand_template = presentation.smart_template == EAND_SMART_TEMPLATE_ID
+        if presentation.n_slides > 0:
+            slide_count = resolve_smart_slide_count(presentation.n_slides)
+        else:
+            yield SSEStatusResponse(
+                status="Choosing the right number of slides"
+            ).to_string()
+            slide_count = await determine_smart_slide_count(
+                content=presentation.content,
+                instructions=presentation.instructions,
+                source_context=source_context,
+                include_title_slide=presentation.include_title_slide,
+                include_table_of_contents=presentation.include_table_of_contents,
+                minimum_slide_count=3 if is_eand_template else 1,
+            )
         generated_slide_count = (
             get_eand_content_slide_count(slide_count)
             if is_eand_template
@@ -1917,7 +1932,7 @@ async def _stream_smart_presentation(
                 index=0,
                 content={"title": deck["title"]},
                 html_content=build_eand_title_slide(
-                    deck["title"], presentation.content
+                    deck["title"], EAND_TITLE_SUBTITLE
                 ),
                 speaker_note="",
             )

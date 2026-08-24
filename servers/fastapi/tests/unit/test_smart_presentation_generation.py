@@ -5,6 +5,8 @@ import pytest
 from fastapi import HTTPException
 from llmai.shared import ReasoningConfig, ReasoningEffortValue, UserMessage
 
+import utils.llm_calls.generate_smart_presentation as smart_generation
+
 from enums.llm_provider import LLMProvider
 from services.community_presentations import (
     CommunityPresentationReference,
@@ -17,6 +19,7 @@ from utils.llm_calls.generate_smart_presentation import (
     SMART_DECK_SYSTEM_PROMPT,
     SmartSlideStreamParser,
     _stream_deck_response,
+    determine_smart_slide_count,
     get_smart_messages,
     get_smart_reasoning_config,
     normalize_smart_deck,
@@ -592,7 +595,35 @@ def test_smart_deck_requires_exact_slide_count_and_omits_speaker_notes():
         normalize_smart_slide_html("<div>Not a slide</div>")
 
 
-def test_default_smart_slide_count_is_bounded():
-    assert resolve_smart_slide_count(0) == 8
-    assert resolve_smart_slide_count(None) == 8
+def test_explicit_smart_slide_count_is_bounded():
+    assert resolve_smart_slide_count(8) == 8
     assert resolve_smart_slide_count(200) == 20
+
+
+def test_smart_slide_count_is_chosen_by_llm(monkeypatch):
+    captured = {}
+
+    async def fake_generate_structured(_client, _model, **kwargs):
+        captured.update(kwargs)
+        return {"n_slides": 12}
+
+    monkeypatch.setattr(
+        smart_generation, "generate_structured_with_schema_retries", fake_generate_structured
+    )
+    monkeypatch.setattr(smart_generation, "get_llm_config", lambda **_kwargs: {})
+    monkeypatch.setattr(smart_generation, "get_client", lambda **_kwargs: object())
+    monkeypatch.setattr(smart_generation, "get_model", lambda: "test-model")
+
+    count = asyncio.run(
+        determine_smart_slide_count(
+            content="Explain renewable-energy adoption trends",
+            instructions="Include risks and recommendations",
+            source_context="Reference material",
+            include_title_slide=True,
+            include_table_of_contents=False,
+        )
+    )
+
+    assert count == 12
+    assert "renewable-energy" in captured["messages"][1].content
+    assert captured["json_schema"]["properties"]["n_slides"]["maximum"] == 20
