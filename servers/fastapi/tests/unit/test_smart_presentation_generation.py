@@ -627,3 +627,24 @@ def test_smart_slide_count_is_chosen_by_llm(monkeypatch):
     assert count == 12
     assert "renewable-energy" in captured["messages"][1].content
     assert captured["json_schema"]["properties"]["n_slides"]["maximum"] == 20
+
+
+def test_eand_explicit_content_plan_reserves_title_and_thank_you_slides():
+    count = asyncio.run(
+        determine_smart_slide_count(
+            content="""
+Slide 1 — Overview
+Slide 2 — Options
+Slide 3 — Recommendation
+Slide 4 — Rollout
+""",
+            instructions=None,
+            source_context="",
+            include_title_slide=True,
+            include_table_of_contents=False,
+            minimum_slide_count=3,
+            fixed_slide_count=2,
+        )
+    )
+
+    assert count == 6

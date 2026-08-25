@@ -1803,6 +1803,7 @@ async def _stream_smart_presentation(
                 include_title_slide=presentation.include_title_slide,
                 include_table_of_contents=presentation.include_table_of_contents,
                 minimum_slide_count=3 if is_eand_template else 1,
+                fixed_slide_count=2 if is_eand_template else 0,
             )
         generated_slide_count = (
             get_eand_content_slide_count(slide_count)

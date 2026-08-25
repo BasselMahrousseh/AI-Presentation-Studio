@@ -256,6 +256,9 @@ _SCROLL_OR_CLIP_UTILITY = re.compile(
 _SCROLL_STYLE = re.compile(
     r"\boverflow(?:-[xy])?\s*:\s*(?:auto|scroll)\b", re.IGNORECASE
 )
+_EXPLICIT_SLIDE_HEADING = re.compile(
+    r"^\s*(?:slide|page)\s+(\d+)\b", re.IGNORECASE | re.MULTILINE
+)
 
 
 SMART_SLIDE_COUNT_SCHEMA = {
@@ -297,11 +300,25 @@ async def determine_smart_slide_count(
     include_title_slide: bool,
     include_table_of_contents: bool,
     minimum_slide_count: int = MIN_SMART_SLIDE_COUNT,
+    fixed_slide_count: int = 0,
 ) -> int:
     """Ask the configured LLM to size an auto-count Smart presentation."""
     minimum_slide_count = min(
         max(minimum_slide_count, MIN_SMART_SLIDE_COUNT), MAX_SMART_SLIDE_COUNT
     )
+    fixed_slide_count = max(fixed_slide_count, 0)
+    explicit_content_slide_count = _get_explicit_content_slide_count(content)
+    if fixed_slide_count and explicit_content_slide_count:
+        # In branded decks the model generates only content slides. A prompt that
+        # already supplies Slide 1 ... Slide N is an explicit content plan, so
+        # preserve every supplied section and reserve the fixed brand slides.
+        return min(
+            max(
+                explicit_content_slide_count + fixed_slide_count,
+                minimum_slide_count,
+            ),
+            MAX_SMART_SLIDE_COUNT,
+        )
     response_schema = {
         **SMART_SLIDE_COUNT_SCHEMA,
         "properties": {
@@ -343,6 +360,17 @@ async def determine_smart_slide_count(
     if not isinstance(count, int) or isinstance(count, bool):
         raise HTTPException(status_code=400, detail="LLM did not choose a slide count")
     return min(max(count, minimum_slide_count), MAX_SMART_SLIDE_COUNT)
+
+
+def _get_explicit_content_slide_count(content: str) -> int | None:
+    """Return a contiguous, one-based slide plan count embedded in the prompt."""
+    numbers = {int(match.group(1)) for match in _EXPLICIT_SLIDE_HEADING.finditer(content)}
+    if 1 not in numbers:
+        return None
+    count = 1
+    while count + 1 in numbers:
+        count += 1
+    return count
 
 
 def _continuation_prompt(
