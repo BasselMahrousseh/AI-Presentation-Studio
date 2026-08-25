@@ -257,7 +257,10 @@ _SCROLL_STYLE = re.compile(
     r"\boverflow(?:-[xy])?\s*:\s*(?:auto|scroll)\b", re.IGNORECASE
 )
 _EXPLICIT_SLIDE_HEADING = re.compile(
-    r"^\s*(?:slide|page)\s+(\d+)\b", re.IGNORECASE | re.MULTILINE
+    # Accept common outline labels such as "Slide 1", "Slide: 1", and
+    # "Page - 1". The generated outline UI uses the colon form.
+    r"^\s*(?:slide|page)\s*(?:[:#-]\s*)?(\d+)\b",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 

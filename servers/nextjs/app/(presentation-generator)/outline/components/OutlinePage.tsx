@@ -119,12 +119,15 @@ const OutlinePage: React.FC = () => {
   );
   const queryPresentationId = searchParams.get("id")?.trim() || null;
   const suggestedTemplate = searchParams.get("template")?.trim() || null;
+  const autoStart = searchParams.get("autostart") === "true";
   const presentation_id = queryPresentationId || storedPresentationId;
   const { config: savedConfig, files } = useSelector(
     (state: RootState) => state.pptGenUpload
   );
 
-  const [isTemplateStage, setIsTemplateStage] = useState(true);
+  // The frontend's Generate Outlines action deliberately bypasses template
+  // selection. Normal outline routes still begin with the template chooser.
+  const [isTemplateStage, setIsTemplateStage] = useState(!autoStart);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(
     null
   );
@@ -134,11 +137,12 @@ const OutlinePage: React.FC = () => {
   const [isRegeneratingOutline, setIsRegeneratingOutline] = useState(false);
   const [hasOutlineStreamFinished, setHasOutlineStreamFinished] =
     useState(false);
+  const [hasAutoStarted, setHasAutoStarted] = useState(false);
 
   const hasSelectedTemplate = selectedTemplateId !== null;
   const streamState = useOutlineStreaming(
     presentation_id,
-    !isTemplateStage && hasSelectedTemplate
+    !isTemplateStage && (hasSelectedTemplate || autoStart)
   );
   const { handleDragEnd, handleAddSlide } = useOutlineManagement(outlines);
   const { loadingState, handleSubmit } = usePresentationGeneration(
@@ -172,7 +176,21 @@ const OutlinePage: React.FC = () => {
 
   useEffect(() => {
     setHasOutlineStreamFinished(false);
+    setHasAutoStarted(false);
   }, [presentation_id]);
+
+  // The dedicated outline flow has already created a presentation record.
+  // Enter the outline view immediately so its EventSource connects to
+  // /api/v1/ppt/outlines/stream/{presentationId} and starts generation.
+  useEffect(() => {
+    if (!autoStart || hasAutoStarted) {
+      return;
+    }
+
+    setHasAutoStarted(true);
+    setIsTemplateStage(false);
+    scrollToPageTop();
+  }, [autoStart, hasAutoStarted]);
 
   useEffect(() => {
     if (!presentation_id || !hasSelectedTemplate) {

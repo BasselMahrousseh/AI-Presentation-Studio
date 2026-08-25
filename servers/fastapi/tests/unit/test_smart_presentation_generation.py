@@ -648,3 +648,28 @@ Slide 4 — Rollout
     )
 
     assert count == 6
+
+
+def test_eand_colon_delimited_outline_reserves_title_and_thank_you_slides():
+    count = asyncio.run(
+        determine_smart_slide_count(
+            content="""
+Slide: 1
+Overview
+Slide: 2
+Options
+Slide: 3
+Recommendation
+Slide: 4
+Rollout
+""",
+            instructions=None,
+            source_context="",
+            include_title_slide=True,
+            include_table_of_contents=False,
+            minimum_slide_count=3,
+            fixed_slide_count=2,
+        )
+    )
+
+    assert count == 6

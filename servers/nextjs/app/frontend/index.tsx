@@ -41,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { getApiUrl } from "@/utils/api";
 import { useTemplateSummaries } from "../(presentation-generator)/hooks/useTemplateSummaries";
 import { TemplateThumbnailPreview } from "../(presentation-generator)/components/TemplateListUi";
 
@@ -148,6 +149,7 @@ function DeckCard({ deck, index, onClick }: { deck: typeof recentDecks[number]; 
 
 function CreateView({
   onGenerate,
+  onGenerateOutline,
   onBack,
   selectedTemplateId,
   onSelectTemplateId,
@@ -157,6 +159,7 @@ function CreateView({
     templateId: string,
     useEandTemplate: boolean
   ) => Promise<void>;
+  onGenerateOutline: (prompt: string, templateId: string) => Promise<void>;
   onBack: () => void;
   selectedTemplateId: string;
   onSelectTemplateId: (templateId: string) => void;
@@ -224,9 +227,9 @@ function CreateView({
         />
 
         <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-5 dark:border-white/10">
-          <p className="hidden text-xs text-slate-400 dark:text-zinc-500 sm:block">
+          {/* <p className="hidden text-xs text-slate-400 dark:text-zinc-500 sm:block">
             You can edit everything after generation.
-          </p>
+          </p> */}
 
           <div className="flex w-full flex-col gap-2 sm:ml-auto sm:w-auto sm:flex-row">
             <Button
@@ -243,6 +246,16 @@ function CreateView({
             >
               <Sparkles size={16} />
               Generate with e&amp; template
+            </Button>
+
+            <Button
+              type="button"
+              disabled={!prompt.trim()}
+              onClick={() => onGenerateOutline(prompt, selectedTemplateId)}
+              className="h-11 w-full rounded-lg bg-[#ff848c] px-5 text-sm font-semibold shadow-[0_6px_16px_rgba(230,0,0,.2)] hover:bg-[#c40000] sm:w-auto"
+            >
+              <Sparkles size={16} />
+              Generate Outlines
             </Button>
           </div>
         </div>
@@ -620,11 +633,56 @@ const generatePresentation = async (
   }
 };
 
+  const generateOutline = async (prompt: string, templateId: string) => {
+    const content = prompt.trim();
+    if (!content) {
+      return;
+    }
+
+    try {
+      setView("generating");
+
+      const response = await fetch(
+        getApiUrl("/api/v1/ppt/presentation/create"),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content,
+            language: "English",
+            generation_mode: "standard",
+            include_title_slide: true,
+            include_table_of_contents: false,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      const { id: presentationId } = await response.json();
+      const params = new URLSearchParams({
+        id: presentationId,
+        autostart: "true",
+      });
+      if (templateId) {
+        params.set("template", templateId);
+      }
+
+      router.push(`/outline?${params.toString()}`);
+    } catch (error) {
+      console.error("Failed to create outline", error);
+      setView("create");
+    }
+  };
+
   const content = useMemo(() => {
     if (view === "create") {
       return (
         <CreateView
           onGenerate={generatePresentation}
+          onGenerateOutline={generateOutline}
           // onGenerate={() => setView("generating")}
           onBack={backToDashboard}
           selectedTemplateId={selectedTemplateId}
@@ -658,6 +716,7 @@ const generatePresentation = async (
       <EandNavbar darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />
       <CreateView
           onGenerate={generatePresentation}
+          onGenerateOutline={generateOutline}
           // onGenerate={() => setView("generating")}
           onBack={backToDashboard}
           selectedTemplateId={selectedTemplateId}
