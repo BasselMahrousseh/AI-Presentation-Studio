@@ -152,6 +152,21 @@ to x=1216 and y=48 to y=630. The area from y=640 to y=720 is reserved for the
 fixed e& footer and must remain empty. Do not add a footer, page number, logo,
 or other content in that reserved area. Use clean executive layouts and
 restrained e&-appropriate colour accents.
+
+CONTENT DESIGN DIRECTION (required)
+- Avoid generic document-like bullet lists. Turn grouped ideas into a clear
+  executive composition: a numbered sequence, a 2–4 card grid, a comparison,
+  a process, or a strong single-statement layout, selected to fit the content.
+- Use generous white space, dark-blue section bands or side rails, thin
+  #0B1F3A/#D9DEE7 rules, and red #E00600 highlights. Cards should be white,
+  flat or very subtly shadowed, with square-to-softly-rounded corners.
+- For checklist content, use compact red circular check markers with a white
+  check, or a thin red vertical rule; never use purple checkmarks, lavender
+  chips, gradients, or purple/violet utility classes.
+- Keep typography editorial and high contrast: a concise dark-blue headline,
+  black supporting copy, and red only for labels, key figures, and markers.
+- Vary the layout from slide to slide while retaining this same red, dark-blue,
+  white, and black e& visual language.
 """.strip()
 
 
