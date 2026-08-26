@@ -155,18 +155,32 @@ export const useOutlineStreaming = (
                   if (nextActive < prevActive) {
                     nextActive = prevActive;
                   }
-                  activeIndexRef.current = nextActive;
-                  setActiveSlideIndex(nextActive);
+
+                  // A slide's content is updated many times while it is being
+                  // streamed. Only publish state when the active slide itself
+                  // changes; calling setState for every chunk can create an
+                  // update cascade during a fast SSE response.
+                  if (nextActive !== prevActive) {
+                    activeIndexRef.current = nextActive;
+                    setActiveSlideIndex(nextActive);
+                  }
 
                   if (nextActive > highestIndexRef.current) {
                     highestIndexRef.current = nextActive;
                     setHighestActiveIndex(nextActive);
                   }
+
+                  // jsonrepair can yield the same partial outline for several
+                  // consecutive chunks. Avoid replacing the Redux array when
+                  // the visible slide contents have not changed.
+                  if (changedIndex === null) {
+                    return;
+                  }
                 } catch {}
 
                 prevSlidesRef.current = nextSlides;
                 dispatch(setOutlines(nextSlides));
-                setIsLoading(false);
+                setIsLoading((wasLoading) => (wasLoading ? false : wasLoading));
               }
             } catch {
               // JSON is not complete yet, so keep accumulating chunks.

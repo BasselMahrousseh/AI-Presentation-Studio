@@ -5,12 +5,9 @@ import Header from "@/app/(presentation-generator)/(dashboard)/dashboard/compone
 import { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Presenton | Open Source AI presentation generator",
+  title: "e& Presentation Studio",
   description:
-    "Open-source AI presentation generator with custom layouts, multi-model support (OpenAI, Gemini, Ollama), and PDF/PPTX export. A free Gamma alternative.",
-  alternates: {
-    canonical: "https://presenton.ai/create",
-  },
+    "Create polished, AI-powered business presentations with e& Presentation Studio.",
   keywords: [
     "presentation generator",
     "AI presentations",
@@ -24,20 +21,15 @@ export const metadata: Metadata = {
     "business presentations",
   ],
   openGraph: {
-    title: "Create Data Presentation | PresentOn",
-    description:
-      "Open-source AI presentation generator with custom layouts, multi-model support (OpenAI, Gemini, Ollama), and PDF/PPTX export. A free Gamma alternative.",
+    title: "Create a presentation | e& Presentation Studio",
+    description: "Create polished, AI-powered business presentations with e& Presentation Studio.",
     type: "website",
-    url: "https://presenton.ai/create",
-    siteName: "PresentOn",
+    siteName: "e& Presentation Studio",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Create Data Presentation | PresentOn",
-    description:
-      "Open-source AI presentation generator with custom layouts, multi-model support (OpenAI, Gemini, Ollama), and PDF/PPTX export. A free Gamma alternative.",
-    site: "@presenton_ai",
-    creator: "@presenton_ai",
+    title: "Create a presentation | e& Presentation Studio",
+    description: "Create polished, AI-powered business presentations with e& Presentation Studio.",
   },
 };
 

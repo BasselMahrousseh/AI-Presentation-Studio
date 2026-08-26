@@ -1,80 +1,29 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useDispatch, useSelector } from "react-redux";
-import { toast } from "sonner";
 
 import { OverlayLoader } from "@/components/ui/overlay-loader";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { RootState, store } from "@/store/store";
+import { setOutlines, setPresentationId } from "@/store/slices/presentationGeneration";
 import {
-  clearOutlines,
-  setOutlines,
-  setPresentationId,
-} from "@/store/slices/presentationGeneration";
-import { setPptGenUploadState } from "@/store/slices/presentationGenUpload";
-import {
-  clampSlideCountValue,
   limitOutlines,
-  parseLimitedSlideCount,
   trimTextToWordLimit,
 } from "@/utils/presentationLimits";
-import { sanitizeAnalyticsError } from "@/utils/analytics";
-import { MixpanelEvent, trackEvent } from "@/utils/mixpanel";
 
 import Chat from "../../presentation/components/Chat";
-import {
-  LanguageType,
-  PresentationConfig,
-  ToneType,
-  VerbosityType,
-} from "../../upload/type";
 import { PresentationGenerationApi } from "../../services/api/presentation-generation";
+import { Sparkles } from "lucide-react";
 import { useOutlineManagement } from "../hooks/useOutlineManagement";
 import { useOutlineStreaming } from "../hooks/useOutlineStreaming";
-import { usePresentationGeneration } from "../hooks/usePresentationGeneration";
 import EmptyStateView from "./EmptyStateView";
-import GenerateButton from "./GenerateButton";
 import OutlineContent from "./OutlineContent";
-import OutlinePromptBar from "./OutlinePromptBar";
 import OutlineStandardHeader from "./OutlineStandardHeader";
 import TemplateSelection from "./TemplateSelection";
-
-const DEFAULT_OUTLINE_CONFIG: PresentationConfig = {
-  slides: null,
-  language: LanguageType.Auto,
-  prompt: "",
-  tone: ToneType.Default,
-  verbosity: VerbosityType.Standard,
-  instructions: "",
-  includeTableOfContents: false,
-  includeTitleSlide: false,
-  webSearch: false,
-};
-
-const normalizeOutlineConfig = (
-  config: PresentationConfig
-): PresentationConfig => ({
-  ...config,
-  slides: config.slides ? clampSlideCountValue(config.slides) || null : null,
-});
-
-const getDocumentPaths = (files: unknown): string[] => {
-  if (!Array.isArray(files)) {
-    return [];
-  }
-
-  return files
-    .flat()
-    .map((file) =>
-      file && typeof file === "object" && "file_path" in file
-        ? (file as { file_path?: unknown }).file_path
-        : null
-    )
-    .filter((filePath): filePath is string => typeof filePath === "string");
-};
 
 const getOutlinesFromResponse = (outline: unknown): { content: string }[] => {
   if (!outline || typeof outline !== "object") {
@@ -110,6 +59,16 @@ const scrollToPageTop = () => {
   });
 };
 
+const buildSmartOutlinePrompt = (outlines: { content: string }[]) =>
+  [
+    "Create a polished presentation from this approved slide-by-slide outline.",
+    "Treat every outline item as mandatory: do not remove, merge, reorder, or replace slides.",
+    "Use the outline content as the source for each slide's copy, narrative, and visuals.",
+    "",
+    "Approved outline:",
+    ...outlines.map((outline, index) => `Slide: ${index + 1}\n${outline.content}`),
+  ].join("\n\n");
+
 const OutlinePage: React.FC = () => {
   const dispatch = useDispatch();
   const router = useRouter();
@@ -121,23 +80,16 @@ const OutlinePage: React.FC = () => {
   const suggestedTemplate = searchParams.get("template")?.trim() || null;
   const autoStart = searchParams.get("autostart") === "true";
   const presentation_id = queryPresentationId || storedPresentationId;
-  const { config: savedConfig, files } = useSelector(
-    (state: RootState) => state.pptGenUpload
-  );
-
   // The frontend's Generate Outlines action deliberately bypasses template
   // selection. Normal outline routes still begin with the template chooser.
   const [isTemplateStage, setIsTemplateStage] = useState(!autoStart);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(
     null
   );
-  const [draftConfig, setDraftConfig] = useState<PresentationConfig>(
-    savedConfig ? normalizeOutlineConfig(savedConfig) : DEFAULT_OUTLINE_CONFIG
-  );
-  const [isRegeneratingOutline, setIsRegeneratingOutline] = useState(false);
   const [hasOutlineStreamFinished, setHasOutlineStreamFinished] =
     useState(false);
   const [hasAutoStarted, setHasAutoStarted] = useState(false);
+  const [isStartingSmartDeck, setIsStartingSmartDeck] = useState(false);
 
   const hasSelectedTemplate = selectedTemplateId !== null;
   const streamState = useOutlineStreaming(
@@ -145,18 +97,12 @@ const OutlinePage: React.FC = () => {
     !isTemplateStage && (hasSelectedTemplate || autoStart)
   );
   const { handleDragEnd, handleAddSlide } = useOutlineManagement(outlines);
-  const { loadingState, handleSubmit } = usePresentationGeneration(
-    presentation_id,
-    selectedTemplateId
-  );
 
-  const documentPaths = useMemo(() => getDocumentPaths(files), [files]);
   const outlineControlsBusy =
-    isRegeneratingOutline || streamState.isLoading || streamState.isStreaming;
+    streamState.isLoading || streamState.isStreaming;
   const isOutlineReady =
-    hasSelectedTemplate && hasOutlineStreamFinished && !outlineControlsBusy;
+    hasOutlineStreamFinished && !outlineControlsBusy && outlines.length > 0;
   const isOutlineAssistantVisible = !isTemplateStage && hasSelectedTemplate;
-  const isRegenerateDisabled = !isOutlineReady;
   const outlineStreamFinished =
     !isTemplateStage &&
     !outlineControlsBusy &&
@@ -167,12 +113,6 @@ const OutlinePage: React.FC = () => {
       dispatch(setPresentationId(queryPresentationId));
     }
   }, [dispatch, queryPresentationId, storedPresentationId]);
-
-  useEffect(() => {
-    if (savedConfig) {
-      setDraftConfig(normalizeOutlineConfig(savedConfig));
-    }
-  }, [savedConfig]);
 
   useEffect(() => {
     setHasOutlineStreamFinished(false);
@@ -193,7 +133,7 @@ const OutlinePage: React.FC = () => {
   }, [autoStart, hasAutoStarted]);
 
   useEffect(() => {
-    if (!presentation_id || !hasSelectedTemplate) {
+    if (!presentation_id || (!hasSelectedTemplate && !autoStart)) {
       setHasOutlineStreamFinished(false);
       return;
     }
@@ -201,27 +141,12 @@ const OutlinePage: React.FC = () => {
     if (outlineStreamFinished) {
       setHasOutlineStreamFinished(true);
     }
-  }, [hasSelectedTemplate, outlineStreamFinished, presentation_id]);
+  }, [autoStart, hasSelectedTemplate, outlineStreamFinished, presentation_id]);
 
   const handleReturnToTemplates = () => {
     if (streamState.isStreaming) return;
     setIsTemplateStage(true);
     scrollToPageTop();
-  };
-
-  const handleConfigChange = (
-    key: keyof PresentationConfig,
-    value: unknown
-  ) => {
-    const nextValue =
-      key === "slides" && typeof value === "string"
-        ? clampSlideCountValue(value)
-        : value;
-
-    setDraftConfig((previous) => ({
-      ...previous,
-      [key]: nextValue,
-    }));
   };
 
   const handleTemplateSelect = useCallback(
@@ -237,105 +162,6 @@ const OutlinePage: React.FC = () => {
     },
     []
   );
-
-  const handleRegenerateOutline = useCallback(async () => {
-    if (outlineControlsBusy) {
-      return;
-    }
-
-    if (!hasSelectedTemplate) {
-      toast.error("Please select a template first");
-      return;
-    }
-
-    if (!isOutlineReady) {
-      return;
-    }
-
-    if (!draftConfig.language) {
-      toast.error("Please select language");
-      return;
-    }
-
-    if (documentPaths.length > 0 && draftConfig.language === LanguageType.Auto) {
-      toast.error("Please choose a language before regenerating from documents");
-      return;
-    }
-
-    if (!draftConfig.prompt.trim() && documentPaths.length === 0) {
-      toast.error("No Prompt or Document Provided");
-      return;
-    }
-
-    setIsRegeneratingOutline(true);
-    setHasOutlineStreamFinished(false);
-    trackEvent(MixpanelEvent.TemplateV2_Outline_Regeneration_Started, {
-      presentation_id,
-      template_id: selectedTemplateId,
-      prompt_present: draftConfig.prompt.trim().length > 0,
-      document_count: documentPaths.length,
-      slide_count: parseLimitedSlideCount(draftConfig.slides),
-      language: draftConfig.language,
-      tone: draftConfig.tone,
-      verbosity: draftConfig.verbosity,
-      web_search: !!draftConfig.webSearch,
-      include_title_slide: !!draftConfig.includeTitleSlide,
-      include_table_of_contents: !!draftConfig.includeTableOfContents,
-    });
-
-    try {
-      const createResponse = await PresentationGenerationApi.createPresentation({
-        content: draftConfig.prompt ?? "",
-        n_slides: parseLimitedSlideCount(draftConfig.slides),
-        file_paths: documentPaths,
-        language: draftConfig.language ?? "",
-        tone: draftConfig.tone,
-        verbosity: draftConfig.verbosity,
-        instructions: draftConfig.instructions || null,
-        include_table_of_contents: !!draftConfig.includeTableOfContents,
-        include_title_slide: !!draftConfig.includeTitleSlide,
-        web_search: !!draftConfig.webSearch,
-      });
-
-      dispatch(setPptGenUploadState({ config: draftConfig, files }));
-      dispatch(clearOutlines());
-      dispatch(setPresentationId(createResponse.id));
-      trackEvent(MixpanelEvent.TemplateV2_Outline_Regeneration_Completed, {
-        old_presentation_id: presentation_id,
-        new_presentation_id: createResponse.id,
-        template_id: selectedTemplateId,
-      });
-      setIsTemplateStage(false);
-    } catch (error: unknown) {
-      console.error("Error regenerating outline", error);
-      trackEvent(MixpanelEvent.TemplateV2_Outline_Regeneration_Failed, {
-        presentation_id,
-        template_id: selectedTemplateId,
-        error_message: sanitizeAnalyticsError(
-          error,
-          "Failed to regenerate outline"
-        ),
-      });
-      toast.error("Outline Error", {
-        description:
-          error instanceof Error
-            ? error.message
-            : "Failed to regenerate outline.",
-      });
-    } finally {
-      setIsRegeneratingOutline(false);
-    }
-  }, [
-    dispatch,
-    documentPaths,
-    draftConfig,
-    files,
-    hasSelectedTemplate,
-    isOutlineReady,
-    outlineControlsBusy,
-    presentation_id,
-    selectedTemplateId,
-  ]);
 
   const handleUpdateOutline = (index: number, newContent: string) => {
     const slideIndex = index - 1;
@@ -374,6 +200,47 @@ const OutlinePage: React.FC = () => {
     );
   }, [presentation_id]);
 
+  const handleSmartGeneration = useCallback(
+    async (useEandTemplate: boolean) => {
+      const approvedOutlines = store.getState().presentationGeneration.outlines;
+      if (!isOutlineReady || isStartingSmartDeck || approvedOutlines.length === 0) {
+        return;
+      }
+
+      setIsStartingSmartDeck(true);
+      try {
+        if (presentation_id) {
+          await PresentationGenerationApi.updateOutlines(
+            presentation_id,
+            approvedOutlines
+          );
+        }
+
+        const smartPresentation = await PresentationGenerationApi.createPresentation({
+          content: buildSmartOutlinePrompt(approvedOutlines),
+          // The e& template supplies a fixed title and thank-you slide. Leaving
+          // the count automatic lets the backend reserve both around every
+          // approved outline item.
+          n_slides: useEandTemplate ? null : approvedOutlines.length,
+          language: "English",
+          include_title_slide: true,
+          include_table_of_contents: false,
+          generation_mode: "smart",
+          smart_template: useEandTemplate ? "eand" : undefined,
+        });
+
+        dispatch(setPresentationId(smartPresentation.id));
+        router.replace(
+          `/presentation?id=${smartPresentation.id}&stream=true&type=smart`
+        );
+      } catch (error) {
+        console.error("Failed to start Smart presentation generation", error);
+        setIsStartingSmartDeck(false);
+      }
+    },
+    [dispatch, isOutlineReady, isStartingSmartDeck, presentation_id, router]
+  );
+
   if (!presentation_id) {
     return (
       <div className="min-h-screen bg-[#FEFEFF]">
@@ -390,14 +257,14 @@ const OutlinePage: React.FC = () => {
     <div
       className={cn(
         "min-h-screen overflow-x-clip font-syne",
-        isTemplateStage ? "bg-[#FEFEFF]" : "bg-[#F6F6F9]"
+        isTemplateStage ? "bg-white" : "bg-[#F3F6FA]"
       )}
     >
       <OverlayLoader
-        show={loadingState.isLoading}
-        text={loadingState.message}
-        showProgress={loadingState.showProgress}
-        duration={loadingState.duration}
+        show={isStartingSmartDeck}
+        text="Starting Smart presentation..."
+        showProgress
+        duration={30}
       />
 
       <OutlineStandardHeader
@@ -427,16 +294,7 @@ const OutlinePage: React.FC = () => {
         <>
           <div className="lg:mr-[369px]">
             <main className="mx-auto w-[calc(100%-2.5rem)] max-w-[967px] pb-28 pt-10 sm:w-[calc(100%-5rem)]">
-              <OutlinePromptBar
-                config={draftConfig}
-                disabled={outlineControlsBusy}
-                isBusy={outlineControlsBusy}
-                regenerateDisabled={isRegenerateDisabled}
-                onConfigChange={handleConfigChange}
-                onRegenerate={handleRegenerateOutline}
-              />
-
-              <div className="mt-12">
+              <div>
                 <OutlineContent
                   outlines={outlines}
                   isLoading={streamState.isLoading}
@@ -453,13 +311,13 @@ const OutlinePage: React.FC = () => {
           </div>
 
           {isOutlineAssistantVisible && (
-            <aside className="mx-auto mb-28 mt-8 flex h-[600px] w-[calc(100%-2.5rem)] overflow-hidden border border-[#EDEEEF] bg-[#FEFEFF] sm:w-[calc(100%-5rem)] lg:fixed lg:bottom-0 lg:right-0 lg:top-[68px] lg:z-40 lg:mx-0 lg:mb-0 lg:mt-0 lg:h-auto lg:w-[369px] lg:border-0">
+            <aside className="mx-auto mb-28 mt-8 flex h-[600px] w-[calc(100%-2.5rem)] overflow-hidden border border-[#D9E0EA] bg-white sm:w-[calc(100%-5rem)] lg:fixed lg:bottom-0 lg:right-0 lg:top-[68px] lg:z-40 lg:mx-0 lg:mb-0 lg:mt-0 lg:h-auto lg:w-[369px] lg:border-0">
               <nav
                 className="flex w-[70px] shrink-0 flex-col items-center gap-5 px-1.5 py-2"
                 aria-label="Outline tools"
               >
-                <div className="flex w-full flex-col items-center rounded-[10px] bg-[#F4F3FF]/60 py-7">
-                  <div className="flex rounded-[10px] border border-[#EDEEEF] bg-white p-1.5 shadow-[0_6.6px_6.6px_rgba(124,81,248,0.14)]">
+                <div className="flex w-full flex-col items-center rounded-[10px] bg-[#FFF2F3] py-7">
+                  <div className="flex rounded-[10px] border border-[#F2CDD1] bg-white p-1.5 shadow-[0_6.6px_6.6px_rgba(227,6,19,0.14)]">
                     <Image
                       src="/ai-star.svg"
                       alt=""
@@ -468,7 +326,7 @@ const OutlinePage: React.FC = () => {
                       className="h-[18px] w-[19px]"
                     />
                   </div>
-                  <span className="mt-1 text-xs font-normal text-[#7A5AF8]">
+                  <span className="mt-1 text-xs font-normal text-[#E30613]">
                     AI
                   </span>
                 </div>
@@ -494,12 +352,16 @@ const OutlinePage: React.FC = () => {
 
           <div className="pointer-events-none fixed bottom-6 left-5 right-5 z-50 flex justify-center sm:left-10 sm:right-10 lg:left-0 lg:right-[369px]">
             <div className="pointer-events-auto">
-              <GenerateButton
-                loadingState={loadingState}
-                streamState={streamState}
-                selectedTemplateId={selectedTemplateId}
-                onSubmit={handleSubmit}
-              />
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button
+                  disabled={!isOutlineReady || isStartingSmartDeck}
+                  onClick={() => handleSmartGeneration(true)}
+                  className="h-11 w-full rounded-lg bg-[#E30613] px-5 text-sm font-semibold text-white shadow-[0_6px_16px_rgba(227,6,19,.22)] hover:bg-[#B50510] sm:w-auto"
+                >
+                  <Sparkles size={16} />
+                  Generate e&amp; presentation
+                </Button>
+              </div>
             </div>
           </div>
         </>

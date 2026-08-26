@@ -558,47 +558,12 @@ export default function Index() {
 //   }
 // };
 
-  const waitForSmartPresentation = (presentationId: string): Promise<void> =>
-  new Promise((resolve, reject) => {
-    const stream = new EventSource(
-      `http://127.0.0.1:8000/api/v1/ppt/presentation/stream/${presentationId}`
-    );
-
-    stream.addEventListener("response", (event) => {
-      try {
-        const data = JSON.parse((event as MessageEvent).data);
-
-        if (data.type === "error") {
-          stream.close();
-          reject(new Error(data.detail || "Smart generation failed"));
-          return;
-        }
-
-        if (data.type === "complete") {
-          stream.close();
-          resolve();
-        }
-      } catch {
-        stream.close();
-        reject(new Error("Invalid presentation stream response"));
-      }
-    });
-
-    stream.onerror = () => {
-      stream.close();
-      reject(new Error("Presentation stream disconnected before completion"));
-    };
-  });
-
 const generatePresentation = async (
   prompt: string,
   temp: string,
   useEandTemplate: boolean
 ) => {
   try {
-    setView("generating");
-
-    // 1. Save the Smart presentation configuration.
     const response = await fetch(
       "http://127.0.0.1:8000/api/v1/ppt/presentation/create",
       {
@@ -621,12 +586,9 @@ const generatePresentation = async (
 
     const { id: presentationId } = await response.json();
 
-    // 2. Start and fully consume generation before navigating.
-    await waitForSmartPresentation(presentationId);
-
-    // 3. Open the already-complete deck.
-    router.push(`/presentation?id=${presentationId}`);
-    setView("editor");
+    // Let the presentation route own the stream. Its OverlayLoader shows the
+    // branded progress UI while generation continues in the background.
+    router.replace(`/presentation?id=${presentationId}&stream=true&type=smart`);
   } catch (err) {
     console.error(err);
     setView("create");

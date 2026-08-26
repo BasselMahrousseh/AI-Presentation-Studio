@@ -25,7 +25,7 @@ interface OutlineItemProps {
 }
 
 const outlineMarkdownClassName =
-  "prose prose-sm max-w-none flex-1 font-syne text-base font-normal leading-normal text-[#666666] [overflow-wrap:anywhere] [&>*]:!my-0 [&>*+*]:!mt-[10px] [&_h1]:text-xl [&_h1]:font-medium [&_h1]:leading-normal [&_h1]:text-[#191919] [&_h2]:text-xl [&_h2]:font-medium [&_h2]:leading-normal [&_h2]:text-[#191919] [&_h3]:text-base [&_h3]:font-semibold [&_h3]:leading-normal [&_h3]:text-[#191919] [&_p]:text-base [&_p]:font-normal [&_p]:leading-normal [&_p]:text-[#666666] [&_strong]:font-semibold [&_strong]:text-[#191919] [&_ul]:!my-0 [&_ul]:list-none [&_ul]:space-y-1.5 [&_ul]:pl-0 [&_ul_li]:my-0 [&_ul_li]:bg-[url('/figma/outline-check.svg')] [&_ul_li]:bg-[length:20px_20px] [&_ul_li]:bg-[position:left_2px] [&_ul_li]:bg-no-repeat [&_ul_li]:pl-7 [&_ul_li]:text-base [&_ul_li]:font-normal [&_ul_li]:leading-6 [&_ul_li]:text-[#333333]";
+  "prose prose-sm max-w-none flex-1 font-syne text-base font-normal leading-normal text-[#26364D] [overflow-wrap:anywhere] [&>*]:!my-0 [&>*+*]:!mt-[10px] [&_h1]:text-xl [&_h1]:font-medium [&_h1]:leading-normal [&_h1]:text-[#06162E] [&_h2]:text-xl [&_h2]:font-medium [&_h2]:leading-normal [&_h2]:text-[#06162E] [&_h3]:text-base [&_h3]:font-semibold [&_h3]:leading-normal [&_h3]:text-[#06162E] [&_p]:text-base [&_p]:font-normal [&_p]:leading-normal [&_p]:text-[#26364D] [&_strong]:font-semibold [&_strong]:text-[#000000] [&_ul]:!my-0 [&_ul]:list-none [&_ul]:space-y-1.5 [&_ul]:pl-0 [&_ul_li]:my-0 [&_ul_li]:bg-[url('/figma/outline-check.svg')] [&_ul_li]:bg-[length:20px_20px] [&_ul_li]:bg-[position:left_2px] [&_ul_li]:bg-no-repeat [&_ul_li]:pl-7 [&_ul_li]:text-base [&_ul_li]:font-normal [&_ul_li]:leading-6 [&_ul_li]:text-[#06162E]";
 
 export function OutlineItem({
   id,
@@ -167,7 +167,7 @@ export function OutlineItem({
       style={style}
       className={`group relative mb-5 rounded-[12px] border bg-white px-5 py-8 font-syne transition-all duration-500 hover:shadow-[0_10px_24px_0_rgba(15,23,42,0.12)] sm:py-10 sm:pl-[30px] sm:pr-[66px] ${
         isEditingMarkdown
-          ? "border-[#BDB4FE] shadow-[0_6.6px_13.2px_0_rgba(0,0,0,0.10)]"
+          ? "border-[#E30613] shadow-[0_6.6px_13.2px_0_rgba(227,6,19,0.14)]"
           : "border-transparent shadow-[0_6.6px_6.6px_rgba(0,0,0,0.10)]"
       } ${isDragging ? "opacity-50" : ""}`}
     >
@@ -178,14 +178,14 @@ export function OutlineItem({
           aria-label={`Move slide ${index}`}
           className="relative flex touch-none select-none items-center justify-center cursor-grab active:cursor-grabbing"
         >
-          <Grip aria-hidden="true" className="h-6 w-6 text-[#191919]" />
+          <Grip aria-hidden="true" className="h-6 w-6 text-[#06162E]" />
         </div>
 
         <div
           id={`outline-item-${index}`}
           className="flex min-w-0 basis-full flex-col gap-[10px]"
         >
-          <p className="flex h-[22px] w-fit items-center rounded-[80px] border border-[#EDEEEF] bg-white px-2.5 font-unbounded text-[10px] font-light tracking-[-0.1px] text-black">
+          <p className="flex h-[22px] w-fit items-center rounded-[80px] border border-[#D9E0EA] bg-white px-2.5 font-unbounded text-[10px] font-light tracking-[-0.1px] text-[#06162E]">
             Slide: {index}
           </p>
 
@@ -201,7 +201,7 @@ export function OutlineItem({
                 dangerouslySetInnerHTML={{ __html: stableHtml }}
               />
             ) : (
-              <p className="flex-1 text-base font-normal text-[#666666]">
+              <p className="flex-1 text-base font-normal text-[#26364D]">
                 {slideOutline.content || ""}
               </p>
             )
@@ -214,7 +214,7 @@ export function OutlineItem({
               onKeyDown={handleMarkdownKeyDown}
               spellCheck={false}
               placeholder="Enter markdown content here..."
-              className="min-h-[140px] resize-y rounded-[8px] border-[#D8D8DF] bg-[#FBFBFC] px-3 py-3 font-mono text-[13px] leading-6 text-[#191919] shadow-none focus-visible:border-[#7A5AF8] focus-visible:ring-2 focus-visible:ring-[#7A5AF8]/20"
+              className="min-h-[140px] resize-y rounded-[8px] border-[#D8D8DF] bg-[#FBFBFC] px-3 py-3 font-mono text-[13px] leading-6 text-[#191919] shadow-none focus-visible:border-[#E60000] focus-visible:ring-2 focus-visible:ring-[#E60000]/20"
             />
           ) : (
             <div
@@ -228,7 +228,7 @@ export function OutlineItem({
                   handleStartMarkdownEdit();
                 }
               }}
-              className={`${outlineMarkdownClassName} min-h-[60px] w-full cursor-text rounded-[8px] px-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7A5AF8]/25`}
+              className={`${outlineMarkdownClassName} min-h-[60px] w-full cursor-text rounded-[8px] px-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E60000]/25`}
               dangerouslySetInnerHTML={{ __html: previewHtml }}
             />
           )}

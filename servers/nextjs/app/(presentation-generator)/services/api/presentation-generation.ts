@@ -86,6 +86,7 @@ export class PresentationGenerationApi {
     web_search,
     generation_mode = "standard",
     community_design_ids,
+    smart_template,
   }: {
     content: string;
     version?: PresentationVersion;
@@ -100,6 +101,7 @@ export class PresentationGenerationApi {
     web_search?: boolean;
     generation_mode?: "standard" | "smart";
     community_design_ids?: number[];
+    smart_template?: string;
   }) {
     try {
       const limitedSlideCount =
@@ -132,6 +134,7 @@ export class PresentationGenerationApi {
             web_search,
             generation_mode,
             community_design_ids,
+            smart_template,
           }),
           cache: "no-cache",
         }

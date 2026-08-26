@@ -117,9 +117,9 @@ function StudioTopBar({ activeStep }: { activeStep: StudioStep }) {
           aria-label="Dashboard"
         >
           <img
-            src="/logo-with-bg.png"
-            alt="Presenton"
-            className="h-full w-full"
+            src="/eand-logo.png"
+            alt="e&"
+            className="h-full w-full object-contain"
             draggable={false}
           />
         </a>
@@ -379,7 +379,7 @@ function UploadPanel({
             i
           </span>
           <p>
-            Presenton sends each slide as a screenshot and HTML reference. Use a
+            e&amp; Presentation Studio sends each slide as a screenshot and HTML reference. Use a
             vision-enabled model for accurate layouts. Text-only models may produce
             poor results or fail.
           </p>
