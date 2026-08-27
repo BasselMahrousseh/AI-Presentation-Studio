@@ -1,5 +1,6 @@
 'use client'
 import React from "react";
+import Image from "next/image";
 
 import { Card } from "@/components/ui/card";
 import { DashboardApi } from "@/app/(presentation-generator)/services/api/dashboard";
@@ -131,27 +132,27 @@ export const PresentationCard = ({
         onClick={handlePreview}
         aria-disabled={isUnsupported}
         title={isUnsupported ? "Unsupported in this version of Presenton" : undefined}
-        className={`bg-[#F8FBFB] font-syne relative shadow-none sm:shadow-none presentation-card rounded-[12px] p-0 group transition-all duration-500 slide-theme overflow-hidden flex flex-col ${
+        className={`relative flex flex-col overflow-hidden rounded-lg border border-[#e1e2e7] bg-white p-0 font-sans shadow-[0_1px_2px_rgba(16,24,40,0.04)] transition-all duration-200 ${
           isUnsupported
-            ? "cursor-not-allowed border-[#EDEEEF]"
-            : "cursor-pointer hover:shadow-md"
+            ? "cursor-not-allowed opacity-75"
+            : "cursor-pointer hover:-translate-y-0.5 hover:border-[#efa5a5] hover:shadow-[0_8px_24px_rgba(84,32,32,0.12)]"
         }`}
       >
      
       <div
         id={`dashboard-presentation-card-${id}`}
         suppressHydrationWarning={true}
-        className={`relative z-40 flex flex-1 ${viewMode === "list" ? "min-h-[122px] flex-row" : "flex-col"}`}
+        className={`relative z-40 flex ${viewMode === "list" ? "min-h-[122px] flex-row" : "flex-col"}`}
       >
         {/* <p className=" text-xs font-syne absolute top-2 flex gap-1 capitalize  items-center left-2 rounded-[100px]  px-2.5 py-1 bg-[#3A3A3AF5] text-white font-semibold  z-40 ">
 
           {presentation.type}
         </p> */}
 
-        <img src="/card_bg.svg" alt="" className="absolute top-0 left-0 w-full h-full object-cover" />
+        <Image src="/card_bg.svg" alt="" fill sizes="(max-width: 640px) 100vw, (max-width: 1536px) 33vw, 20vw" className="pointer-events-none absolute left-0 top-0 h-full w-full object-cover opacity-[0.07]" />
         <div className={isUnsupported
           ? `relative flex aspect-video items-center justify-center overflow-hidden rounded-lg border border-[#EDEEEF] bg-white/90 ${viewMode === "list" ? "m-3 w-[170px] shrink-0" : "mx-5 mt-4"}`
-          : `relative aspect-video overflow-hidden bg-white ${viewMode === "list" ? "m-3 w-[170px] shrink-0 rounded-lg border border-[#EDEEEF]" : "w-full border-b border-[#EDEEEF]"}`
+          : `relative aspect-[1.72/1] overflow-hidden bg-[#f8f8fa] ${viewMode === "list" ? "m-3 w-[210px] shrink-0 rounded-md border border-[#e5e5e9]" : "w-full border-b border-[#ececf0]"}`
         }>
 
           {isUnsupported ? (
@@ -175,32 +176,20 @@ export const PresentationCard = ({
             />
           )}
         </div>
-        <p
-          className={`absolute left-2 top-2 z-40 rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize shadow-sm backdrop-blur-sm ${
-            presentationType === "smart"
-              ? "bg-[#F4F0FF]/95 text-[#6941C6]"
-              : "bg-white/90 text-[#475467]"
-          }`}
-        >
-          {presentationType}
-        </p>
-        <p className="absolute right-2 top-2 z-40 rounded-full bg-white/90 px-2 py-0.5 text-xs font-medium text-[#191919] shadow-sm backdrop-blur-sm">
-          {presentation.n_slides ?? presentation?.slides?.length ?? 0}
-        </p>
-        <div className={`z-40 flex bg-white px-5 py-3 ${viewMode === "list" ? "min-w-0 flex-1 items-center border-l border-[#EDEEEF]" : "relative mt-auto w-full border-t border-[#EDEEEF]"}`}>
+        <div className={`z-40 flex bg-white px-4 py-4 ${viewMode === "list" ? "min-w-0 flex-1 items-center" : "relative w-full"}`}>
           <div className="flex items-center justify-between gap-7 w-full">
-            <div className="flex flex-col items-start gap-1">
-              <div className="text-sm text-[#191919] font-semibold  overflow-hidden line-clamp-1">
-                <MarkdownRenderer content={title} className="text-sm mb-0  font-syne text-[#191919] font-semibold  overflow-hidden line-clamp-1" />
+            <div className="flex min-w-0 flex-col items-start gap-2">
+              <div className="overflow-hidden text-[15px] font-semibold leading-5 text-[#18243d] line-clamp-2">
+                <MarkdownRenderer content={title} className="mb-0 overflow-hidden font-sans text-[15px] font-semibold leading-5 text-[#18243d] line-clamp-2" />
               </div>
-              <p className="text-[#808080] text-sm font-syne">
-                {new Date(presentation?.created_at).toLocaleDateString()}
+              <p className="text-xs font-medium text-[#7a8190]">
+                Created {new Date(presentation?.created_at).toLocaleDateString()}
               </p>
 
             </div>
             <Popover open={showActions} onOpenChange={setShowActions}>
-              <PopoverTrigger className="w-6 h-6 hover:bg-gray-100 rounded-full flex items-center justify-center text-gray-500 hover:text-gray-700" onClick={(e) => e.stopPropagation()}>
-                <EllipsisVertical className="w-6 h-6 text-gray-500" />
+              <PopoverTrigger className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#737b8c] transition-colors hover:bg-[#fff0f0] hover:text-[#d60000]" onClick={(e) => e.stopPropagation()}>
+                <EllipsisVertical className="h-5 w-5" />
               </PopoverTrigger>
               <PopoverContent align="end" className="bg-white w-[200px]">
                 {!isUnsupported && (

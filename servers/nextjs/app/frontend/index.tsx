@@ -87,7 +87,7 @@ function EandNavbar({ darkMode, onToggleDarkMode }: { darkMode: boolean; onToggl
   return (
     <header className="sticky top-0 z-50 h-[72px] border-b-2 border-[#e60000] bg-white px-5 shadow-sm transition-colors dark:bg-[#171717] dark:shadow-black/20 sm:px-8">
       <div className="mx-auto flex h-full max-w-7xl items-center justify-between">
-        <button type="button" onClick={() => window.location.assign("/frontend")} className="flex items-center" aria-label="e& Presentation Studio home">
+        <button type="button" onClick={() => window.location.assign("/generation")} className="flex items-center" aria-label="e& Presentation Studio home">
           <img src="/eand-logo.png" alt="e&" className="h-10 w-auto object-contain" />
         </button>
         <nav className="flex items-center gap-4 text-sm font-semibold text-slate-700 dark:text-zinc-200">

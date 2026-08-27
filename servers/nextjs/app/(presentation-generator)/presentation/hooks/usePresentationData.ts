@@ -30,7 +30,7 @@ export const usePresentationData = (
           "This deck was created in an older Presenton version. Downgrade to a compatible version to open it."
         );
         setLoading(false);
-        router.replace("/dashboard");
+        router.replace("/");
         return undefined;
       }
 

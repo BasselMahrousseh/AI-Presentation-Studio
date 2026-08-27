@@ -5,17 +5,15 @@ import {
   Loader2,
   Redo2,
   Undo2,
-  RotateCcw,
   ArrowRightFromLine,
   ArrowUpRight,
   Pencil,
   Check,
   Keyboard,
   X,
-  AlertTriangle,
-  MousePointer2,
 } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { useRouter, usePathname } from "next/navigation";
 import {
   Popover,
@@ -33,22 +31,7 @@ import {
 } from "@/utils/mixpanel";
 import { usePresentationUndoRedo } from "../hooks/PresentationUndoRedo";
 import ToolTip from "@/components/ToolTip";
-import {
-  clearChatHtmlSelection,
-  clearPresentationData,
-  setEnableHtmlSelector,
-  updateTitle,
-} from "@/store/slices/presentationGeneration";
-import { clearHistory } from "@/store/slices/undoRedoSlice";
-import { Separator } from "@/components/ui/separator";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { setEnableHtmlSelector, updateTitle } from "@/store/slices/presentationGeneration";
 import MarkdownRenderer from "@/components/MarkDownRender";
 import { cn } from "@/lib/utils";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
@@ -108,7 +91,6 @@ const PresentationHeader = ({
   const router = useRouter();
   const [isExporting, setIsExporting] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [isRegenerateConfirmOpen, setIsRegenerateConfirmOpen] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const titleInputRef = useRef<HTMLInputElement>(null);
   /** Avoid committing on blur when Save/Cancel was used (focus/click ordering) */
@@ -117,7 +99,7 @@ const PresentationHeader = ({
   const pathname = usePathname();
   const dispatch = useDispatch();
 
-  const { presentationData, isStreaming, enableHtmlSelector } = useSelector(
+  const { presentationData, isStreaming } = useSelector(
     (state: RootState) => state.presentationGeneration
   );
   const { onUndo, onRedo, canUndo, canRedo } = usePresentationUndoRedo();
@@ -134,21 +116,9 @@ const PresentationHeader = ({
       dispatch(setEnableHtmlSelector(false));
       return;
     }
-    const storedMode = window.localStorage.getItem("html-selector-mode");
-    dispatch(setEnableHtmlSelector(storedMode !== "false"));
+    // Object selection stays available even though the header toggle is hidden.
+    dispatch(setEnableHtmlSelector(true));
   }, [dispatch, generationMode, isStreaming]);
-
-  const toggleHtmlSelector = () => {
-    const nextValue = !enableHtmlSelector;
-    dispatch(setEnableHtmlSelector(nextValue));
-    if (!nextValue) dispatch(clearChatHtmlSelection());
-    window.localStorage.setItem("html-selector-mode", String(nextValue));
-    trackEvent(MixpanelEvent.Smart_Mode_Select_Edit_Toggled, {
-      pathname,
-      presentation_id,
-      enabled: nextValue,
-    });
-  };
 
   const beginTitleEdit = () => {
     if (isStreaming || !presentationData) return;
@@ -378,30 +348,6 @@ const PresentationHeader = ({
       setIsExporting(false);
     }
   };
-  const handleReGenerate = () => {
-    setIsRegenerateConfirmOpen(false);
-    dispatch(clearPresentationData());
-    dispatch(clearHistory());
-    trackEvent(MixpanelEvent.Presentation_Regenerated, {
-      pathname,
-      presentation_id,
-      slide_count: presentationData?.slides?.length || 0,
-      generation_mode: generationMode,
-    });
-    if (generationMode === "smart") {
-      trackEvent(MixpanelEvent.Smart_Mode_Generation_Started, {
-        pathname,
-        presentation_id,
-        slide_count: presentationData?.slides?.length || 0,
-        source: "regenerate",
-      });
-    }
-    router.push(
-      `/presentation?id=${presentation_id}&stream=true${
-        generationMode === "smart" ? "&type=smart" : ""
-      }`
-    );
-  };
   const downloadLink = (path: string, fileName: string) => {
     const link = document.createElement("a");
     link.href = path;
@@ -480,6 +426,22 @@ const PresentationHeader = ({
     </div>
   );
 
+  const openPresentMode = () => {
+    const to = `?id=${presentation_id}&mode=present&slide=${
+      currentSlide || 0
+    }${generationMode === "smart" ? "&type=smart" : ""}`;
+
+    trackEvent(MixpanelEvent.Presentation_Mode_Entered, {
+      pathname,
+      presentation_id,
+      slide_index: currentSlide || 0,
+      slide_count: presentationData?.slides?.length || 0,
+      generation_mode: generationMode,
+    });
+    trackEvent(MixpanelEvent.Navigation, { from: pathname, to });
+    router.push(to);
+  };
+
   const titleBlock = (
     <div
       className={cn(
@@ -488,7 +450,7 @@ const PresentationHeader = ({
       )}
     >
       {isEditingTitle ? (
-        <div className="flex items-stretch w-[450px]  gap-0.5 rounded-[14px] border border-[#E4E2EB] bg-white pl-3.5 pr-1 py-1 shadow-[0_2px_12px_rgba(17,3,31,0.06)] ring-2 ring-[#5141e5]/15">
+        <div className="flex w-[min(450px,calc(100vw-10rem))] items-stretch gap-0.5 rounded-xl border border-[#f1caca] bg-white pl-3.5 pr-1 py-1 shadow-[0_8px_24px_rgba(120,24,24,0.10)] ring-2 ring-[#e60000]/10">
           <input
             ref={titleInputRef}
             value={draftTitle}
@@ -506,7 +468,7 @@ const PresentationHeader = ({
               }
             }}
             placeholder="Presentation title"
-            className="min-w-0 flex-1 bg-transparent py-2 pr-2 font-unbounded text-base leading-tight text-[#101323] placeholder:text-[#101323]/35 outline-none border-0 focus:ring-0"
+            className="min-w-0 flex-1 border-0 bg-transparent py-2 pr-2 font-syne text-sm font-semibold leading-tight text-[#172a5c] placeholder:text-[#172a5c]/35 outline-none focus:ring-0"
             aria-label="Presentation title"
           />
           <div className="flex shrink-0 items-center gap-0.5 border-l border-[#EDECEC] pl-1 ml-0.5">
@@ -515,7 +477,7 @@ const PresentationHeader = ({
                 type="button"
                 onMouseDown={onTitleSaveMouseDown}
                 onClick={commitTitleEdit}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#5141e5] hover:bg-[#5141e5]/10 transition-colors"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#e60000] transition-colors hover:bg-[#fff0f0]"
                 aria-label="Save title"
               >
                 <Check className="h-4 w-4" strokeWidth={2.25} />
@@ -540,20 +502,20 @@ const PresentationHeader = ({
           onClick={beginTitleEdit}
           disabled={isStreaming || !presentationData}
           className={cn(
-            "group/title flex w-full min-w-0 items-center gap-2.5 rounded-[14px] px-3 py-2 text-left -mx-3 transition-colors",
-            "hover:bg-[#F6F6F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5141e5] focus-visible:ring-offset-2",
+            "group/title flex w-full min-w-0 items-center gap-2.5 rounded-xl px-3 py-2 text-left -mx-3 transition-colors",
+            "hover:bg-[#fff5f5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e60000] focus-visible:ring-offset-2",
             "disabled:pointer-events-none disabled:opacity-100 disabled:hover:bg-transparent"
           )}
         >
-          <h2 className="min-w-0 flex-1 font-unbounded text-lg w-[450px] leading-snug text-[#101323]">
+          <h2 className="min-w-0 w-[min(460px,calc(100vw-14rem))] flex-1 font-syne text-sm font-semibold leading-snug text-[#172a5c]">
             <MarkdownRenderer
               content={presentationData?.title || "Presentation"}
-              className="mb-0 min-w-0 overflow-hidden text-ellipsis line-clamp-1 text-sm text-[#101323] prose-p:my-0 prose-headings:my-0"
+              className="mb-0 min-w-0 overflow-hidden text-ellipsis line-clamp-1 text-sm text-[#172a5c] prose-p:my-0 prose-headings:my-0"
             />
           </h2>
           {presentationData && !isStreaming && (
             <Pencil
-              className="h-3.5 w-3.5 shrink-0 text-[#101323]/40 transition-all duration-200 group-hover/title:text-[#5141e5] opacity-80 sm:opacity-0 sm:group-hover/title:opacity-100 group-hover/title:opacity-100"
+              className="h-3.5 w-3.5 shrink-0 text-[#172a5c]/40 transition-all duration-200 group-hover/title:text-[#e60000] opacity-80 sm:opacity-0 sm:group-hover/title:opacity-100 group-hover/title:opacity-100"
               aria-hidden
             />
           )}
@@ -564,16 +526,19 @@ const PresentationHeader = ({
 
   return (
     <>
-      <div className="py-[18px] px-4 sticky top-0 border-b-2 border-[#e60000] bg-white z-50 shadow-sm font-syne flex justify-between items-center gap-4">
-        <div className="flex items-center gap-3">
-          <img
+      <div className="sticky top-0 z-50 flex min-h-[66px] items-center justify-between gap-4 border-b border-[#ece9e9] bg-white px-5 py-2.5 font-syne shadow-[0_1px_10px_rgba(23,42,92,0.04)] md:px-6">
+        <div className="flex min-w-0 items-center gap-4">
+          <Image
             onClick={() => {
-              router.push("/dashboard");
+              router.push("/");
             }}
             src="/eand-logo.png"
             alt="e&"
-            className="h-10 w-auto cursor-pointer object-contain"
+            width={62}
+            height={32}
+            className="h-8 w-[62px] shrink-0 cursor-pointer object-contain object-left"
           />
+          <span className="hidden h-6 w-px bg-[#e3e3e5] sm:block" />
           {presentationData && !isStreaming && !isEditingTitle ? (
             <ToolTip content="Rename presentation">{titleBlock}</ToolTip>
           ) : (
@@ -582,12 +547,54 @@ const PresentationHeader = ({
          
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           {isPresentationSaving && (
-            <div className="flex items-center gap-2">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <div className="hidden items-center gap-2 rounded-full bg-[#f4faf8] px-3 py-2 text-xs font-medium text-[#18735d] sm:flex">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Saving
             </div>
           )}
+
+          <div className="hidden h-10 items-center rounded-full border border-[#e5e7eb] bg-[#fbfbfc] px-1 md:flex">
+            <ToolTip content="Undo">
+              <button
+                type="button"
+                disabled={!canUndo}
+                onClick={onUndo}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-[#56627d] transition hover:bg-white hover:text-[#e60000] disabled:cursor-not-allowed disabled:opacity-35"
+                aria-label="Undo"
+              >
+                <Undo2 className="h-4 w-4" />
+              </button>
+            </ToolTip>
+            <ToolTip content="Redo">
+              <button
+                type="button"
+                disabled={!canRedo}
+                onClick={onRedo}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-[#56627d] transition hover:bg-white hover:text-[#e60000] disabled:cursor-not-allowed disabled:opacity-35"
+                aria-label="Redo"
+              >
+                <Redo2 className="h-4 w-4" />
+              </button>
+            </ToolTip>
+            <span className="mx-1 h-5 w-px bg-[#e4e5e8]" />
+            <ToolTip content="Present">
+              <button
+                type="button"
+                onClick={openPresentMode}
+                disabled={
+                  isStreaming ||
+                  !presentationData?.slides ||
+                  presentationData.slides.length === 0
+                }
+                className="flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-semibold text-[#172a5c] transition hover:bg-white hover:text-[#e60000] disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                <Play className="h-3.5 w-3.5" fill="currentColor" />
+                Present
+              </button>
+            </ToolTip>
+          </div>
           
               {/* <button
                 type="button"
@@ -695,7 +702,7 @@ const PresentationHeader = ({
               aria-expanded={shortcutsDialogOpen}
               aria-keyshortcuts="?"
               data-testid="keyboard-shortcuts-btn"
-              className="inline-flex h-[38px] w-[38px] items-center justify-center rounded-full border border-[#EDECEC] bg-[#F6F6F9] text-[#101323] transition-colors hover:border-[#D8D3FE] hover:bg-[#F0EDFF] hover:text-[#6847F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7A5AF8] focus-visible:ring-offset-2"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#fbfbfc] text-[#56627d] transition-colors hover:border-[#f0b6b6] hover:bg-[#fff5f5] hover:text-[#e60000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e60000] focus-visible:ring-offset-2"
               onClick={() => setShortcutsDialogOpen(true)}
             >
               <Keyboard
@@ -709,7 +716,7 @@ const PresentationHeader = ({
           <Popover open={open} onOpenChange={setOpen}>
             <PopoverTrigger asChild>
               <button
-                className="flex items-center gap-[7px] rounded-[53px] bg-[#e60000] px-[18px] py-[11px] text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#c40000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e60000] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-10 items-center gap-2 rounded-full bg-[#e60000] px-4 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(230,0,0,0.20)] transition-colors hover:bg-[#bf0000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e60000] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={isExporting || isStreaming === true}
               >
                 {isExporting ? (
@@ -722,13 +729,17 @@ const PresentationHeader = ({
             </PopoverTrigger>
             <PopoverContent
               align="end"
-              className="w-[200px] rounded-[18px] space-y-2 p-0  "
+              className="w-[200px] space-y-2 rounded-2xl border-[#ece8e8] p-0 shadow-[0_16px_34px_rgba(23,42,92,0.14)]"
             >
               <ExportOptions mobile={false} />
             </PopoverContent>
           </Popover>
         </div>
       </div>
+      <KeyboardShortcutsDialog
+        open={shortcutsDialogOpen}
+        onOpenChange={setShortcutsDialogOpen}
+      />
       {/* <Dialog
         open={isRegenerateConfirmOpen}
         onOpenChange={setIsRegenerateConfirmOpen}

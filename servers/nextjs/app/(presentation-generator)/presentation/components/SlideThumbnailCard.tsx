@@ -16,7 +16,8 @@ interface SlideThumbnailCardProps extends React.HTMLAttributes<HTMLDivElement> {
   presentationVersion?: unknown;
 }
 
-const SCALE = 0.061;
+// The sidebar is 196px wide; this keeps a 16:9 preview visually full-width.
+const SCALE = 0.125;
 
 const SlideThumbnailCardComponent = forwardRef<
   HTMLDivElement,
@@ -63,15 +64,21 @@ const SlideThumbnailCardComponent = forwardRef<
         data-slide-thumbnail-active={isNearViewport ? "true" : "false"}
         style={{
           backgroundColor: "var(--card-color, #ffffff)",
-          borderColor: selected ? "#5141e5" : "var(--stroke, #e5e7eb)",
+          borderColor: selected ? "#e60000" : "var(--stroke, #e5e7eb)",
           ...style,
         }}
-        className={`cursor-pointer border relative p-1.5 rounded-[12px] overflow-hidden transition-all duration-200 ${
-          selected ? "border-[#BDB4FE]" : "border-[#EDEEEF]"
+        className={`relative cursor-pointer overflow-hidden rounded-xl border bg-white p-1.5 transition-all duration-200 ${
+          selected
+            ? "border-[#e60000] shadow-[0_6px_16px_rgba(230,0,0,0.16)]"
+            : "border-[#e6e7eb] hover:border-[#f0b6b6] hover:shadow-sm"
         } ${className}`}
         {...props}
       >
-        <p className="pointer-events-none absolute -left-1 top-1/2 z-50 flex h-[18px] min-w-[18px] -translate-y-1/2 items-center justify-center rounded-full border border-[#EDEEEF] bg-white px-1 text-[10px] font-medium text-[#191919] shadow-sm">
+        <p className={`pointer-events-none absolute -left-1 top-1/2 z-50 flex h-[18px] min-w-[18px] -translate-y-1/2 items-center justify-center rounded-full border px-1 text-[10px] font-semibold shadow-sm ${
+          selected
+            ? "border-[#e60000] bg-[#e60000] text-white"
+            : "border-[#e6e7eb] bg-white text-[#172a5c]"
+        }`}>
           {index + 1}
         </p>
 

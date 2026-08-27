@@ -316,7 +316,7 @@ const SlideActionBar = ({
             : "opacity-100"
         )}
       >
-        <div className="pointer-events-auto hide-scrollbar flex h-10 max-w-[calc(100%_-_2rem)] items-center overflow-x-auto rounded-[8px] border border-[#E6E6EC] bg-white px-2 shadow-[0_2px_14px_rgba(17,24,39,0.12)]">
+        <div className="pointer-events-auto hide-scrollbar flex h-11 max-w-[calc(100%_-_2rem)] items-center overflow-x-auto rounded-xl border border-[#ebe5e5] bg-white px-2 shadow-[0_10px_24px_rgba(23,42,92,0.14)]">
           {!isSmartSlide && (
             <>
               <button
@@ -324,7 +324,7 @@ const SlideActionBar = ({
                 onClick={handleBlankSlide}
                 disabled={hasReachedSlideLimit}
                 className={cn(
-                  "flex h-8 shrink-0 items-center gap-2 rounded-[6px] px-2 text-sm font-normal leading-none text-[#111324] transition-colors hover:bg-[#F7F6F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5141e5]",
+                  "flex h-8 shrink-0 items-center gap-2 rounded-lg px-2.5 text-sm font-medium leading-none text-[#172a5c] transition-colors hover:bg-[#fff1f1] hover:text-[#e60000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e60000]",
                   hasReachedSlideLimit && "cursor-not-allowed opacity-50"
                 )}
               >
@@ -340,7 +340,7 @@ const SlideActionBar = ({
                     onClick={openTemplatePicker}
                     disabled={hasReachedSlideLimit}
                     className={cn(
-                      "flex h-8 shrink-0 items-center gap-2 rounded-[6px] px-2 text-sm font-normal leading-none text-[#111324] transition-colors hover:bg-[#F7F6F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5141e5]",
+                      "flex h-8 shrink-0 items-center gap-2 rounded-lg px-2.5 text-sm font-medium leading-none text-[#172a5c] transition-colors hover:bg-[#fff1f1] hover:text-[#e60000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e60000]",
                       hasReachedSlideLimit && "cursor-not-allowed opacity-50"
                     )}
                   >
@@ -362,7 +362,7 @@ const SlideActionBar = ({
                   type="button"
                   aria-label="Speaker notes"
                   className={cn(
-                    "flex h-8 w-10 shrink-0 items-center justify-center rounded-[6px] text-[#050505] transition-colors hover:bg-[#F7F6F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5141e5]",
+                    "flex h-8 w-10 shrink-0 items-center justify-center rounded-lg text-[#172a5c] transition-colors hover:bg-[#fff1f1] hover:text-[#e60000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e60000]",
                     isSpeakerPopoverOpen && "bg-[#F7F6F9]"
                   )}
                 >
@@ -403,7 +403,7 @@ const SlideActionBar = ({
                 type="button"
                 aria-label="Slide actions"
                 className={cn(
-                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] text-[#050505] transition-colors hover:bg-[#F7F6F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5141e5]",
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#172a5c] transition-colors hover:bg-[#fff1f1] hover:text-[#e60000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e60000]",
                   isSlideMenuOpen && "bg-[#F7F6F9]"
                 )}
               >

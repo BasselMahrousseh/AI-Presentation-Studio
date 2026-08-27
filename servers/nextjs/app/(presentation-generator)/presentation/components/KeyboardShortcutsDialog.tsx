@@ -73,7 +73,7 @@ export function KeyboardShortcutsDialog({
         <DialogHeader className="space-y-0 border-b border-[#EAECF0] px-6 py-5 pr-14 text-left">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-3.5">
-              <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-[12px] bg-[#F0EDFF] text-[#6847F4]">
+              <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-[12px] bg-[#fff0f0] text-[#e60000]">
                 <Keyboard
                   aria-hidden="true"
                   className="size-5"
@@ -122,7 +122,7 @@ export function KeyboardShortcutsDialog({
                     <div className="flex items-center gap-2">
                       <SectionIcon
                         aria-hidden="true"
-                        className="size-4 text-[#6847F4]"
+                        className="size-4 text-[#e60000]"
                         strokeWidth={1.8}
                       />
                       <h3 className="text-[14px] font-semibold text-[#101323]">
@@ -183,7 +183,7 @@ function PlatformButton({
       aria-pressed={active}
       className={`rounded-[6px] px-2.5 py-1.5 font-manrope text-[11px] font-semibold transition-colors ${
         active
-          ? "bg-white text-[#6847F4] shadow-[0_1px_3px_rgba(16,24,40,0.12)]"
+          ? "bg-white text-[#e60000] shadow-[0_1px_3px_rgba(16,24,40,0.12)]"
           : "text-[#667085] hover:text-[#344054]"
       }`}
       onClick={onClick}

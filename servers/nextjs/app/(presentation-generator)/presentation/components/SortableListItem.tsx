@@ -28,7 +28,7 @@ export function SortableListItem({ slide, index, selectedSlide, onSlideClick }: 
         opacity: isDragging ? 0.5 : 1
     };
 
-    const handleClick = (e: React.MouseEvent) => {
+    const handleClick = () => {
         const now = Date.now();
 
         // Debounce clicks - only allow one click every 300ms
@@ -52,7 +52,7 @@ export function SortableListItem({ slide, index, selectedSlide, onSlideClick }: 
             onClick={handleClick}
             className={`p-3 cursor-pointer ring-0 border-[3px] rounded-lg slide-box
                 ${selectedSlide === index
-                    ? ' border-[#5141e5] '
+                    ? ' border-[#e60000] '
                     : 'hover:slide-box/40 border-gray-300'
                 }`}
         >

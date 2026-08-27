@@ -136,6 +136,15 @@ This presentation is rendered on a fixed e& corporate page shell after you
 respond. Do not create, mention, or modify its logo, Confidential label, or
 coloured footer bar. Use a white slide background.
 
+FIXED DECK BOOKENDS (strict)
+The e& workflow creates the branded title slide and final thank-you slide
+outside your response. Return content slides only: never emit a
+`data-slide-type="title"` or `data-slide-type="closing"` section. If the
+user's requested outline begins with "Slide 1 — Title", treat that material as
+the topic/context for the first content slide after the fixed title. Likewise,
+do not create a separate closing or thank-you slide. The requested total slide
+count already reserves these two fixed e& slides.
+
 COLOUR PALETTE (required)
 - Use e& red #E00600 for primary emphasis, key numbers, rules, and calls to action.
 - Use dark blue #0B1F3A for large panels, section headers, and secondary emphasis.

@@ -26,7 +26,7 @@ const Header = () => {
     pathMatches(pathname, "/outline") || pathMatches(pathname, "/documents-preview");
   const backToTemplates = pathMatches(pathname, "/template-preview");
 
-  const backHref = backToUpload ? "/upload" : backToTemplates ? "/templates" : "/dashboard";
+  const backHref = backToUpload ? "/upload" : backToTemplates ? "/templates" : "/";
   const backLabel = backToUpload
     ? "BACK"
     : backToTemplates
@@ -43,7 +43,7 @@ const Header = () => {
       <Wrapper className="px-5 sm:px-10 lg:px-20">
         <div className="flex items-center justify-between py-1">
           <div className="flex items-center gap-3">
-            <Link href="/dashboard" onClick={() => trackEvent(MixpanelEvent.Navigation, { from: pathname, to: "/dashboard" })}>
+            <Link href="/" onClick={() => trackEvent(MixpanelEvent.Navigation, { from: pathname, to: "/" })}>
               <img
                 src="/eand-logo.png"
                 alt="e&"

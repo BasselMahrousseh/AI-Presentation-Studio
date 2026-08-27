@@ -25,7 +25,7 @@ interface OutlineItemProps {
 }
 
 const outlineMarkdownClassName =
-  "prose prose-sm max-w-none flex-1 font-syne text-base font-normal leading-normal text-[#26364D] [overflow-wrap:anywhere] [&>*]:!my-0 [&>*+*]:!mt-[10px] [&_h1]:text-xl [&_h1]:font-medium [&_h1]:leading-normal [&_h1]:text-[#06162E] [&_h2]:text-xl [&_h2]:font-medium [&_h2]:leading-normal [&_h2]:text-[#06162E] [&_h3]:text-base [&_h3]:font-semibold [&_h3]:leading-normal [&_h3]:text-[#06162E] [&_p]:text-base [&_p]:font-normal [&_p]:leading-normal [&_p]:text-[#26364D] [&_strong]:font-semibold [&_strong]:text-[#000000] [&_ul]:!my-0 [&_ul]:list-none [&_ul]:space-y-1.5 [&_ul]:pl-0 [&_ul_li]:my-0 [&_ul_li]:bg-[url('/figma/outline-check.svg')] [&_ul_li]:bg-[length:20px_20px] [&_ul_li]:bg-[position:left_2px] [&_ul_li]:bg-no-repeat [&_ul_li]:pl-7 [&_ul_li]:text-base [&_ul_li]:font-normal [&_ul_li]:leading-6 [&_ul_li]:text-[#06162E]";
+  "prose prose-sm max-w-none flex-1 font-syne text-sm font-normal leading-6 text-[#526078] [overflow-wrap:anywhere] [&>*]:!my-0 [&>*+*]:!mt-2 [&_h1]:text-[18px] [&_h1]:font-semibold [&_h1]:leading-6 [&_h1]:text-[#172a5c] [&_h2]:text-[18px] [&_h2]:font-semibold [&_h2]:leading-6 [&_h2]:text-[#172a5c] [&_h3]:text-[16px] [&_h3]:font-semibold [&_h3]:leading-6 [&_h3]:text-[#172a5c] [&_p]:text-sm [&_p]:font-normal [&_p]:leading-6 [&_p]:text-[#526078] [&_strong]:font-semibold [&_strong]:text-[#172a5c] [&_ul]:!my-0 [&_ul]:list-none [&_ul]:space-y-1 [&_ul]:pl-0 [&_ul_li]:my-0 [&_ul_li]:bg-[url('/figma/outline-check.svg')] [&_ul_li]:bg-[length:16px_16px] [&_ul_li]:bg-[position:left_4px] [&_ul_li]:bg-no-repeat [&_ul_li]:pl-6 [&_ul_li]:text-sm [&_ul_li]:font-normal [&_ul_li]:leading-6 [&_ul_li]:text-[#526078]";
 
 export function OutlineItem({
   id,
@@ -165,30 +165,27 @@ export function OutlineItem({
     <div
       ref={setNodeRef}
       style={style}
-      className={`group relative mb-5 rounded-[12px] border bg-white px-5 py-8 font-syne transition-all duration-500 hover:shadow-[0_10px_24px_0_rgba(15,23,42,0.12)] sm:py-10 sm:pl-[30px] sm:pr-[66px] ${
+      className={`group relative mb-3 overflow-hidden rounded-2xl border bg-white px-4 py-4 font-syne transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_12px_26px_rgba(16,39,80,0.10)] sm:px-5 sm:py-5 ${
         isEditingMarkdown
-          ? "border-[#E30613] shadow-[0_6.6px_13.2px_0_rgba(227,6,19,0.14)]"
-          : "border-transparent shadow-[0_6.6px_6.6px_rgba(0,0,0,0.10)]"
+          ? "border-[#e60000] shadow-[0_8px_20px_rgba(230,0,0,0.12)]"
+          : "border-[#e6e9ef] shadow-[0_3px_8px_rgba(16,39,80,0.04)]"
       } ${isDragging ? "opacity-50" : ""}`}
     >
-      <div className="flex items-start gap-3 rounded-[8px]">
+      <div className="flex items-start gap-3 sm:gap-4">
         <div
           {...attributes}
           {...listeners}
           aria-label={`Move slide ${index}`}
-          className="relative flex touch-none select-none items-center justify-center cursor-grab active:cursor-grabbing"
+          className="relative flex h-10 w-10 shrink-0 touch-none select-none items-center justify-center rounded-xl bg-[#fff1f1] text-sm font-semibold text-[#e60000] outline-none ring-1 ring-[#ffd4d4] cursor-grab active:cursor-grabbing"
         >
-          <Grip aria-hidden="true" className="h-6 w-6 text-[#06162E]" />
+          <span>{String(index).padStart(2, "0")}</span>
+          <Grip aria-hidden="true" className="absolute -right-1 -top-1 h-3 w-3 rounded-full bg-white p-0.5 text-[#8992a5] shadow-sm" />
         </div>
 
         <div
           id={`outline-item-${index}`}
           className="flex min-w-0 basis-full flex-col gap-[10px]"
         >
-          <p className="flex h-[22px] w-fit items-center rounded-[80px] border border-[#D9E0EA] bg-white px-2.5 font-unbounded text-[10px] font-light tracking-[-0.1px] text-[#06162E]">
-            Slide: {index}
-          </p>
-
           {isStreaming ? (
             isActiveStreaming ? (
               <div

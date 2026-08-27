@@ -9,6 +9,7 @@ import React, {
   useState,
 } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   AlertTriangle,
   Check,
@@ -111,8 +112,8 @@ function StudioTopBar({ activeStep }: { activeStep: StudioStep }) {
   return (
     <header className="pointer-events-none fixed inset-x-0 top-0 z-40 h-[72px] sm:h-[80px] 2xl:h-[96px] bg-gradient-to-b from-white via-white to-white/0">
       <div className="relative mx-auto flex h-full max-w-[1280px] 2xl:max-w-[1536px] items-center justify-between px-5 sm:px-8 2xl:px-[90px]">
-        <a
-          href="/dashboard"
+        <Link
+          href="/"
           className="pointer-events-auto block h-8 w-8 sm:h-[34px] sm:w-[34px] 2xl:h-[44px] 2xl:w-[44px] shrink-0"
           aria-label="Dashboard"
         >
@@ -122,7 +123,7 @@ function StudioTopBar({ activeStep }: { activeStep: StudioStep }) {
             className="h-full w-full object-contain"
             draggable={false}
           />
-        </a>
+        </Link>
 
         <nav
           className="pointer-events-auto flex items-center"

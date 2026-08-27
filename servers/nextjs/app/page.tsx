@@ -1,19 +1,18 @@
-import Index from "./frontend/index";
+import { requireAppSession } from "@/utils/serverAuth";
+import { ConfigurationInitializer } from "./ConfigurationInitializer";
+import DashboardShell from "./DashboardShell";
+
 export const metadata = {
-  title: "Presentation Studio",
-  description: "Presentation Studio workspace.",
+  title: "e& Presentation Workspace",
+  description: "Manage and create e& Etisalat presentations.",
 };
 
-/**
- * Standalone App Router entry point for the custom frontend.
- * Build the new experience here without inheriting the presentation app layout.
- */
+export default async function HomePage() {
+  await requireAppSession();
 
-
-export default function FrontendPage() {
   return (
-    <div>
-      <Index />
-    </div>
+    <ConfigurationInitializer>
+      <DashboardShell />
+    </ConfigurationInitializer>
   );
 }

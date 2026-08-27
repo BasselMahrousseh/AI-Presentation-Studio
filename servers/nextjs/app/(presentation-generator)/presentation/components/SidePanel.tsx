@@ -226,14 +226,22 @@ const SidePanel = ({
     : null;
 
   return (
-    <div className="px-4 w-[120px] h-full">
+    <div className="h-full w-full bg-white/80 px-3 pb-3 pt-4 backdrop-blur-sm">
       <div
         className={`
           relative  h-full z-50 xl:z-auto 
           transition-all duration-300 ease-in-out
         `}
       >
-        <div className="w-full h-full hide-scrollbar overflow-hidden slide-theme flex flex-col">
+        <div className="slide-theme flex h-full w-full flex-col overflow-hidden">
+          <div className="mb-3 flex items-center justify-between px-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#667085]">
+              Slides
+            </span>
+            <span className="rounded-full bg-[#fff0f0] px-2 py-0.5 text-[10px] font-semibold text-[#c90000]">
+              {presentationData?.slides?.length ?? 0}
+            </span>
+          </div>
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -241,7 +249,7 @@ const SidePanel = ({
           >
             <div
               data-slide-thumbnail-scroll-container="true"
-              className="overflow-y-auto w-full hide-scrollbar min-h-0 flex-1 space-y-3.5"
+              className="hide-scrollbar min-h-0 w-full flex-1 space-y-3 overflow-y-auto pb-2"
             >
               {isStreaming ? (
                 presentationData &&
@@ -291,14 +299,14 @@ const SidePanel = ({
           </DndContext>
           {!isSmartPresentation && (
             <>
-              <Separator orientation="horizontal" />
+              <Separator orientation="horizontal" className="bg-[#ece8e8]" />
               <button
                 type="button"
                 onClick={handleAddSlideClick}
-                className="mx-auto flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg py-4 duration-300"
+                className="mx-auto mt-3 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#efb7b7] bg-[#fff9f9] py-3 text-[#c90000] transition hover:border-[#e60000] hover:bg-[#fff0f0]"
               >
-                <Plus className="h-3.5 w-3.5" />
-                <span className="text-[11px] font-normal text-[#000000]">
+                <Plus className="h-4 w-4" />
+                <span className="text-[11px] font-semibold">
                   Add Slide
                 </span>
               </button>

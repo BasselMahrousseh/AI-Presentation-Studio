@@ -246,7 +246,7 @@ const OutlinePage: React.FC = () => {
       <div className="min-h-screen bg-[#FEFEFF]">
         <OutlineStandardHeader
           title="Outline Generation"
-          onBack={() => router.push("/dashboard")}
+          onBack={() => router.push("/")}
         />
         <EmptyStateView />
       </div>
@@ -269,9 +269,10 @@ const OutlinePage: React.FC = () => {
 
       <OutlineStandardHeader
         title={isTemplateStage ? "Select Template" : "Outline Generation"}
+        slideCount={isTemplateStage ? undefined : outlines.length}
         onBack={() => {
           if (isTemplateStage) {
-            router.push("/dashboard");
+            router.push("/");
             return;
           }
           handleReturnToTemplates();
@@ -293,7 +294,7 @@ const OutlinePage: React.FC = () => {
       ) : (
         <>
           <div className="lg:mr-[369px]">
-            <main className="mx-auto w-[calc(100%-2.5rem)] max-w-[967px] pb-28 pt-10 sm:w-[calc(100%-5rem)]">
+            <main className="mx-auto w-[calc(100%-2.5rem)] max-w-[967px] pb-28 pt-7 sm:w-[calc(100%-5rem)] sm:pt-9">
               <div>
                 <OutlineContent
                   outlines={outlines}

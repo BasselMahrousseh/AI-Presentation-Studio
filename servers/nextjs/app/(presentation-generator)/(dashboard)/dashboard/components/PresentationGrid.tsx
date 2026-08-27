@@ -1,4 +1,5 @@
 import React from "react";
+import Image from "next/image";
 import { PresentationCard } from "./PresentationCard";
 import { PresentationResponse } from "@/app/(presentation-generator)/services/api/dashboard";
 import { EmptyState } from "./EmptyState";
@@ -21,16 +22,18 @@ export const PresentationGrid = ({
   onPresentationDuplicated,
 }: PresentationGridProps) => {
   const ShimmerCard = () => (
-    <div className="flex min-h-[216px] flex-col overflow-hidden rounded-[12px] border border-[#EDEEEF] bg-[#F8FBFB] shadow-none animate-pulse">
-      <div className="relative flex-1 overflow-hidden p-4">
-        <img
+    <div className="animate-pulse overflow-hidden rounded-lg border border-[#e2e3e8] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
+      <div className="relative aspect-[1.72/1] overflow-hidden p-4">
+        <Image
           src="/card_bg.svg"
           alt=""
-          className="absolute inset-0 h-full w-full object-cover opacity-70"
+          fill
+          sizes="(max-width: 640px) 100vw, (max-width: 1536px) 33vw, 20vw"
+          className="absolute inset-0 h-full w-full object-cover opacity-40"
         />
-        <div className="relative mx-auto mt-2 aspect-video w-[88%] rounded-lg border border-gray-200 bg-gray-200" />
+        <div className="relative h-full w-full rounded bg-[#e7e3eb]" />
       </div>
-      <div className="relative z-10 border-t border-[#EDEEEF] bg-white px-5 py-3">
+      <div className="relative z-10 border-t border-[#ececf0] bg-white px-4 py-4">
         <div className="flex items-center justify-between gap-6">
           <div className="space-y-2">
             <div className="h-3.5 w-24 rounded bg-gray-200" />
@@ -44,8 +47,8 @@ export const PresentationGrid = ({
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 sm:gap-6 w-full">
-        {[...Array(12)].map((_, i) => (
+      <div className="grid w-full grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+        {[...Array(8)].map((_, i) => (
           <ShimmerCard key={i} />
         ))}
       </div>
@@ -54,12 +57,12 @@ export const PresentationGrid = ({
 
   if (error) {
     return (
-      <div className="flex min-h-[220px] items-center justify-center rounded-xl border border-[#EDEEEF] bg-white/80">
-        <div className="text-center text-gray-500">
+      <div className="flex min-h-[220px] items-center justify-center rounded-xl border border-[#e2e3e8] bg-[#fcfbfd]">
+        <div className="text-center text-[#616a7d]">
           <p className="mb-2">{error}</p>
           <button
             onClick={() => window.location.reload()}
-            className="text-primary hover:text-primary/80 underline"
+            className="font-semibold text-[#5d198f] underline hover:text-[#3e0f65]"
           >
             Try again
           </button>
@@ -76,7 +79,7 @@ export const PresentationGrid = ({
     <div
       className={
         viewMode === "grid"
-          ? "grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4"
+          ? "grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
           : "grid grid-cols-1 gap-4"
       }
     >

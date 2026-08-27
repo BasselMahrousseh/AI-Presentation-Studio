@@ -1,123 +1,77 @@
 "use client";
 
 import React from "react";
-import { LayoutDashboard, Star, Brain, Settings, HelpCircle, UsersRound } from "lucide-react";
+import {
+  FileText,
+  HelpCircle,
+  LayoutDashboard,
+  Library,
+  Settings,
+  UsersRound,
+} from "lucide-react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-
-
+import Image from "next/image";
 
 export const defaultNavItems = [
-    { key: "dashboard" as const, label: "Dashboard", icon: LayoutDashboard },
-    { key: "templates" as const, label: "Standard", icon: Star },
-    { key: "designs" as const, label: "Smart", icon: Brain },
-    { key: "community" as const, label: "Community", icon: UsersRound },
-
-
-
+  { key: "dashboard" as const, label: "Dashboard", icon: LayoutDashboard },
+  { key: "templates" as const, label: "Templates", icon: FileText },
+  { key: "community" as const, label: "Community", icon: UsersRound },
 ];
+
 export const BelongingNavItems = [
-    { key: "settings" as const, label: "Settings", icon: Settings },
-    
-]
+  { key: "settings" as const, label: "Settings", icon: Settings },
+];
 
-const DashboardSidebar = () => {
-    const pathname = usePathname();
+const navigation = [
+  { label: "Home", href: "/", icon: LayoutDashboard },
+  { label: "Templates", href: "/templates", icon: FileText },
+  { label: "Community", href: "/community", icon: UsersRound },
+  { label: "Library", href: "/templates", icon: Library },
+];
 
-    return (
-        <aside
-            className="sticky top-0 flex h-screen w-[114px] shrink-0 flex-col justify-between border-r border-[#E1E1E5] bg-[#F6F6F9] px-4 py-8 backdrop-blur"
-            aria-label="Dashboard sidebar"
-        >
-            <div>
+interface DashboardSidebarProps {
+  onHomeToggle?: () => void;
+  isWorkspaceCollapsed?: boolean;
+}
 
-                <Link href={`/dashboard`} className="flex items-center  pb-6 border-b border-[#E1E1E5]   gap-2    ">
-                    <div className="bg-[#7C51F8] rounded-full cursor-pointer p-1 flex justify-center items-center mx-auto">
-                        <img src="/eand-logo.png" alt="e& logo" className="h-[40px] object-contain w-full" />
-                    </div>
-                </Link>
-                <nav className="pt-6 font-syne" aria-label="Dashboard sections">
-                    <div className="  space-y-6">
+const DashboardSidebar = ({
+  onHomeToggle,
+  isWorkspaceCollapsed = false,
+}: DashboardSidebarProps) => {
+  const pathname = usePathname();
 
-                        {/* Dashboard */}
-                        <Link
-                            prefetch={false}
-                            href={`/dashboard`}
-                            className={[
-                                "flex flex-col tex-center items-center gap-2  transition-colors",
-                                pathname === "/dashboard" ? "" : "ring-transparent",
-                            ].join(" ")}
-                            aria-label="Dashboard"
-                            title="Dashboard"
-                        >
-                            <LayoutDashboard className={["h-4 w-4", pathname === "/dashboard" ? "text-[#5146E5]" : "text-slate-600"].join(" ")} />
-                            <span className="text-[11px] text-slate-800">Dashboard</span>
-                        </Link>
-                        <Link
-                            prefetch={false}
-                            href={`/templates`}
-                            className={[
-                                "flex flex-col tex-center items-center gap-2  transition-colors",
-                                pathname === "/templates" ? "" : "ring-transparent",
-                            ].join(" ")}
-                            aria-label="Templates"
-                            title="Templates"
-                        >
-                            <div className="flex flex-col cursor-pointer tex-center items-center gap-2  transition-colors">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={`${pathname === "/templates" ? "#5146E5" : "#475569"}`} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="M4 14h6" /><path d="M4 2h10" /><rect x="4" y="18" width="16" height="4" rx="1" /><rect x="4" y="6" width="16" height="4" rx="1" /></svg>
-                                <span className="text-[11px] text-slate-800">Templates</span>
-                            </div>
-                        </Link>
-                        <Link
-                            prefetch={false}
-                            href="/community"
-                            className="flex flex-col items-center gap-2 text-center transition-colors"
-                            aria-label="Community"
-                            title="Community"
-                        >
-                            <UsersRound className={`h-4 w-4 ${pathname === "/community" ? "text-[#5146E5]" : "text-slate-600"}`} />
-                            <span className="text-[11px] text-slate-800">Community</span>
-                        </Link>
-                        {/* <Link
-                            prefetch={false}
-                            href={`/theme`}
-                            className={[
-                                "flex flex-col tex-center items-center gap-2  transition-colors",
-                                pathname === "/theme" ? "" : "ring-transparent",
-                            ].join(" ")}
-                            aria-label="Theme"
-                            title="Theme"
-                        >
-                            <div className="flex flex-col cursor-pointer tex-center items-center gap-2  transition-colors">
-                                <Palette className={`h-4 w-4 ${pathname === "/theme" ? "text-[#5146E5]" : "text-slate-600"}`} />
-                                <span className="text-[11px] text-slate-800">Themes</span>
-                            </div>
-                        </Link> */}
-                    </div>
-                </nav>
-            </div>
+  return (
+    <aside className="sticky top-0 flex h-screen w-[88px] shrink-0 flex-col border-r border-[#e1e3e8] bg-[#f6f6f8] px-2 py-5" aria-label="Primary navigation">
+      <Link href="/" aria-label="e& Etisalat home" className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#172a5c] p-2 shadow-[0_4px_12px_rgba(23,42,92,0.2)]">
+        <Image src="/eand-logo.png" alt="e&" width={56} height={56} className="h-full w-full object-contain" />
+      </Link>
 
-            <div className="border-t border-[#E1E1E5] pt-5 font-syne">
-                  <Link
-                    href="/settings"
-                    className="flex flex-col items-center gap-2 transition-colors"
-                >
-                    <Settings className="h-4 w-4" />
-                    <span className="text-[11px] text-slate-800">Settings</span>
-                </Link>
-                <div className="py-2"/>
-                <Link
-                    href="https://docs.presenton.ai/help"
-                    target="_blank"
-                    className="flex flex-col items-center gap-2 transition-colors"
-                >
-                    <HelpCircle className="h-4 w-4" />
-                    <span className="text-[11px] text-slate-800">Help</span>
-                </Link>
-            </div>
+      <nav className="mt-7 space-y-3" aria-label="Main navigation">
+        {navigation.map(({ label, href, icon: Icon }) => {
+          const active = pathname === href || (label === "Library" && pathname.startsWith("/library"));
+          const className = `group flex w-full min-h-[58px] flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-medium transition-colors ${active ? "bg-[#fff0f0] text-[#d60000]" : "text-[#586174] hover:bg-[#ececf0] hover:text-[#d60000]"}`;
+          if (label === "Home" && onHomeToggle) {
+            return <button key={label} type="button" onClick={onHomeToggle} aria-label={isWorkspaceCollapsed ? "Expand workspace menu" : "Collapse workspace menu"} aria-expanded={!isWorkspaceCollapsed} title={isWorkspaceCollapsed ? "Expand workspace menu" : "Collapse workspace menu"} className={`${className} active:scale-95`}><Icon className="h-[19px] w-[19px]" strokeWidth={active ? 2.4 : 1.9} /><span>{label}</span></button>;
+          }
+          if (href === "/templates") {
+            return <button key={label} type="button" aria-label={label} title={label} onClick={() => undefined} className={`${className} active:scale-95`}><Icon className="h-[19px] w-[19px]" strokeWidth={active ? 2.4 : 1.9} /><span>{label}</span></button>;
+          }
+          return (
+            <Link key={label} prefetch={false} href={href} aria-label={label} title={label} className={className}>
+              <Icon className="h-[19px] w-[19px]" strokeWidth={active ? 2.4 : 1.9} />
+              <span>{label}</span>
+            </Link>
+          );
+        })}
+      </nav>
 
-        </aside>
-    );
+      <div className="mt-auto space-y-3 border-t border-[#e0e2e6] pt-4">
+        <Link href="/settings" aria-label="Settings" title="Settings" className={`flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-medium transition-colors ${pathname === "/settings" ? "bg-[#fff0f0] text-[#d60000]" : "text-[#586174] hover:bg-[#ececf0] hover:text-[#d60000]"}`}><Settings className="h-[19px] w-[19px]" strokeWidth={1.9} /><span>Settings</span></Link>
+        <Link href="https://github.com/BasselMahrousseh/AI-Presentation-Studio/tree/restructured-v3" target="_blank" rel="noreferrer" aria-label="Help" title="Help" className="flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-medium text-[#586174] transition-colors hover:bg-[#ececf0] hover:text-[#d60000]"><HelpCircle className="h-[19px] w-[19px]" strokeWidth={1.9} /><span>Help</span></Link>
+      </div>
+    </aside>
+  );
 };
 
 export default DashboardSidebar;

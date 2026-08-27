@@ -255,7 +255,7 @@ const SettingsPage = () => {
 
   useEffect(() => {
     if (!canChangeKeys) {
-      router.push("/dashboard");
+      router.push("/");
     }
   }, [canChangeKeys, router]);
 
