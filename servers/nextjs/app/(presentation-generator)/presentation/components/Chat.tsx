@@ -2493,7 +2493,7 @@ const Chat = ({
                         </p>
                       </div>
                     )}
-                    <div className="w-fit max-w-full rounded-[18px] bg-[#7C3AED] px-4 py-3 text-[13px] font-medium leading-5 text-white shadow-sm [overflow-wrap:anywhere] [word-break:break-word]">
+                    <div className="w-fit max-w-full rounded-[18px] bg-brand px-4 py-3 text-[13px] font-medium leading-5 text-white shadow-sm [overflow-wrap:anywhere] [word-break:break-word]">
                       <p className="whitespace-pre-wrap">
                         {stripBackendContextFromUserMessage(message.content)}
                       </p>

@@ -171,7 +171,7 @@ const LatexRun = TiptapNode.create({
       textarea.setAttribute("aria-label", "Edit LaTeX expression");
       textarea.setAttribute("title", "LaTeX expression");
       textarea.spellcheck = false;
-      textarea.style.cssText = `box-sizing:border-box;display:block;min-width:8ch;max-width:100%;min-height:1.8em;padding:2px 6px;border:1px solid #7c3aed;border-radius:4px;background:#fff;color:#111827;font:500 0.8em/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;outline:none;overflow:hidden;overflow-wrap:anywhere;resize:none;white-space:pre-wrap;vertical-align:middle;`;
+      textarea.style.cssText = `box-sizing:border-box;display:block;min-width:8ch;max-width:100%;min-height:1.8em;padding:2px 6px;border:1px solid hsl(var(--brand));border-radius:4px;background:#fff;color:#111827;font:500 0.8em/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;outline:none;overflow:hidden;overflow-wrap:anywhere;resize:none;white-space:pre-wrap;vertical-align:middle;`;
       textarea.addEventListener("input", resizeTextarea);
       textarea.addEventListener("focus", () => {
         resizeTextarea();

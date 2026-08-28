@@ -177,7 +177,7 @@ function ToolbarIconButton({
       onClick={onClick}
       className={cn(
         "grid h-7 min-w-7 place-items-center rounded-md border-0 bg-transparent px-1 text-[#05070A] hover:bg-[#F8F8FA]",
-        open && "bg-[#F4F1FF] text-[#7C3AED]",
+        open && "bg-brand-tint text-brand",
       )}
     >
       {children}

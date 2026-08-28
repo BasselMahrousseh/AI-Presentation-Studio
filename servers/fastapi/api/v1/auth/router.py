@@ -19,6 +19,7 @@ from api.v1.auth.users import (
 from models.sql.user import User
 from services.database import get_async_session
 from utils.get_env import is_disable_auth_enabled
+from utils.llm_config import get_llm_config
 from api.v1.auth.config import (
     SESSION_COOKIE_NAME,
     SESSION_TTL_SECONDS,
@@ -99,6 +100,15 @@ async def get_status(
         "user_id": str(user.id) if user else None,
         "role": "admin" if user and user.is_superuser else ("user" if user else None),
     }
+
+
+@API_V1_AUTH_ROUTER.get("/llm-status")
+async def llm_status():
+    try:
+        get_llm_config()
+        return {"llm_configured": True}
+    except HTTPException:
+        return {"llm_configured": False}
 
 
 @API_V1_AUTH_ROUTER.get("/verify")

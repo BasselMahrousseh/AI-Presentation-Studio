@@ -235,7 +235,7 @@ export function ShapeToolbar({
           className={cn(
             "grid h-[22px] w-[22px] place-items-center rounded-[999px] border border-[#D7DAE3] hover:bg-[#F8F8FA]",
             (openPanel === "fill" || fillEnabled) &&
-              "border-[#E4D7FF] bg-[#F4F1FF] ring-2 ring-[#7C3AED]/30",
+              "border-[hsl(var(--brand)/24%)] bg-brand-tint ring-2 ring-[hsl(var(--brand)/30%)]",
           )}
         >
           <span
@@ -549,7 +549,7 @@ export function ToolbarButton({
       onClick={onClick}
       className={cn(
         "relative flex h-7 min-w-7 items-center justify-center gap-1 rounded-[2px] border-0 bg-transparent px-1 text-[#05070A] hover:bg-[#F8F8FA]",
-        pressed && "bg-[#F4F1FF] text-[#7C3AED]",
+        pressed && "bg-brand-tint text-brand",
       )}
     >
       {children}

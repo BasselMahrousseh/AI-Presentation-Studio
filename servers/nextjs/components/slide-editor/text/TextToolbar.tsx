@@ -1622,7 +1622,7 @@ const textToolbarStyles = {
   },
   buttonActive: {
     color: "#7C51F8",
-    background: "#F4F1FF",
+    background: "hsl(var(--brand-tint))",
   },
   buttonDisabled: {
     color: "#A4A7AE",

@@ -31,6 +31,9 @@ body {
     --accent-foreground: 240 5.9% 10%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
+    --brand: 0 100% 45.1%;
+    --brand-hover: 0 100% 37.5%;
+    --brand-tint: 0 100% 96%;
     --border: 240 5.9% 90%;
     --input: 240 5.9% 90%;
     --ring: 240 10% 3.9%;
@@ -687,17 +690,17 @@ thead {
   aspect-ratio: 2;
   --_g-left: no-repeat radial-gradient(
     circle closest-side,
-    rgb(230 0 0 / 20%) 90%,
+    hsl(var(--brand) / 20%) 90%,
     transparent
   );
   --_g-center: no-repeat radial-gradient(
     circle closest-side,
-    rgb(230 0 0 / 60%) 90%,
+    hsl(var(--brand) / 60%) 90%,
     transparent
   );
   --_g-right: no-repeat radial-gradient(
     circle closest-side,
-    #e60000 90%,
+    hsl(var(--brand)) 90%,
     transparent
   );
   background:

@@ -376,7 +376,7 @@ const IconsEditor = ({
                     aria-label="Apply icon weight to entire presentation"
                     checked={applyStylesToPresentation}
                     onCheckedChange={setApplyStylesToPresentation}
-                    className="h-5 w-9 flex-none data-[state=checked]:bg-[#7C3AED] data-[state=unchecked]:bg-[#DDDEE3]"
+                    className="h-5 w-9 flex-none data-[state=checked]:bg-brand data-[state=unchecked]:bg-[#DDDEE3]"
                   />
                 </div>
               </aside>

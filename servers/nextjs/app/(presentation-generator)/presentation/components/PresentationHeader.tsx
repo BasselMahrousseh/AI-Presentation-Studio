@@ -716,7 +716,7 @@ const PresentationHeader = ({
           <Popover open={open} onOpenChange={setOpen}>
             <PopoverTrigger asChild>
               <button
-                className="flex h-10 items-center gap-2 rounded-full bg-[#e60000] px-4 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(230,0,0,0.20)] transition-colors hover:bg-[#bf0000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e60000] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-10 items-center gap-2 rounded-full bg-brand px-4 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(230,0,0,0.20)] transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={isExporting || isStreaming === true}
               >
                 {isExporting ? (

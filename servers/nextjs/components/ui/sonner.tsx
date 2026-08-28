@@ -166,7 +166,7 @@ const Toaster = ({ icons, ...props }: ToasterProps) => {
         }
 
         [data-sonner-toast][data-type="loading"] [data-icon] {
-          color: rgb(124, 58, 237) !important;
+          color: hsl(var(--brand)) !important;
         }
 
         /* Outline buttons like the mock ("Got it!") */

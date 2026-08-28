@@ -176,15 +176,15 @@ export default function GenerationPageClient() {
               <span className="inline-flex h-9 items-center gap-2 rounded-full bg-[#f8f6f6] px-3 text-sm font-semibold text-[#3c3636]"><FileText className="h-4 w-4 text-[#e60000]" /> Presentation</span>
               <input ref={fileInputRef} type="file" accept={DOCUMENT_ACCEPT} multiple className="hidden" onChange={handleFilesSelected} />
               <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isGenerating || files.length >= MAX_ATTACHMENTS} className="inline-flex h-9 items-center gap-2 rounded-full border border-[#eee6e6] bg-white px-3 text-sm font-semibold text-[#5a4e4e] transition-colors hover:border-[#e6bcbc] hover:bg-[#fffafa] disabled:cursor-not-allowed disabled:opacity-55"><Paperclip className="h-4 w-4 text-[#d60000]" />{files.length > 0 ? `Attach files (${files.length})` : "Attach files"}</button>
-              <label className="relative min-w-0">
-                <LayoutTemplate className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9a7f7f]" />
+              <label className="relative inline-flex h-9 items-center min-w-0">
+                <LayoutTemplate className="pointer-events-none absolute inset-y-0 left-3 my-auto h-4 w-4 text-[#9a7f7f]" />
                 <select value={selectedTemplateId} disabled={templatesLoading || isGenerating} onChange={(event) => handleTemplateSelection(event.target.value)} className="h-9 max-w-[215px] appearance-none rounded-full border border-[#eee6e6] bg-white py-0 pl-9 pr-8 text-sm font-medium text-[#5a4e4e] outline-none transition focus:border-[#e60000] disabled:cursor-wait disabled:opacity-60">
                   <option value="">{templatesLoading ? "Loading templates…" : "Choose a template"}</option>
                   {defaultTemplates.length > 0 && <optgroup label="Built-in templates">{defaultTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</optgroup>}
                   {customTemplates.length > 0 && <optgroup label="Your templates">{customTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</optgroup>}
                   <optgroup label="Create"><option value={CUSTOM_TEMPLATE_VALUE}>Create a custom template…</option></optgroup>
                 </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#8d8080]" />
+                <ChevronDown className="pointer-events-none absolute inset-y-0 right-3 my-auto h-3.5 w-3.5 text-[#8d8080]" />
               </label>
             </div>
 
