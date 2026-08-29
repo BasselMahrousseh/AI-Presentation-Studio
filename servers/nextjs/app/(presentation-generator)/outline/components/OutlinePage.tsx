@@ -17,9 +17,11 @@ import {
 
 import Chat from "../../presentation/components/Chat";
 import { PresentationGenerationApi } from "../../services/api/presentation-generation";
-import { Sparkles } from "lucide-react";
+import { Sparkles, TableOfContents } from "lucide-react";
 import { useOutlineManagement } from "../hooks/useOutlineManagement";
 import { useOutlineStreaming } from "../hooks/useOutlineStreaming";
+import { usePresentationGeneration } from "../hooks/usePresentationGeneration";
+import { useTemplateSummaries } from "../../hooks/useTemplateSummaries";
 import EmptyStateView from "./EmptyStateView";
 import OutlineContent from "./OutlineContent";
 import OutlineStandardHeader from "./OutlineStandardHeader";
@@ -97,6 +99,26 @@ const OutlinePage: React.FC = () => {
     !isTemplateStage && (hasSelectedTemplate || autoStart)
   );
   const { handleDragEnd, handleAddSlide } = useOutlineManagement(outlines);
+
+  // The standard (non-Smart) generation path needs a template even when the
+  // autostart flow skips the template-picker stage, so resolve one silently
+  // in the background: the URL's suggested template, else the first default.
+  const presentonCloudOnly = useSelector(
+    (state: RootState) => state.userConfig.llm_config.LLM === "presenton"
+  );
+  const { defaultTemplates } = useTemplateSummaries({ presentonCloudOnly });
+  const standardTemplateId =
+    selectedTemplateId ??
+    defaultTemplates.find(
+      (template) =>
+        template.id === suggestedTemplate ||
+        template.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") ===
+          suggestedTemplate?.trim().toLowerCase()
+    )?.id ??
+    defaultTemplates[0]?.id ??
+    null;
+  const { loadingState: standardLoadingState, handleSubmit: generateStandardPresentation } =
+    usePresentationGeneration(presentation_id, standardTemplateId);
 
   const outlineControlsBusy =
     streamState.isLoading || streamState.isStreaming;
@@ -266,6 +288,12 @@ const OutlinePage: React.FC = () => {
         showProgress
         duration={30}
       />
+      <OverlayLoader
+        show={standardLoadingState.isLoading}
+        text={standardLoadingState.message}
+        showProgress={standardLoadingState.showProgress}
+        duration={standardLoadingState.duration}
+      />
 
       <OutlineStandardHeader
         title={isTemplateStage ? "Select Template" : "Outline Generation"}
@@ -354,6 +382,19 @@ const OutlinePage: React.FC = () => {
           <div className="pointer-events-none fixed bottom-6 left-5 right-5 z-50 flex justify-center sm:left-10 sm:right-10 lg:left-0 lg:right-[369px]">
             <div className="pointer-events-auto">
               <div className="flex flex-col gap-2 sm:flex-row">
+                <Button
+                  disabled={
+                    !isOutlineReady ||
+                    !standardTemplateId ||
+                    standardLoadingState.isLoading
+                  }
+                  onClick={() => void generateStandardPresentation()}
+                  variant="outline"
+                  className="h-11 w-full rounded-lg border-[#D9E0EA] bg-white px-5 text-sm font-semibold text-[#172a5c] shadow-sm hover:bg-[#F3F6FA] sm:w-auto"
+                >
+                  <TableOfContents size={16} />
+                  Generate Standard
+                </Button>
                 <Button
                   disabled={!isOutlineReady || isStartingSmartDeck}
                   onClick={() => handleSmartGeneration(true)}

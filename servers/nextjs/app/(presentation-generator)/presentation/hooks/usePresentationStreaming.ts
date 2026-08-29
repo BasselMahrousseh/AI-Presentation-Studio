@@ -4,6 +4,8 @@ import {
   clearPresentationData,
   setPresentationData,
   setStreaming,
+  setStreamStageMessage,
+  setStreamTotalSlides,
   type PresentationData,
 } from "@/store/slices/presentationGeneration";
 import { jsonrepair } from "jsonrepair";
@@ -299,6 +301,9 @@ export const usePresentationStreaming = (
 
         switch (data.type) {
           case "fonts": {
+            if (typeof data.total_slides === "number") {
+              dispatch(setStreamTotalSlides(data.total_slides));
+            }
             if (data.fonts && typeof data.fonts === "object") {
               const prev = store.getState().presentationGeneration.presentationData;
               dispatch(
@@ -312,9 +317,19 @@ export const usePresentationStreaming = (
             break;
           }
 
+          case "status": {
+            if (typeof data.status === "string" && data.status) {
+              dispatch(setStreamStageMessage(data.status));
+            }
+            break;
+          }
+
           case "slide_html": {
             const slideIndex = Number(data.index);
             const html = typeof data.html === "string" ? data.html : "";
+            if (typeof data.total_slides === "number") {
+              dispatch(setStreamTotalSlides(data.total_slides));
+            }
             if (!Number.isFinite(slideIndex) || !html) break;
 
             const incomingSlide =
@@ -346,6 +361,9 @@ export const usePresentationStreaming = (
           }
 
           case "chunk":
+            if (typeof data.total_slides === "number") {
+              dispatch(setStreamTotalSlides(data.total_slides));
+            }
             accumulatedChunks += data.chunk;
             const streamedSlide = parseStreamedSlideChunk(data.chunk);
             if (streamedSlide) {

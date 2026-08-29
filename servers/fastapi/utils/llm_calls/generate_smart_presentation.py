@@ -87,6 +87,15 @@ Overflow prevention is a hard requirement:
 - Cards containing text should use content-driven height (`h-auto`) unless a
   fixed height is essential. When fixed height is essential, reduce copy,
   padding, gaps, font size, and line height until the full text fits.
+- Never combine a fixed total height on an outer flex column with a
+  shrink-to-fit (`flex-1 min-h-0`) grid or row of text-heavy cards: the
+  individual cards do not shrink to match and silently overflow past the row's
+  box, colliding with whatever follows in the layout (e.g. a phase/step grid
+  overlapping a footer line beneath it). When a section holds several cards,
+  budget that section by the cards' real content height (title + body + list
+  items + padding) first, then size everything above and below it to fit the
+  remainder — reduce bullets, words, or padding per card until the true
+  content height fits, rather than shrinking the section to leftover space.
 - Use this font-size step-down ladder when space is tight: 48, 43, 36, 32, 28,
   24, 20, 18, 16, 14. Never reduce body text below 14px.
 - Never use `overflow-auto`, `overflow-scroll`, `overflow-x-auto`,

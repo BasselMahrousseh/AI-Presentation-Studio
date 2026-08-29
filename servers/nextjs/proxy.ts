@@ -30,6 +30,25 @@ function isFastApiApiPath(pathname: string): boolean {
   );
 }
 
+/**
+ * SSE stream endpoints. NextResponse.rewrite() below buffers the whole
+ * response before it reaches the browser, which silently breaks real-time
+ * streaming (every event arrives in one burst once generation finishes).
+ * These paths instead fall through to Next.js Route Handlers
+ * (app/api/v1/.../stream/[id]/route.ts) that manually pipe the FastAPI
+ * response through, which streams correctly. Keep this list in sync with
+ * those route handlers and with every `new EventSource(...)` call.
+ */
+const SSE_STREAM_PATH_PREFIXES = [
+  "/api/v1/ppt/presentation/stream/",
+  "/api/v2/ppt/presentation/stream/",
+  "/api/v1/ppt/outlines/stream/",
+];
+
+function isSseStreamPath(pathname: string): boolean {
+  return SSE_STREAM_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+}
+
 function isFastApiAssetPath(pathname: string): boolean {
   return (
     pathname === "/app_data" ||
@@ -48,9 +67,11 @@ function rewriteToFastApi(request: NextRequest): NextResponse {
 }
 
 function continueRequest(request: NextRequest): NextResponse {
-  return isFastApiApiPath(request.nextUrl.pathname)
-    ? rewriteToFastApi(request)
-    : NextResponse.next();
+  const { pathname } = request.nextUrl;
+  if (isSseStreamPath(pathname)) {
+    return NextResponse.next();
+  }
+  return isFastApiApiPath(pathname) ? rewriteToFastApi(request) : NextResponse.next();
 }
 
 type AuthStatus = {

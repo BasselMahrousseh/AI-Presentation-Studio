@@ -45,6 +45,8 @@ interface PresentationGenerationState {
   isLayoutLoading: boolean;
   enableHtmlSelector: boolean;
   chatHtmlSelection: ChatHtmlSelection | null;
+  streamTotalSlides: number | null;
+  streamStageMessage: string | null;
 }
 
 const initialState: PresentationGenerationState = {
@@ -58,6 +60,8 @@ const initialState: PresentationGenerationState = {
   presentationData: null,
   enableHtmlSelector: false,
   chatHtmlSelection: null,
+  streamTotalSlides: null,
+  streamStageMessage: null,
 };
 
 const presentationGenerationSlice = createSlice({
@@ -95,6 +99,14 @@ const presentationGenerationSlice = createSlice({
     clearPresentationData: (state) => {
       state.presentationData = null;
       state.chatHtmlSelection = null;
+      state.streamTotalSlides = null;
+      state.streamStageMessage = null;
+    },
+    setStreamTotalSlides: (state, action: PayloadAction<number>) => {
+      state.streamTotalSlides = action.payload;
+    },
+    setStreamStageMessage: (state, action: PayloadAction<string | null>) => {
+      state.streamStageMessage = action.payload;
     },
     clearOutlines: (state) => {
       state.outlines = [];
@@ -557,6 +569,8 @@ export const {
   setSlidesRendered,
   setError,
   clearPresentationData,
+  setStreamTotalSlides,
+  setStreamStageMessage,
   clearOutlines,
   deleteSlideOutline,
   setPresentationData,

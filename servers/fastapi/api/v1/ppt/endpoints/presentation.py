@@ -1739,6 +1739,7 @@ async def _stream_smart_presentation(
                             "slide_id": str(slide.id),
                             "html": slide.html_content,
                             "slide": slide.model_dump(mode="json"),
+                            "total_slides": len(existing_slides),
                         }
                     ),
                 ).to_string()
@@ -1817,7 +1818,13 @@ async def _stream_smart_presentation(
         logger.info("[smart-workflow] smart_generation_ready presentation_id=%s resolved_slides=%s generated_content_slides=%s source_context_chars=%s fonts=%s", presentation_id, slide_count, generated_slide_count, len(source_context), list(presentation.fonts.keys()))
         yield SSEResponse(
             event="response",
-            data=json.dumps({"type": "fonts", "fonts": presentation.fonts}),
+            data=json.dumps(
+                {
+                    "type": "fonts",
+                    "fonts": presentation.fonts,
+                    "total_slides": slide_count,
+                }
+            ),
         ).to_string()
         yield SSEStatusResponse(
             status=(
@@ -1912,6 +1919,7 @@ async def _stream_smart_presentation(
                             "slide_id": str(streamed_slide.id),
                             "html": streamed_slide.html_content,
                             "slide": streamed_slide.model_dump(mode="json"),
+                            "total_slides": slide_count,
                         }
                     ),
                 ).to_string()
@@ -1947,6 +1955,7 @@ async def _stream_smart_presentation(
                         "slide_id": str(title_slide.id),
                         "html": title_slide.html_content,
                         "slide": title_slide.model_dump(mode="json"),
+                        "total_slides": slide_count,
                     }
                 ),
             ).to_string()
@@ -1976,6 +1985,7 @@ async def _stream_smart_presentation(
                             "slide_id": str(final_slide.id),
                             "html": final_slide.html_content,
                             "slide": final_slide.model_dump(mode="json"),
+                            "total_slides": slide_count,
                         }
                     ),
                 ).to_string()
@@ -2005,6 +2015,7 @@ async def _stream_smart_presentation(
                         "slide_id": str(thank_you_slide.id),
                         "html": thank_you_slide.html_content,
                         "slide": thank_you_slide.model_dump(mode="json"),
+                        "total_slides": slide_count,
                     }
                 ),
             ).to_string()
@@ -2124,9 +2135,16 @@ async def stream_presentation(
                 await asset_events.put(slide_index)
 
         slides: List[SlideModel] = []
+        total_slides = len(structure.slides)
         yield SSEResponse(
             event="response",
-            data=json.dumps({"type": "chunk", "chunk": '{ "slides": [ '}),
+            data=json.dumps(
+                {
+                    "type": "chunk",
+                    "chunk": '{ "slides": [ ',
+                    "total_slides": total_slides,
+                }
+            ),
         ).to_string()
         yielded_slide_asset_sse_count = 0
 
@@ -2183,7 +2201,14 @@ async def stream_presentation(
 
             yield SSEResponse(
                 event="response",
-                data=json.dumps({"type": "chunk", "chunk": slide.model_dump_json()}),
+                data=json.dumps(
+                    {
+                        "type": "chunk",
+                        "chunk": slide.model_dump_json(),
+                        "slide_index": i,
+                        "total_slides": total_slides,
+                    }
+                ),
             ).to_string()
 
             while True:

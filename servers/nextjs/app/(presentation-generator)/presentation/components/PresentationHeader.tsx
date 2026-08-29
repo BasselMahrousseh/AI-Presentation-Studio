@@ -99,9 +99,27 @@ const PresentationHeader = ({
   const pathname = usePathname();
   const dispatch = useDispatch();
 
-  const { presentationData, isStreaming } = useSelector(
-    (state: RootState) => state.presentationGeneration
-  );
+  const {
+    presentationData,
+    isStreaming,
+    streamTotalSlides,
+    streamStageMessage,
+  } = useSelector((state: RootState) => state.presentationGeneration);
+
+  const slidesGenerated = presentationData?.slides?.length ?? 0;
+  const streamProgressLabel = (() => {
+    if (!isStreaming) return null;
+    if (streamTotalSlides && streamTotalSlides > 0) {
+      if (slidesGenerated === 0) {
+        return streamStageMessage || `Preparing ${streamTotalSlides} slides`;
+      }
+      if (slidesGenerated < streamTotalSlides) {
+        return `Generating slide ${slidesGenerated + 1} of ${streamTotalSlides}`;
+      }
+      return "Finishing up";
+    }
+    return streamStageMessage || "Generating presentation";
+  })();
   const { onUndo, onRedo, canUndo, canRedo } = usePresentationUndoRedo();
 
   useEffect(() => {
@@ -548,6 +566,12 @@ const PresentationHeader = ({
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          {streamProgressLabel && (
+            <div className="hidden items-center gap-2 rounded-full bg-[#fff5f5] px-3 py-2 text-xs font-medium text-[#e60000] sm:flex">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {streamProgressLabel}
+            </div>
+          )}
           {isPresentationSaving && (
             <div className="hidden items-center gap-2 rounded-full bg-[#f4faf8] px-3 py-2 text-xs font-medium text-[#18735d] sm:flex">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />

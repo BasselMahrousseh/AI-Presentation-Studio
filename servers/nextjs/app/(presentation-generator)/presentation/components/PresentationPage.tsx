@@ -254,9 +254,11 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
     const frame = window.requestAnimationFrame(() => {
       if (slidesLength <= 1) {
         scrollContainer.scrollTo({ top: 0, behavior: "auto" });
+        setSelectedSlide(0);
         return;
       }
 
+      setSelectedSlide(slidesLength - 1);
       scrollToSlide(slidesLength - 1, 2, "smooth");
     });
 

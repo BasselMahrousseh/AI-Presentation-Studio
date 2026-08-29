@@ -137,6 +137,89 @@ def _is_decorative(node: _LayoutNode) -> bool:
     return False
 
 
+def _is_flex_column(node: _LayoutNode) -> bool:
+    classes = node.classes
+    return "flex" in classes and "flex-col" in classes
+
+
+_NUMBERED_GRID_COLS_CLASS = re.compile(r"^grid-cols-(\d+)$")
+# Below this, Tailwind's numbered grid-cols-N utility still leaves each track
+# wide enough (at the slide's 1280px canvas) that text rarely wraps enough to
+# overflow a shrink-to-fit row; arbitrary templates like grid-cols-[1fr_120px_1fr]
+# are typically wide two-panel layouts, not narrow multi-card grids, and are
+# deliberately excluded — narrowing this to the pattern that actually broke in
+# practice keeps the false-positive rate low.
+_NARROW_GRID_COLUMN_THRESHOLD = 3
+
+
+def _numbered_grid_column_count(node: _LayoutNode) -> Optional[int]:
+    if "grid" not in node.classes:
+        return None
+    for token in node.classes:
+        match = _NUMBERED_GRID_COLS_CLASS.fullmatch(token)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _is_shrink_to_fit_row(node: _LayoutNode) -> bool:
+    classes = node.classes
+    return "flex-1" in classes and "min-h-0" in classes
+
+
+def _lacks_min_height_guard(node: _LayoutNode) -> bool:
+    return "min-h-0" not in node.classes
+
+
+def _find_shrink_to_fit_overflow_risks(root: _LayoutNode) -> list[str]:
+    """Flag a fixed-height flex column whose shrink-marked, narrow-column grid
+    cannot actually shrink, because its own card children have no `min-h-0`.
+    Those cards keep their natural content height, silently overflow past the
+    grid, and collide with whatever else is laid out in that column. Scoped to
+    numbered grid-cols-N (N>=3) grids specifically: narrower tracks wrap text
+    into more lines, which is what actually produces this overflow in
+    practice — wide two-panel `grid-cols-[...]` layouts rarely do."""
+    issues: list[str] = []
+    for column in _walk(root):
+        if _is_decorative(column) or not _is_flex_column(column):
+            continue
+        if _dimension_value(column, "height") is None:
+            continue
+
+        children = column.children
+        for index, child in enumerate(children):
+            if _is_decorative(child) or not _is_shrink_to_fit_row(child):
+                continue
+            column_count = _numbered_grid_column_count(child)
+            if column_count is None or column_count < _NARROW_GRID_COLUMN_THRESHOLD:
+                continue
+            cards = [card for card in child.children if not _is_decorative(card)]
+            if len(cards) < 2 or not any(
+                _lacks_min_height_guard(card) for card in cards
+            ):
+                continue
+            later_siblings = children[index + 1 :]
+            if any(
+                _is_meaningful(sibling) and not _is_decorative(sibling)
+                for sibling in later_siblings
+            ):
+                issues.append(
+                    f"A shrink-to-fit {column_count}-column grid (`flex-1 "
+                    "min-h-0` with `grid-cols-"
+                    f"{column_count}`) sits inside a fixed-height column and is "
+                    "followed by more content, but its own card children are "
+                    "missing `min-h-0` so they cannot actually shrink — narrow "
+                    "columns like this wrap text into extra lines, and the "
+                    "cards will overflow past the grid and collide with "
+                    "whatever comes after it. Either give the fixed-height "
+                    "column enough room for the cards' real content height, or "
+                    "drop the fixed height so the column sizes to its content "
+                    "instead of shrinking cards that cannot shrink."
+                )
+                break
+    return issues
+
+
 def _is_meaningful(node: _LayoutNode) -> bool:
     return bool(_visible_text(node)) or _contains_media(node)
 
@@ -285,5 +368,7 @@ def inspect_smart_slide_layout(html: str) -> list[str]:
                     issues.append(
                         "Absolutely positioned sibling content boxes overlap; reflow them with flex/grid and explicit gaps."
                     )
+
+    issues.extend(_find_shrink_to_fit_overflow_risks(root))
 
     return list(dict.fromkeys(issues))
