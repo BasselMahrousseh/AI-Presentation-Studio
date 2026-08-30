@@ -27,6 +27,7 @@ import {
 } from "../hooks";
 import { PresentationPageProps } from "../types";
 import { applyPresentationThemeToElement } from "../utils/applyPresentationThemeDom";
+import { getStreamProgressLabel } from "../utils/streamProgressLabel";
 
 import { replaceSlidesWithBlankFallback } from "@/store/slices/presentationGeneration";
 import {
@@ -92,6 +93,7 @@ interface LoadingState {
   message: string;
   showProgress: boolean;
   duration: number;
+  indeterminateProgress?: boolean;
   extra_info?: string;
 }
 
@@ -113,6 +115,7 @@ const STREAM_LOADING_STATE: LoadingState = {
   message: "Creating your presentation",
   showProgress: true,
   duration: 90,
+  indeterminateProgress: true,
   extra_info: "This can take a few minutes depending on slide count.",
 };
 
@@ -149,10 +152,15 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
   const shouldPreloadTemplateV2Presentation =
     searchParams.get("editor") === "v2" || searchParams.get("type") === "smart";
 
-  const { presentationData, isStreaming } = useSelector(
-    (state: RootState) => state.presentationGeneration
-  );
+  const { presentationData, isStreaming, streamTotalSlides, streamStageMessage } =
+    useSelector((state: RootState) => state.presentationGeneration);
   const slidesLength = presentationData?.slides?.length ?? 0;
+  const streamProgressLabel = getStreamProgressLabel({
+    isStreaming,
+    streamTotalSlides,
+    streamStageMessage,
+    slidesGenerated: slidesLength,
+  });
   const isSmartPresentation =
     searchParams.get("type") === "smart" ||
     presentationData?.type === "smart" ||
@@ -242,8 +250,16 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
       return;
     }
 
-    setLoadingState(stream ? STREAM_LOADING_STATE : DEFAULT_LOADING_STATE);
-  }, [loading, stream]);
+    if (!stream) {
+      setLoadingState(DEFAULT_LOADING_STATE);
+      return;
+    }
+
+    setLoadingState({
+      ...STREAM_LOADING_STATE,
+      message: streamProgressLabel || STREAM_LOADING_STATE.message,
+    });
+  }, [loading, stream, streamProgressLabel]);
 
   useEffect(() => {
     if (!isStreaming) return;
@@ -485,6 +501,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
         text={loadingState.message}
         showProgress={loadingState.showProgress}
         duration={loadingState.duration}
+        indeterminateProgress={loadingState.indeterminateProgress}
         extra_info={loadingState.extra_info}
       />
       <div

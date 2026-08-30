@@ -4,14 +4,18 @@ import React, { useEffect, useState, useRef } from 'react';
 interface ProgressBarProps {
     duration: number;
     onComplete?: () => void;
+    /** Skip the fake elapsed-time percentage and show an honest "still working" sweep instead. */
+    indeterminate?: boolean;
 }
 
-export const ProgressBar = ({ duration, onComplete }: ProgressBarProps) => {
+export const ProgressBar = ({ duration, onComplete, indeterminate = false }: ProgressBarProps) => {
     const [progress, setProgress] = useState(0);
     const progressInterval = useRef<NodeJS.Timeout | null>(null);
     const startTime = useRef<number>(Date.now());
 
     useEffect(() => {
+        if (indeterminate) return;
+
         const updateProgress = () => {
             const currentTime = Date.now();
             const elapsedTime = currentTime - startTime.current;
@@ -42,7 +46,30 @@ export const ProgressBar = ({ duration, onComplete }: ProgressBarProps) => {
                 clearInterval(progressInterval.current);
             }
         };
-    }, [duration, onComplete]);
+    }, [duration, onComplete, indeterminate]);
+
+    if (indeterminate) {
+        return (
+            <div className="w-full space-y-2">
+                <div className="h-2 w-full overflow-hidden rounded-full bg-[#f4d6d6]">
+                    <div className="h-full w-1/3 rounded-full bg-gradient-to-r from-[#b80000] via-[#e60000] to-[#ff4d4d] animate-indeterminate-sweep" />
+                </div>
+                <style jsx>{`
+                    @keyframes indeterminate-sweep {
+                        0% {
+                            transform: translateX(-100%);
+                        }
+                        100% {
+                            transform: translateX(300%);
+                        }
+                    }
+                    .animate-indeterminate-sweep {
+                        animation: indeterminate-sweep 1.2s ease-in-out infinite;
+                    }
+                `}</style>
+            </div>
+        );
+    }
 
     return (
         <div className="w-full space-y-2">
@@ -77,4 +104,4 @@ export const ProgressBar = ({ duration, onComplete }: ProgressBarProps) => {
             `}</style>
         </div>
     );
-}; 
+};

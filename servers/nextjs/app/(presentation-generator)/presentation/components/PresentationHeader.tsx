@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { sanitizeAnalyticsError } from "@/utils/analytics";
 import { v4 as uuidv4 } from "uuid";
+import { getStreamProgressLabel } from "../utils/streamProgressLabel";
 
 const MAX_EXPORT_TITLE_LENGTH = 40;
 
@@ -107,19 +108,12 @@ const PresentationHeader = ({
   } = useSelector((state: RootState) => state.presentationGeneration);
 
   const slidesGenerated = presentationData?.slides?.length ?? 0;
-  const streamProgressLabel = (() => {
-    if (!isStreaming) return null;
-    if (streamTotalSlides && streamTotalSlides > 0) {
-      if (slidesGenerated === 0) {
-        return streamStageMessage || `Preparing ${streamTotalSlides} slides`;
-      }
-      if (slidesGenerated < streamTotalSlides) {
-        return `Generating slide ${slidesGenerated + 1} of ${streamTotalSlides}`;
-      }
-      return "Finishing up";
-    }
-    return streamStageMessage || "Generating presentation";
-  })();
+  const streamProgressLabel = getStreamProgressLabel({
+    isStreaming,
+    streamTotalSlides,
+    streamStageMessage,
+    slidesGenerated,
+  });
   const { onUndo, onRedo, canUndo, canRedo } = usePresentationUndoRedo();
 
   useEffect(() => {

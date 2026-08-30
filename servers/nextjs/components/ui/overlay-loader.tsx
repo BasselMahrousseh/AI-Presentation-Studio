@@ -8,6 +8,8 @@ interface OverlayLoaderProps {
   show: boolean;
   showProgress?: boolean;
   duration?: number;
+  /** Show an honest "still working" sweep instead of a fabricated elapsed-time percentage. */
+  indeterminateProgress?: boolean;
   extra_info?: string;
   onProgressComplete?: () => void;
 }
@@ -18,6 +20,7 @@ export const OverlayLoader = ({
   show,
   showProgress = false,
   duration = 10,
+  indeterminateProgress = false,
   onProgressComplete,
   extra_info,
 }: OverlayLoaderProps) => {
@@ -55,7 +58,11 @@ export const OverlayLoader = ({
         <div className="overlay-loader-dots shrink-0" role="status" aria-label="Loading" />
         {showProgress ? (
           <div className="w-full space-y-6 pt-4">
-            <ProgressBar duration={duration} onComplete={onProgressComplete} />
+            <ProgressBar
+              duration={duration}
+              onComplete={onProgressComplete}
+              indeterminate={indeterminateProgress}
+            />
             {text && (
               <div className="space-y-1">
                 <p className="text-[#191919] text-base text-center font-semibold font-inter">
