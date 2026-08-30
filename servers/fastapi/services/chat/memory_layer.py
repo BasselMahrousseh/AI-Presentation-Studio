@@ -24,14 +24,19 @@ from services.image_generation_service import ImageGenerationService
 from services.mem0_presentation_memory_service import MEM0_PRESENTATION_MEMORY_SERVICE
 from services.temp_file_service import TEMP_FILE_SERVICE
 from templates.presentation_layout import PresentationLayoutModel, SlideLayoutModel
-from templates.v2.schema import get_template_schema
 from templates.v2.content import hydrate_repeated_top_level_groups
+from utils.presentation_layout_resolver import (
+    build_template_layout_model,
+    extract_template_id,
+    is_template_layout_payload,
+    resolve_template_layout_model,
+)
 from utils.asset_directory_utils import (
     filesystem_image_path_to_app_data_url,
     get_images_directory,
     normalize_slide_asset_url,
 )
-from utils.icon_weights import DEFAULT_ICON_WEIGHT, extract_icon_type_from_settings
+from utils.icon_weights import DEFAULT_ICON_WEIGHT
 from utils.latex_text import normalize_latex, replace_text_runs, text_runs_to_tagged_text
 from utils.outline_utils import get_presentation_title_from_presentation_outline
 from utils.outline_limits import normalize_outline_content
@@ -3555,49 +3560,15 @@ class PresentationChatMemoryLayer:
         self,
         presentation: PresentationModel,
     ) -> PresentationLayoutModel | None:
-        candidate_ids: list[str] = []
-        seen_ids: set[str] = set()
-
-        if isinstance(presentation.layout, dict):
-            for key in ("name", "template_id"):
-                template_id = self._extract_template_id(presentation.layout.get(key))
-                if template_id and template_id not in seen_ids:
-                    candidate_ids.append(template_id)
-                    seen_ids.add(template_id)
-
-        for template_id in candidate_ids:
-            template = await self._sql_session.get(TemplateV2, template_id)
-            if not template or not isinstance(template.layouts, dict):
-                continue
-            layout_payload = copy.deepcopy(template.layouts)
-            icon_type = extract_icon_type_from_settings(template.assets)
-            layout_payload["icon_type"] = icon_type
-            layout_payload["icon_weight"] = icon_type
-            return self._build_template_layout_model(
-                layout_payload,
-                layout_name=f"{CUSTOM_TEMPLATE_PREFIX}{template.id}",
-            )
-
-        return None
+        return await resolve_template_layout_model(presentation, self._sql_session)
 
     @staticmethod
     def _is_template_layout_payload(layout_payload: Any) -> bool:
-        return (
-            isinstance(layout_payload, dict)
-            and isinstance(layout_payload.get("layouts"), list)
-        )
+        return is_template_layout_payload(layout_payload)
 
     @staticmethod
     def _extract_template_id(value: Any) -> str | None:
-        if not isinstance(value, str) or not value:
-            return None
-
-        candidate = value.strip()
-        if not candidate:
-            return None
-        if candidate.startswith(CUSTOM_TEMPLATE_PREFIX):
-            candidate = candidate[len(CUSTOM_TEMPLATE_PREFIX) :].strip()
-        return candidate or None
+        return extract_template_id(value)
 
     @staticmethod
     def _build_template_layout_model(
@@ -3605,50 +3576,7 @@ class PresentationChatMemoryLayer:
         *,
         layout_name: str,
     ) -> PresentationLayoutModel:
-        template_schema = get_template_schema(layout_payload)
-        source_layouts = layout_payload.get("layouts")
-        if not isinstance(source_layouts, list):
-            source_layouts = []
-
-        slides: list[SlideLayoutModel] = []
-        for index, schema_layout in enumerate(template_schema["layouts"]):
-            if not isinstance(schema_layout, dict):
-                continue
-
-            source_layout = (
-                source_layouts[index]
-                if index < len(source_layouts)
-                and isinstance(source_layouts[index], dict)
-                else {}
-            )
-            layout_id = (
-                schema_layout.get("layout_id")
-                or source_layout.get("id")
-                or f"layout_{index + 1}"
-            )
-            layout_schema = schema_layout.get("schema")
-            if not isinstance(layout_schema, dict):
-                layout_schema = {
-                    "title": str(layout_id),
-                    "description": source_layout.get("description"),
-                }
-
-            slides.append(
-                SlideLayoutModel(
-                    id=str(layout_id),
-                    name=source_layout.get("name") or layout_schema.get("title"),
-                    description=source_layout.get("description")
-                    or layout_schema.get("description"),
-                    json_schema=layout_schema,
-                )
-            )
-
-        return PresentationLayoutModel(
-            name=layout_name,
-            ordered=False,
-            icon_type=extract_icon_type_from_settings(layout_payload),
-            slides=slides,
-        )
+        return build_template_layout_model(layout_payload, layout_name=layout_name)
 
     async def _build_template_slide_ui(
         self,

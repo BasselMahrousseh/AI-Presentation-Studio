@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
@@ -9,6 +9,7 @@ import {
   Copy,
   EllipsisVertical,
   Plus,
+  RefreshCw,
   Trash2,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -28,7 +29,9 @@ import {
   duplicatePresentationSlide,
   movePresentationSlide,
   replaceSlidesWithBlankFallback,
+  updateSlide,
 } from "@/store/slices/presentationGeneration";
+import { PresentationGenerationApi } from "../../services/api/presentation-generation";
 import { addToHistory } from "@/store/slices/undoRedoSlice";
 import { RootState } from "@/store/store";
 import { trackEvent, MixpanelEvent } from "@/utils/mixpanel";
@@ -56,6 +59,9 @@ interface SlideActionBarProps {
   revealOnGroupHover?: boolean;
 }
 
+const REGENERATE_SLIDE_PROMPT =
+  "Regenerate this slide with a fresh take on the same core content. Keep the same general topic and structure, but rewrite the wording and details.";
+
 const menuItemClass =
   "flex h-9 cursor-pointer select-none items-center gap-2.5 px-3 text-sm font-normal leading-none text-[#050505] outline-none transition-colors focus:bg-[#F7F6F9] data-[disabled]:pointer-events-none data-[disabled]:cursor-not-allowed data-[disabled]:text-[#9B9B9B]";
 
@@ -72,6 +78,12 @@ const SlideActionBar = ({
   const [showNewSlideSelection, setShowNewSlideSelection] = useState(false);
   const [isSpeakerPopoverOpen, setIsSpeakerPopoverOpen] = useState(false);
   const [isSlideMenuOpen, setIsSlideMenuOpen] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [menuView, setMenuView] = useState<"actions" | "regenerate-feedback">(
+    "actions"
+  );
+  const [regenerateFeedback, setRegenerateFeedback] = useState("");
+  const regenerateInputRef = useRef<HTMLInputElement>(null);
   const isStreaming = useSelector(
     (state: RootState) => state.presentationGeneration.isStreaming
   );
@@ -104,9 +116,23 @@ const SlideActionBar = ({
   const keepVisible =
     showNewSlideSelection || isSpeakerPopoverOpen || isSlideMenuOpen;
 
+  useEffect(() => {
+    if (menuView === "regenerate-feedback") {
+      regenerateInputRef.current?.focus();
+    }
+  }, [menuView]);
+
   if (!slide || !hasPresentation || slideCount === 0 || isStreaming) {
     return null;
   }
+
+  const handleSlideMenuOpenChange = (open: boolean) => {
+    setIsSlideMenuOpen(open);
+    if (!open) {
+      setMenuView("actions");
+      setRegenerateFeedback("");
+    }
+  };
 
   const rememberSlides = (actionType: string) => {
     const currentSlides = (store.getState() as RootState)
@@ -257,6 +283,49 @@ const SlideActionBar = ({
     });
   };
 
+  const handleRegenerateSlide = async (feedback?: string) => {
+    if (isRegenerating || !slide?.id) return;
+
+    const trimmedFeedback = feedback?.trim();
+    const prompt = trimmedFeedback
+      ? `${REGENERATE_SLIDE_PROMPT} Additionally, apply this specific feedback: ${trimmedFeedback}`
+      : REGENERATE_SLIDE_PROMPT;
+
+    setIsRegenerating(true);
+    rememberSlides("REGENERATE_SLIDE");
+    try {
+      const updatedSlide = isSmartSlide
+        ? await PresentationGenerationApi.editSlideHtml(
+            slide.id,
+            prompt,
+            slide.html_content
+          )
+        : await PresentationGenerationApi.editSlide(slide.id, prompt);
+
+      dispatch(updateSlide({ index: currentIndex, slide: updatedSlide }));
+      trackEvent(MixpanelEvent.Presentation_Slide_Regenerated, {
+        pathname,
+        presentation_id: presentationId,
+        slide_id: slide?.id,
+        slide_index: currentIndex,
+        layout: slideLayout,
+        is_smart_slide: Boolean(isSmartSlide),
+        has_feedback: Boolean(trimmedFeedback),
+      });
+      setMenuView("actions");
+      setRegenerateFeedback("");
+      setIsSlideMenuOpen(false);
+    } catch (error) {
+      console.error("error regenerating slide", error);
+      notify.error(
+        "Could not regenerate slide",
+        "Something went wrong while regenerating this slide. Please try again."
+      );
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
+
   const openTemplatePicker = () => {
     if (isTemplateFree) return;
 
@@ -396,7 +465,7 @@ const SlideActionBar = ({
 
           <DropdownMenu.Root
             open={isSlideMenuOpen}
-            onOpenChange={setIsSlideMenuOpen}
+            onOpenChange={handleSlideMenuOpenChange}
           >
             <DropdownMenu.Trigger asChild>
               <button
@@ -415,40 +484,101 @@ const SlideActionBar = ({
                 side="top"
                 align="end"
                 sideOffset={8}
-                className="z-[90] w-[188px] overflow-hidden rounded-[10px] border border-[#E6E6EC] bg-white py-2 font-syne shadow-[0_8px_24px_rgba(17,24,39,0.14)]"
+                className={cn(
+                  "z-[90] overflow-hidden rounded-[10px] border border-[#E6E6EC] bg-white font-syne shadow-[0_8px_24px_rgba(17,24,39,0.14)]",
+                  menuView === "regenerate-feedback" ? "w-[260px] p-3" : "w-[188px] py-2"
+                )}
               >
-                <DropdownMenu.Item
-                  disabled={hasReachedSlideLimit}
-                  className={menuItemClass}
-                  onSelect={handleDuplicateSlide}
-                >
-                  <Copy className="h-4 w-4 shrink-0 text-current" />
-                  <span>Duplicate Slide</span>
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  disabled={currentIndex <= 0}
-                  className={menuItemClass}
-                  onSelect={() => handleMoveSlide(currentIndex - 1)}
-                >
-                  <ArrowUp className="h-4 w-4 shrink-0 text-current" />
-                  <span>Move Up</span>
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  disabled={currentIndex >= slideCount - 1}
-                  className={menuItemClass}
-                  onSelect={() => handleMoveSlide(currentIndex + 1)}
-                >
-                  <ArrowDown className="h-4 w-4 shrink-0 text-current" />
-                  <span>Move Down</span>
-                </DropdownMenu.Item>
-                <DropdownMenu.Separator className="my-2 h-px bg-[#EDEEEF]" />
-                <DropdownMenu.Item
-                  className={menuItemClass}
-                  onSelect={handleDeleteSlide}
-                >
-                  <Trash2 className="h-4 w-4 shrink-0 text-current" />
-                  <span>Delete Slide</span>
-                </DropdownMenu.Item>
+                {menuView === "regenerate-feedback" ? (
+                  <div className="flex flex-col gap-2">
+                    <p className="px-0.5 text-xs font-medium text-[#6B6B6B]">
+                      Regenerate with feedback (optional)
+                    </p>
+                    <input
+                      ref={regenerateInputRef}
+                      type="text"
+                      value={regenerateFeedback}
+                      disabled={isRegenerating}
+                      onChange={(event) => setRegenerateFeedback(event.target.value)}
+                      onKeyDown={(event) => {
+                        event.stopPropagation();
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          handleRegenerateSlide(regenerateFeedback);
+                        }
+                      }}
+                      placeholder="e.g. make it more concise"
+                      className="h-9 w-full rounded-lg border border-[#E6E6EC] bg-white px-2.5 text-sm text-[#050505] outline-none placeholder:text-[#9B9B9B] focus:border-[#e60000] disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                    <div className="flex items-center justify-end gap-2 pt-0.5">
+                      <button
+                        type="button"
+                        disabled={isRegenerating}
+                        onClick={() => setMenuView("actions")}
+                        className="h-8 rounded-lg px-2.5 text-sm font-medium text-[#6B6B6B] transition-colors hover:bg-[#F7F6F9] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isRegenerating}
+                        onClick={() => handleRegenerateSlide(regenerateFeedback)}
+                        className="flex h-8 items-center gap-1.5 rounded-lg bg-[#172a5c] px-2.5 text-sm font-medium text-white transition-colors hover:bg-[#0f1d43] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <RefreshCw
+                          className={cn("h-3.5 w-3.5", isRegenerating && "animate-spin")}
+                        />
+                        <span>{isRegenerating ? "Regenerating…" : "Regenerate"}</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <DropdownMenu.Item
+                      disabled={hasReachedSlideLimit}
+                      className={menuItemClass}
+                      onSelect={handleDuplicateSlide}
+                    >
+                      <Copy className="h-4 w-4 shrink-0 text-current" />
+                      <span>Duplicate Slide</span>
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      disabled={currentIndex <= 0}
+                      className={menuItemClass}
+                      onSelect={() => handleMoveSlide(currentIndex - 1)}
+                    >
+                      <ArrowUp className="h-4 w-4 shrink-0 text-current" />
+                      <span>Move Up</span>
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      disabled={currentIndex >= slideCount - 1}
+                      className={menuItemClass}
+                      onSelect={() => handleMoveSlide(currentIndex + 1)}
+                    >
+                      <ArrowDown className="h-4 w-4 shrink-0 text-current" />
+                      <span>Move Down</span>
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      disabled={isRegenerating}
+                      className={menuItemClass}
+                      onSelect={(event) => {
+                        event.preventDefault();
+                        setMenuView("regenerate-feedback");
+                      }}
+                    >
+                      <RefreshCw className="h-4 w-4 shrink-0 text-current" />
+                      <span>Regenerate Slide</span>
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator className="my-2 h-px bg-[#EDEEEF]" />
+                    <DropdownMenu.Item
+                      className={menuItemClass}
+                      onSelect={handleDeleteSlide}
+                    >
+                      <Trash2 className="h-4 w-4 shrink-0 text-current" />
+                      <span>Delete Slide</span>
+                    </DropdownMenu.Item>
+                  </>
+                )}
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>

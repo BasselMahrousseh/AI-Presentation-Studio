@@ -101,6 +101,7 @@ export enum MixpanelEvent {
   Presentation_Slides_Reordered = 'Presentation Slides Reordered',
   Presentation_Slide_Added = 'Presentation Slide Added',
   Presentation_Slide_Deleted = 'Presentation Slide Deleted',
+  Presentation_Slide_Regenerated = 'Presentation Slide Regenerated',
   Presentation_Theme_Changed = 'Presentation Theme Changed',
   Presentation_Theme_Reset = 'Presentation Theme Reset',
   Presentation_Export_Started = 'Presentation Export Started',

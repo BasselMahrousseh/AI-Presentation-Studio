@@ -218,6 +218,33 @@ export class PresentationGenerationApi {
     }
   }
 
+  static async editSlideHtml(
+    slide_id: string,
+    prompt: string,
+    html?: string | null
+  ) {
+    try {
+      const response = await fetch(
+        getApiUrl(`/api/v1/ppt/slide/edit-html`),
+        {
+          method: "POST",
+          headers: getHeader(),
+          body: JSON.stringify({
+            id: slide_id,
+            prompt,
+            html: html ?? undefined,
+          }),
+          cache: "no-cache",
+        }
+      );
+
+      return await ApiResponseHandler.handleResponse(response, "Failed to update slide");
+    } catch (error) {
+      console.error("error in slide html update", error);
+      throw error;
+    }
+  }
+
   static async updatePresentationContent(body: unknown) {
     try {
       const response = await fetch(
