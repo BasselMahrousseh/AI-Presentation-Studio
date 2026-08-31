@@ -162,6 +162,26 @@ def _numbered_grid_column_count(node: _LayoutNode) -> Optional[int]:
     return None
 
 
+_ARBITRARY_GRID_COLS_CLASS = re.compile(r"^grid-cols-\[(.+)\]$")
+
+
+def _arbitrary_grid_column_count(node: _LayoutNode) -> Optional[int]:
+    """Column count for an arbitrary grid template like
+    `grid-cols-[0.88fr_1.12fr]` (Tailwind escapes literal spaces inside
+    bracket values as underscores). Deliberately separate from the numbered
+    check above — a class token can never match both patterns, so there is
+    no overlap between the two."""
+    if "grid" not in node.classes:
+        return None
+    for token in node.classes:
+        match = _ARBITRARY_GRID_COLS_CLASS.fullmatch(token)
+        if match:
+            tracks = [part for part in re.split(r"[_\s]+", match.group(1)) if part]
+            if tracks:
+                return len(tracks)
+    return None
+
+
 def _is_shrink_to_fit_row(node: _LayoutNode) -> bool:
     classes = node.classes
     return "flex-1" in classes and "min-h-0" in classes
@@ -217,6 +237,221 @@ def _find_shrink_to_fit_overflow_risks(root: _LayoutNode) -> list[str]:
                     "instead of shrinking cards that cannot shrink."
                 )
                 break
+    return issues
+
+
+def _find_shrink_marked_grid_overflow_risks(root: _LayoutNode) -> list[str]:
+    """Flag a `min-h-0`-marked grid row sitting inside an effectively
+    fixed-height flex column, whose card children can't actually shrink
+    (missing their own `min-h-0`) and are followed by more content.
+    Generalizes the shrink-to-fit check above two ways real generation has
+    produced: (1) the outer column's fixed height can come from
+    `position: absolute` with both `top-*` and `bottom-*` set, not just an
+    explicit `h-*` class; (2) the row can use an arbitrary two-panel
+    template like `grid-cols-[0.88fr_1.12fr]`, not just a numbered
+    `grid-cols-N`. Flex children shrink by default (`flex-shrink: 1`) —
+    `min-h-0` alone, without `flex-1`, is enough to remove the min-content
+    floor that would otherwise keep them from collapsing below their real
+    content height, so `flex-1` is not required here the way the check
+    above requires it."""
+    issues: list[str] = []
+    for column in _walk(root):
+        if _is_decorative(column) or not _is_flex_column(column):
+            continue
+        if not _has_effective_fixed_height(column):
+            continue
+
+        children = column.children
+        for index, child in enumerate(children):
+            if _is_decorative(child) or "min-h-0" not in child.classes:
+                continue
+            column_count = _arbitrary_grid_column_count(child)
+            if column_count is None or column_count < _MIN_CARD_ROW_COLUMNS:
+                continue
+            cards = [card for card in child.children if not _is_decorative(card)]
+            if len(cards) < 2 or not any(
+                _lacks_min_height_guard(card) and _is_meaningful(card)
+                for card in cards
+            ):
+                continue
+            later_siblings = children[index + 1 :]
+            if any(
+                _is_meaningful(sibling) and not _is_decorative(sibling)
+                for sibling in later_siblings
+            ):
+                issues.append(
+                    f"A `min-h-0`-marked {column_count}-column row "
+                    "(`grid-cols-[...]`) sits inside a fixed-height column "
+                    "(fixed via an explicit height or `position: absolute` "
+                    "with both `top`/`bottom` set) and is followed by more "
+                    "content, but at least one of its card children has no "
+                    "`min-h-0` of its own. Flex children shrink by default, "
+                    "so when the row is compressed to fit, that card's real "
+                    "content does not shrink with it and silently overflows "
+                    "past the row, colliding with whatever comes after. "
+                    "Either give the fixed-height column enough room for "
+                    "every card's real content, or drop `min-h-0` from this "
+                    "row (and the outer column's fixed height, if needed) so "
+                    "nothing is forced to shrink below its content."
+                )
+                break
+    return issues
+
+
+_MIN_CARD_ROW_COLUMNS = 2
+_CARD_HEIGHT_CHARS_PER_PIXEL = 0.75
+_CARD_HEIGHT_OVERHEAD_CHARS = 5.0
+_CARD_ROW_GAP_PX = 16.0
+_CARD_ROW_SAFE_WIDTH_PX = 1216.0
+# Calibration reference: a real ~292px-wide card (one cell of a 4-column row
+# at the 1216px safe content width) with ~240 combined characters of heading
+# + body text visibly overflowed past its own border when given a 220px
+# fixed height, but fit — with a little margin — at 380px. The formula below
+# is fit to those two measured points, then scaled by estimated column width
+# for other column counts. It cannot know real text wrapping or font
+# metrics; it exists only to catch clearly excessive cases, not to validate
+# borderline ones.
+_CARD_WIDTH_CALIBRATION_PX = 292.0
+
+
+def _estimated_column_width(column_count: int) -> float:
+    return max(
+        (_CARD_ROW_SAFE_WIDTH_PX - (column_count - 1) * _CARD_ROW_GAP_PX)
+        / column_count,
+        100.0,
+    )
+
+
+def _estimated_card_text_capacity(height_px: float, column_count: int) -> float:
+    width_scale = _estimated_column_width(column_count) / _CARD_WIDTH_CALIBRATION_PX
+    return max(
+        (_CARD_HEIGHT_CHARS_PER_PIXEL * height_px - _CARD_HEIGHT_OVERHEAD_CHARS)
+        * width_scale,
+        0.0,
+    )
+
+
+def _find_fixed_height_card_text_overflow_risks(root: _LayoutNode) -> list[str]:
+    """Flag a card with an explicit fixed height, inside a multi-column card
+    row, whose own combined text is clearly more than that height can hold.
+    Unlike the shrink-to-fit check above, this needs no `position: absolute`
+    geometry and no `flex-1 min-h-0` wrapper — just a plain row of cards
+    where one card's own text doesn't fit its own declared height. That
+    overflow never crosses the canvas edge and the card is never
+    `position: absolute`, so nothing else in this module can see it."""
+    issues: list[str] = []
+    for row in _walk(root):
+        if _is_decorative(row):
+            continue
+        column_count = _numbered_grid_column_count(row)
+        if column_count is None or column_count < _MIN_CARD_ROW_COLUMNS:
+            continue
+        for card in row.children:
+            if _is_decorative(card):
+                continue
+            height = _dimension_value(card, "height")
+            if height is None:
+                continue
+            text_length = len(_visible_text(card))
+            if text_length == 0:
+                continue
+            capacity = _estimated_card_text_capacity(height, column_count)
+            if text_length > capacity:
+                issues.append(
+                    f"A card with a fixed height of {height:.0f}px in a "
+                    f"{column_count}-column row holds about {text_length} "
+                    "characters of combined text — clearly more than that "
+                    "height can fit, so it will overflow past its own "
+                    "border. Shorten the card's text, or drop the fixed "
+                    "height so it sizes to its content (`h-auto`) instead."
+                )
+    return issues
+
+
+_MIN_STACKED_LIST_ITEMS = 4
+_MIN_ITEM_TEXT_CHARACTERS = 20
+
+
+def _has_fixed_or_matched_height(node: _LayoutNode) -> bool:
+    """True for a container whose height is imposed by its layout context —
+    either an explicit pixel height, or `h-full`/`self-stretch`, which
+    stretches it to match a sibling (e.g. a full-height side rail next to a
+    card grid). Content that stacks past this externally-imposed height has
+    nowhere to go but past the bottom edge."""
+    if _dimension_value(node, "height") is not None:
+        return True
+    return bool({"h-full", "self-stretch"} & node.classes)
+
+
+def _has_effective_fixed_height(node: _LayoutNode) -> bool:
+    """True for everything `_has_fixed_or_matched_height` catches, plus a
+    container whose height is implied by `position: absolute` with both
+    `top-*` and `bottom-*` set — a real pattern this generator produces
+    (e.g. `absolute top-[72px] bottom-[96px]`) that never sets an explicit
+    `h-*` class at all, so `_has_fixed_or_matched_height` alone misses it."""
+    if _has_fixed_or_matched_height(node):
+        return True
+    return (
+        _is_positioned(node)
+        and _edge_value(node, "top") is not None
+        and _edge_value(node, "bottom") is not None
+    )
+
+
+def _is_item_block(node: _LayoutNode) -> bool:
+    return len(_visible_text(node)) >= _MIN_ITEM_TEXT_CHARACTERS
+
+
+def _stacked_items(container: _LayoutNode) -> list[_LayoutNode]:
+    """Direct children that look like list items. A panel commonly wraps its
+    list in its own container alongside sibling heading/label elements (a
+    `panel > label + heading + list-wrapper > items` shape) — so also look one
+    level into any flex-column child and take whichever reading (direct
+    children, or the richest nested wrapper) finds more items."""
+    candidates = [
+        child for child in container.children if not _is_decorative(child)
+    ]
+    direct_items = [child for child in candidates if _is_item_block(child)]
+    nested_items: list[_LayoutNode] = []
+    for child in candidates:
+        if not _is_flex_column(child):
+            continue
+        inner = [
+            grandchild
+            for grandchild in child.children
+            if not _is_decorative(grandchild) and _is_item_block(grandchild)
+        ]
+        if len(inner) > len(nested_items):
+            nested_items = inner
+    return nested_items if len(nested_items) >= len(direct_items) else direct_items
+
+
+def _find_stacked_list_overflow_risks(root: _LayoutNode) -> list[str]:
+    """Flag a height-matched panel (e.g. a full-height dark side rail) that
+    stacks four or more text-heavy items in normal flow. Unlike a
+    shrink-to-fit grid row colliding with a sibling below, a plain vertical
+    stack has no sibling to collide with — it just grows past its own
+    imposed height and gets clipped by the canvas's own `overflow-hidden`,
+    which is why the checks above never catch it."""
+    issues: list[str] = []
+    for container in _walk(root):
+        if _is_decorative(container) or not _is_flex_column(container):
+            continue
+        if not _has_fixed_or_matched_height(container):
+            continue
+        items = _stacked_items(container)
+        if len(items) < _MIN_STACKED_LIST_ITEMS:
+            continue
+        issues.append(
+            f"A height-matched panel (`h-full` or a fixed height) stacks "
+            f"{len(items)} text-heavy items in normal flow with nothing to "
+            "shrink them. A vertical stack like this has no sibling to "
+            "collide with, so it overflows silently — it grows past its own "
+            "height and gets clipped by the canvas's `overflow-hidden`. "
+            "Reduce the item count, shorten each item to roughly one line, "
+            "or drop the fixed/`h-full` height so the panel sizes to its "
+            "real content instead."
+        )
     return issues
 
 
@@ -370,5 +605,8 @@ def inspect_smart_slide_layout(html: str) -> list[str]:
                     )
 
     issues.extend(_find_shrink_to_fit_overflow_risks(root))
+    issues.extend(_find_shrink_marked_grid_overflow_risks(root))
+    issues.extend(_find_fixed_height_card_text_overflow_risks(root))
+    issues.extend(_find_stacked_list_overflow_risks(root))
 
     return list(dict.fromkeys(issues))

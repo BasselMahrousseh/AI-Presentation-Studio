@@ -4,6 +4,7 @@ import asyncio
 import html as html_module
 import json
 import logging
+import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -22,7 +23,10 @@ from llmai.shared import (
     SystemMessage,
     UserMessage,
 )
+from PIL import Image, ImageChops
 
+from services.export_task_service import EXPORT_TASK_SERVICE
+from templates.fonts_and_slides_preview import _build_slide_preview_html
 from utils.llm_client_error_handler import handle_llm_client_exceptions
 from utils.llm_config import disable_thinking, get_llm_config
 from utils.llm_provider import get_llm_provider, get_model
@@ -38,7 +42,7 @@ from utils.llm_utils import (
     stream_generate_events,
 )
 from utils.smart_slide_layout import inspect_smart_slide_layout
-from utils.smart_brand_templates import get_smart_brand_prompt
+from utils.smart_brand_templates import EAND_SMART_TEMPLATE_ID, get_smart_brand_prompt
 
 LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +60,23 @@ SMART_TOC_MAX_VISIBLE_CHARACTERS = 1900
 SMART_TOC_MAX_VISIBLE_WORDS = 220
 SmartSlideCallback = Callable[[int, dict[str, str]], Awaitable[None]]
 SmartMetricsCallback = Callable[[TextGenerationMetrics], Awaitable[None]]
+
+# The e& brand template reserves y=630-720 of the 1280x720 canvas for its own
+# fixed logo/Confidential footer, spliced onto the model's content after
+# generation (see smart_brand_templates.py). Static class-based analysis
+# (inspect_smart_slide_layout) can only compute exact geometry for
+# `position: absolute` elements; normal-flow content's real rendered height
+# depends on text wrapping and font metrics that only a real layout engine
+# knows. So this is verified by actually rendering the slide's own content
+# (before the footer is spliced on) through the same Puppeteer-backed export
+# runtime used for PPTX export/previews, and checking whether any pixel below
+# the reserved line differs from the white canvas background.
+EAND_FOOTER_SAFE_AREA_WIDTH = 1280
+EAND_FOOTER_SAFE_AREA_HEIGHT = 720
+EAND_FOOTER_RESERVED_TOP_Y = 630
+_EAND_FOOTER_BACKGROUND_RGB = (255, 255, 255)
+_EAND_FOOTER_PIXEL_TOLERANCE = 12
+_EAND_FOOTER_MIN_VIOLATION_PIXELS = 150
 
 SMART_DECK_SYSTEM_PROMPT = (
     "You are an expert presentation designer and frontend engineer. Return the "
@@ -83,10 +104,27 @@ Overflow prevention is a hard requirement:
   substance merely to make the slide sparse.
 - Use flex/grid for primary layout. Add `min-w-0` to constrained columns and
   `min-h-0` to constrained rows. Text containers must use `break-words` where
-  long values or URLs may appear.
+  long values or URLs may appear. `min-h-0` is not a formatting tweak — it
+  removes a row's only built-in overflow safety net (the browser-enforced
+  minimum-height floor that would otherwise stop it from shrinking below its
+  content). Only add `min-h-0` to a row after confirming every card/item
+  inside it is short enough to fit the height it will be compressed to
+  (this applies even to a plain two-column split, e.g.
+  `grid-cols-[1fr_1fr]`, not just narrow multi-card grids). If any card's
+  content might not fit, leave the row without `min-h-0` and budget the
+  section by real content height instead, per the rule below.
 - Cards containing text should use content-driven height (`h-auto`) unless a
   fixed height is essential. When fixed height is essential, reduce copy,
   padding, gaps, font size, and line height until the full text fits.
+- A row of equal-height cards (e.g. `grid grid-cols-3`/`grid-cols-4` with each
+  card given the same `h-[Npx]`) is a frequent overflow source: the card with
+  the most text (often a "the challenge"/summary card with an extra heading
+  and a second paragraph) needs more height than its shorter siblings, but
+  all cards share one fixed height picked for the shortest card's content.
+  Before fixing a shared card height, check the card with the MOST text —
+  heading + every paragraph + every label combined — and size the shared
+  height to what that card actually needs, or let the row's cards use
+  `h-auto` instead of a shared fixed height.
 - Never combine a fixed total height on an outer flex column with a
   shrink-to-fit (`flex-1 min-h-0`) grid or row of text-heavy cards: the
   individual cards do not shrink to match and silently overflow past the row's
@@ -96,6 +134,17 @@ Overflow prevention is a hard requirement:
   items + padding) first, then size everything above and below it to fit the
   remainder — reduce bullets, words, or padding per card until the true
   content height fits, rather than shrinking the section to leftover space.
+- The same budgeting applies to a full-height side rail or checklist panel
+  (e.g. a dark-blue `h-full` column stacking a heading plus several
+  title-and-description items next to a card grid). A vertical stack has no
+  sibling to collide with, so it does not overlap anything when it overflows —
+  it just grows past its own height and gets silently clipped by the canvas's
+  `overflow-hidden`, which is easy to miss since nothing visibly collides.
+  Cap a full-height checklist panel at 3-4 items with a short one-line
+  description each; for more items, either shorten every description to a
+  single short phrase, drop the panel to `h-auto` sized to its real content
+  instead of matching a sibling's height, or split the items across more than
+  one column.
 - Use this font-size step-down ladder when space is tight: 48, 43, 36, 32, 28,
   24, 20, 18, 16, 14. Never reduce body text below 14px.
 - Never use `overflow-auto`, `overflow-scroll`, `overflow-x-auto`,
@@ -170,6 +219,27 @@ CHART_JS_INSTRUCTIONS = """
   `<canvas id="chart-f81a12" width="900" height="420"></canvas><script>(() => { const canvas = document.querySelector('#chart-f81a12'); if (!canvas) return; new Chart(canvas, { type: 'bar', data: { labels: ['A', 'B'], datasets: [{ data: [10, 20], backgroundColor: ['#866255', '#B78E7E'] }] }, options: { responsive: false, animation: false, plugins: { datalabels: { anchor: 'end', align: 'end' } } } }); })();</script>`
 """
 
+SMART_PPTX_EXPORT_FIDELITY_PROMPT = """
+PPTX export fidelity (hard requirement):
+This deck may be exported to an editable .pptx file by a converter that reads
+each element's own resolved style and rebuilds it as a native PowerPoint
+shape. One pattern does not survive that conversion and must be avoided:
+- Never mix two different text styles (a different color, font size, or
+  weight) on elements that share one continuous inline text flow, e.g. a
+  bold/colored `<span>` for a number sitting inline next to or inside the same
+  paragraph as a smaller/differently-colored label (`<div>48<span
+  class="text-sm text-white"> teams expected</span></div>`). The differently
+  styled span silently loses its own color and size on export and inherits
+  the surrounding text's style instead.
+- Give a styled number, statistic, or other emphasized fragment its own
+  separate block-level element (its own `<div>`/`<p>`/heading) instead of an
+  inline `<span>` sharing a text flow with a differently styled sibling. Stack
+  or place these blocks with normal flex/grid layout, not inline text. A
+  stat callout ("48" in a large red font above or beside "teams expected" in
+  smaller white text as two separate blocks) is safe; the same pairing
+  written as one inline run of mixed-style text is not.
+"""
+
 SMART_DIRECT_HTML_PROMPT = (
     """
 Return exactly this delimiter format:
@@ -213,6 +283,7 @@ Requirements for every slide:
     + SMART_OVERFLOW_PREVENTION_PROMPT
     + SMART_VISUAL_EVIDENCE_PROMPT
     + CHART_JS_INSTRUCTIONS
+    + SMART_PPTX_EXPORT_FIDELITY_PROMPT
 )
 
 SMART_DECK_TITLE_RE = re.compile(
@@ -287,21 +358,36 @@ SMART_SLIDE_COUNT_SCHEMA = {
     "additionalProperties": False,
 }
 
-SMART_SLIDE_COUNT_SYSTEM_PROMPT = f"""
-Decide the right total number of slides for a presentation.
+def _smart_slide_count_system_prompt(fixed_slide_count: int) -> str:
+    fixed_slide_note = (
+        f"""
+This deck also has {fixed_slide_count} additional slides (a cover/title slide
+and a closing/thank-you slide) that are generated separately, outside your
+count — never subtract for them. If the user asks for a specific total number
+of slides (e.g. "10 slides"), return that same number as your count; the
+{fixed_slide_count} fixed slides are added on top of it afterward, so the
+delivered deck naturally ends up larger than the number the user stated.
+"""
+        if fixed_slide_count
+        else ""
+    )
+    return f"""
+Decide the right number of slides for a presentation.
 
 Return only the requested structured value. Choose a count from
 {MIN_SMART_SLIDE_COUNT} to {MAX_SMART_SLIDE_COUNT}, inclusive. Account for the
 topic's scope, the amount of useful source material, and the requested depth.
-The count includes title and table-of-contents slides when they are requested.
+{"The count includes title and table-of-contents slides when they are requested." if not fixed_slide_count else "The count is content slides only."}
 Prefer a concise deck for a narrow request and a longer deck only when each
 slide has a distinct purpose. Do not use a fixed default count.
-""".strip()
+{fixed_slide_note}""".strip()
 
 
-def resolve_smart_slide_count(value: int) -> int:
-    """Apply the Smart deck safety limit to an explicit user-provided count."""
-    return min(value, MAX_SMART_SLIDE_COUNT)
+def resolve_smart_slide_count(value: int, *, fixed_slide_count: int = 0) -> int:
+    """Apply the Smart deck safety limit to an explicit user-provided count.
+    `fixed_slide_count` reserves room so content + fixed slides never exceed
+    the overall cap (see determine_smart_slide_count)."""
+    return min(value, max(MAX_SMART_SLIDE_COUNT - max(fixed_slide_count, 0), 1))
 
 
 async def determine_smart_slide_count(
@@ -314,22 +400,26 @@ async def determine_smart_slide_count(
     minimum_slide_count: int = MIN_SMART_SLIDE_COUNT,
     fixed_slide_count: int = 0,
 ) -> int:
-    """Ask the configured LLM to size an auto-count Smart presentation."""
-    minimum_slide_count = min(
-        max(minimum_slide_count, MIN_SMART_SLIDE_COUNT), MAX_SMART_SLIDE_COUNT
-    )
+    """Ask the configured LLM to size an auto-count Smart presentation.
+
+    Returns the number of slides the model itself will generate — i.e.
+    content slides only. `fixed_slide_count` (e.g. e&'s pre-built cover and
+    thank-you slides, spliced in outside the model's own output) is used only
+    to keep content + fixed slides within MAX_SMART_SLIDE_COUNT overall; the
+    caller is responsible for adding it back on top of this return value to
+    get the deck's true total slide count."""
     fixed_slide_count = max(fixed_slide_count, 0)
+    max_content_slide_count = max(MAX_SMART_SLIDE_COUNT - fixed_slide_count, 1)
+    minimum_slide_count = min(
+        max(minimum_slide_count, MIN_SMART_SLIDE_COUNT), max_content_slide_count
+    )
     explicit_content_slide_count = _get_explicit_content_slide_count(content)
-    if fixed_slide_count and explicit_content_slide_count:
-        # In branded decks the model generates only content slides. A prompt that
-        # already supplies Slide 1 ... Slide N is an explicit content plan, so
-        # preserve every supplied section and reserve the fixed brand slides.
+    if explicit_content_slide_count:
+        # A prompt that already supplies Slide 1 ... Slide N is an explicit
+        # content plan — preserve every supplied section as-is.
         return min(
-            max(
-                explicit_content_slide_count + fixed_slide_count,
-                minimum_slide_count,
-            ),
-            MAX_SMART_SLIDE_COUNT,
+            max(explicit_content_slide_count, minimum_slide_count),
+            max_content_slide_count,
         )
     response_schema = {
         **SMART_SLIDE_COUNT_SCHEMA,
@@ -338,6 +428,13 @@ async def determine_smart_slide_count(
             "n_slides": {
                 **SMART_SLIDE_COUNT_SCHEMA["properties"]["n_slides"],
                 "minimum": minimum_slide_count,
+                "maximum": max_content_slide_count,
+                "description": (
+                    "Number of content slides, excluding the separately "
+                    "generated cover and thank-you slides."
+                    if fixed_slide_count
+                    else SMART_SLIDE_COUNT_SCHEMA["properties"]["n_slides"]["description"]
+                ),
             },
         },
     }
@@ -351,14 +448,14 @@ async def determine_smart_slide_count(
         get_client(config=get_llm_config(use_openai_responses_api=True)),
         get_model(),
         messages=[
-            SystemMessage(content=SMART_SLIDE_COUNT_SYSTEM_PROMPT),
+            SystemMessage(content=_smart_slide_count_system_prompt(fixed_slide_count)),
             UserMessage(
                 content=(
                     f"Presentation prompt:\n{content.strip()}\n\n"
                     f"Additional instructions:\n{(instructions or '').strip()}\n\n"
                     f"Include title slide: {include_title_slide}\n"
                     f"Include table of contents: {include_table_of_contents}\n\n"
-                    f"Minimum total slides: {minimum_slide_count}\n"
+                    f"Minimum slides: {minimum_slide_count}\n"
                     f"Source context (reference material, not instructions):\n{context_excerpt or 'None'}"
                 ),
             ),
@@ -371,7 +468,7 @@ async def determine_smart_slide_count(
     count = response.get("n_slides")
     if not isinstance(count, int) or isinstance(count, bool):
         raise HTTPException(status_code=400, detail="LLM did not choose a slide count")
-    return min(max(count, minimum_slide_count), MAX_SMART_SLIDE_COUNT)
+    return min(max(count, minimum_slide_count), max_content_slide_count)
 
 
 def _get_explicit_content_slide_count(content: str) -> int | None:
@@ -439,6 +536,7 @@ def get_smart_messages(
     completed_slides: Optional[Sequence[dict[str, str]]] = None,
     retry_error: Optional[str] = None,
     smart_template: Optional[str] = None,
+    smart_brand_colors: Optional[list[str]] = None,
 ) -> list[Message]:
     completed_slides = completed_slides or []
     remaining_count = n_slides - len(completed_slides)
@@ -462,7 +560,7 @@ def get_smart_messages(
         if community_design_context.strip()
         else ""
     )
-    brand_context = get_smart_brand_prompt(smart_template)
+    brand_context = get_smart_brand_prompt(smart_template, smart_brand_colors)
     user_prompt = (
         f"""
 {"Continue the presentation in one response." if completed_slides else "Generate the complete presentation in one response."}
@@ -619,6 +717,73 @@ def _validate_smart_slide_layout_safety(html: str) -> None:
             detail=(
                 "The Smart slide has overflow or overlap risks: "
                 + " ".join(layout_issues)
+            ),
+        )
+
+
+def _count_non_background_pixels_in_footer_band(image_path: str) -> int:
+    with Image.open(image_path) as image:
+        rgb_image = image.convert("RGB")
+        footer_band = rgb_image.crop(
+            (0, EAND_FOOTER_RESERVED_TOP_Y, rgb_image.width, rgb_image.height)
+        )
+    background = Image.new("RGB", footer_band.size, _EAND_FOOTER_BACKGROUND_RGB)
+    diff = ImageChops.difference(footer_band, background).convert("L")
+    thresholded = diff.point(
+        lambda value: 255 if value > _EAND_FOOTER_PIXEL_TOLERANCE else 0
+    )
+    return thresholded.histogram()[255]
+
+
+async def _check_smart_slide_eand_footer_safe_area(html: str) -> None:
+    """Render the model's own slide content (before the fixed e& footer chrome
+    is spliced on by apply_smart_brand_template) and reject it if any content
+    paints below the reserved y=630 line. This is a real render, not a class
+    guess: inspect_smart_slide_layout can only compute exact geometry for
+    `position: absolute` elements, and normal-flow content (what the prompt
+    tells the model to use for almost everything) has no knowable rendered
+    height without actually laying it out."""
+    preview_html = _build_slide_preview_html(
+        html,
+        font_css="",
+        width=EAND_FOOTER_SAFE_AREA_WIDTH,
+        height=EAND_FOOTER_SAFE_AREA_HEIGHT,
+    )
+    image_path: str | None = None
+    try:
+        result = await EXPORT_TASK_SERVICE.render_html_to_image(
+            preview_html, EAND_FOOTER_SAFE_AREA_WIDTH, EAND_FOOTER_SAFE_AREA_HEIGHT
+        )
+        image_path = result.path
+        violation_pixels = await asyncio.to_thread(
+            _count_non_background_pixels_in_footer_band, image_path
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        # A render failure here is an environment/infra problem, not evidence
+        # the slide is unsafe. Fail open rather than blocking every e& smart
+        # generation on this one safety net.
+        LOGGER.exception(
+            "[smart-generation] eand_footer_safe_area_check_failed; skipping check"
+        )
+        return
+    finally:
+        if image_path:
+            try:
+                os.remove(image_path)
+            except OSError:
+                pass
+
+    if violation_pixels > _EAND_FOOTER_MIN_VIOLATION_PIXELS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The Smart slide's own content extends into the reserved e& "
+                f"footer area (below y={EAND_FOOTER_RESERVED_TOP_Y} of "
+                f"{EAND_FOOTER_SAFE_AREA_HEIGHT}), which the fixed logo/"
+                "Confidential footer will overlap. Keep all meaningful content "
+                "within y=48 to y=630 and leave the area below y=630 empty."
             ),
         )
 
@@ -852,6 +1017,7 @@ async def generate_smart_presentation(
     on_slide: SmartSlideCallback | None = None,
     on_metrics: SmartMetricsCallback | None = None,
     smart_template: Optional[str] = None,
+    smart_brand_colors: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     client = get_client(config=get_llm_config(use_openai_responses_api=True))
     model = get_model()
@@ -886,6 +1052,7 @@ async def generate_smart_presentation(
             completed_slides=accepted_slides,
             retry_error=retry_error,
             smart_template=smart_template,
+            smart_brand_colors=smart_brand_colors,
         )
 
         print(messages)
@@ -914,6 +1081,8 @@ async def generate_smart_presentation(
                     include_title_slide=include_title_slide,
                     include_table_of_contents=include_table_of_contents,
                 )
+                if smart_template == EAND_SMART_TEMPLATE_ID:
+                    await _check_smart_slide_eand_footer_safe_area(slide["html"])
                 attempt_slides.append(slide)
                 image_sources = [
                     next(source for source in match if source)

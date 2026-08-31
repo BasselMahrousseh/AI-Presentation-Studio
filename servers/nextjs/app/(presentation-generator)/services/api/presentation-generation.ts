@@ -87,6 +87,7 @@ export class PresentationGenerationApi {
     generation_mode = "standard",
     community_design_ids,
     smart_template,
+    smart_brand_colors,
   }: {
     content: string;
     version?: PresentationVersion;
@@ -102,6 +103,7 @@ export class PresentationGenerationApi {
     generation_mode?: "standard" | "smart";
     community_design_ids?: number[];
     smart_template?: string;
+    smart_brand_colors?: string[];
   }) {
     try {
       const limitedSlideCount =
@@ -135,6 +137,7 @@ export class PresentationGenerationApi {
             generation_mode,
             community_design_ids,
             smart_template,
+            smart_brand_colors,
           }),
           cache: "no-cache",
         }
@@ -163,6 +166,31 @@ export class PresentationGenerationApi {
       };
     } catch (error) {
       console.error("error in presentation creation", error);
+      throw error;
+    }
+  }
+
+  static async extractPptxColorPalette(pptxFile: File): Promise<{ colors: string[] }> {
+    const formData = new FormData();
+    formData.append("pptx_file", pptxFile);
+
+    try {
+      const response = await fetch(
+        getApiUrl(`/api/v1/ppt/template/extract-color-palette`),
+        {
+          method: "POST",
+          headers: getHeaderForFormData(),
+          body: formData,
+          cache: "no-cache",
+        }
+      );
+
+      return await ApiResponseHandler.handleResponse(
+        response,
+        "Failed to extract colors from the uploaded file"
+      );
+    } catch (error) {
+      console.error("Error extracting PPTX color palette:", error);
       throw error;
     }
   }

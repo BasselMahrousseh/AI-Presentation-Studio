@@ -35,17 +35,6 @@ _EAND_FOOTER_HTML = """
 """.strip()
 
 
-def get_eand_content_slide_count(total_slide_count: int) -> int:
-    """Reserve the e& title and thank-you slides from the requested deck size."""
-    content_slide_count = total_slide_count - EAND_FIXED_SLIDE_COUNT
-    if content_slide_count < 1:
-        raise HTTPException(
-            status_code=400,
-            detail="The e& template requires at least three slides",
-        )
-    return content_slide_count
-
-
 def build_eand_title_slide(title: str, subtitle: str) -> str:
     """Return the supplied e& title-slide design with escaped presentation text."""
     safe_title = html.escape(_compact_text(title, "Presentation", 66), quote=True)
@@ -123,13 +112,94 @@ def normalize_smart_template_id(value: str | None) -> str | None:
     return template_id
 
 
-def get_smart_brand_prompt(template_id: str | None) -> str:
-    """Return the small layout contract given to the model, never the source HTML."""
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+MAX_SMART_BRAND_COLORS = 4
+
+
+def normalize_smart_brand_colors(values: list[str] | None) -> list[str] | None:
+    """Return validated, deduplicated `#RRGGBB` colors, rejecting malformed
+    client input rather than silently dropping or reflowing it into the
+    generation prompt."""
+    if not values:
+        return None
+    normalized: list[str] = []
+    for value in values:
+        candidate = (value or "").strip()
+        if not _HEX_COLOR_RE.match(candidate):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid brand color {value!r}; expected #RRGGBB",
+            )
+        upper = candidate.upper()
+        if upper not in normalized:
+            normalized.append(upper)
+    if len(normalized) > MAX_SMART_BRAND_COLORS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {MAX_SMART_BRAND_COLORS} brand colors are supported",
+        )
+    return normalized or None
+
+
+_DEFAULT_EAND_PANEL_COLOR = ("#E00600", "e& red")
+_DEFAULT_EAND_ACCENT_COLOR = ("#0B1F3A", "dark blue")
+_MAX_SUPPORTING_BRAND_COLORS = 2
+
+
+def _brand_palette_roles(
+    custom_colors: list[str] | None,
+) -> tuple[tuple[str, str], tuple[str, str], list[str]]:
+    """Resolve (panel_color, accent_color, supporting_colors) for the prompt.
+    Panel = the dominant color for large panels/section bands/headlines.
+    Accent = the sparing color for small emphasis (numbers, rules, markers).
+    Falls back to the default e& palette when no usable custom colors were
+    extracted from an uploaded reference deck."""
+    if not custom_colors:
+        return _DEFAULT_EAND_PANEL_COLOR, _DEFAULT_EAND_ACCENT_COLOR, []
+
+    panel = (custom_colors[0], custom_colors[0])
+    accent = (
+        (custom_colors[1], custom_colors[1])
+        if len(custom_colors) > 1
+        else _DEFAULT_EAND_ACCENT_COLOR
+    )
+    supporting = custom_colors[2 : 2 + _MAX_SUPPORTING_BRAND_COLORS]
+    return panel, accent, supporting
+
+
+def get_smart_brand_prompt(
+    template_id: str | None, custom_colors: list[str] | None = None
+) -> str:
+    """Return the small layout contract given to the model, never the source HTML.
+
+    `custom_colors` are hex colors extracted from a user-uploaded reference
+    deck (see templates/pptx_color_extraction.py), ranked by how prominently
+    they're actually used in that deck. When present they replace the
+    default e& red/dark-blue palette; the fixed brand chrome (logo,
+    Confidential label, footer bar) and layout/footer rules are unaffected —
+    only the model's own content colors change."""
     if template_id is None:
         return ""
     if template_id != EAND_SMART_TEMPLATE_ID:
         raise HTTPException(status_code=400, detail="Unknown Smart brand template")
-    return """
+
+    (panel_hex, panel_name), (accent_hex, accent_name), supporting_colors = (
+        _brand_palette_roles(custom_colors)
+    )
+    supporting_line = (
+        f"\n- Supporting palette colors, for chart series or minor variety only: "
+        f"{', '.join(supporting_colors)}."
+        if supporting_colors
+        else ""
+    )
+    source_note = (
+        "This palette was extracted from the user's uploaded reference deck; "
+        "treat it as the brand's real colors, not a suggestion."
+        if custom_colors
+        else "This is the default e& corporate palette."
+    )
+
+    return f"""
 
 e& BRAND TEMPLATE CONTRACT
 This presentation is rendered on a fixed e& corporate page shell after you
@@ -146,36 +216,42 @@ do not create a separate closing or thank-you slide. The requested total slide
 count already reserves these two fixed e& slides.
 
 COLOUR PALETTE (required)
-- Use e& red #E00600 for primary emphasis, key numbers, rules, and calls to action.
-- Use dark blue #0B1F3A for large panels, section headers, and secondary emphasis.
+{source_note}
+- Use {panel_hex} for large panels, section bands, headlines, and secondary emphasis.
+- Use {accent_hex} sparingly for primary emphasis, key numbers, rules, and calls to action.
 - Use white #FFFFFF as the primary canvas and card background, and black #000000
-  for body copy and fine detail.
-- Keep the deck visually restrained: do not introduce other brand colours such as
-  purple, green, orange, teal, or bright blue. When a lighter surface is needed,
-  use white with a black or dark-blue border rather than a new tinted colour.
-- Use red sparingly against white or dark blue for high-contrast emphasis; never
-  use red for long paragraphs of body text.
+  for body copy and fine detail.{supporting_line}
+- Keep the deck visually restrained: do not introduce colours outside this
+  palette (plus white/black). When a lighter surface is needed, use white
+  with a black or {panel_hex} border rather than a new tinted colour.
+- Use {accent_hex} sparingly against white or {panel_hex} for high-contrast
+  emphasis; never use {accent_hex} for long paragraphs of body text.
 
 Generate only the main content layer. Keep all meaningful content within x=64
 to x=1216 and y=48 to y=630. The area from y=640 to y=720 is reserved for the
 fixed e& footer and must remain empty. Do not add a footer, page number, logo,
 or other content in that reserved area. Use clean executive layouts and
-restrained e&-appropriate colour accents.
+restrained colour accents from this palette.
 
 CONTENT DESIGN DIRECTION (required)
 - Avoid generic document-like bullet lists. Turn grouped ideas into a clear
   executive composition: a numbered sequence, a 2–4 card grid, a comparison,
   a process, or a strong single-statement layout, selected to fit the content.
-- Use generous white space, dark-blue section bands or side rails, thin
-  #0B1F3A/#D9DEE7 rules, and red #E00600 highlights. Cards should be white,
+- Use generous white space, {panel_hex} section bands or side rails, thin
+  {panel_hex}/#D9DEE7 rules, and {accent_hex} highlights. Cards should be white,
   flat or very subtly shadowed, with square-to-softly-rounded corners.
-- For checklist content, use compact red circular check markers with a white
-  check, or a thin red vertical rule; never use purple checkmarks, lavender
-  chips, gradients, or purple/violet utility classes.
-- Keep typography editorial and high contrast: a concise dark-blue headline,
-  black supporting copy, and red only for labels, key figures, and markers.
-- Vary the layout from slide to slide while retaining this same red, dark-blue,
-  white, and black e& visual language.
+- A full-height {panel_hex} side rail (e.g. matching the height of a card grid
+  next to it) is a frequent source of overflow: its checklist items stack
+  vertically with nothing to shrink them, so it silently overflows past the
+  bottom of the slide instead of visibly colliding with anything. Cap it at
+  3-4 items with a short, single-line description each; do not give it more
+  items or longer descriptions than that.
+- For checklist content, use compact {accent_hex} circular check markers with a white
+  check, or a thin {accent_hex} vertical rule; never use colours outside this palette.
+- Keep typography editorial and high contrast: a concise {panel_hex} headline,
+  black supporting copy, and {accent_hex} only for labels, key figures, and markers.
+- Vary the layout from slide to slide while retaining this same {panel_name},
+  {accent_name}, white, and black visual language.
 """.strip()
 
 

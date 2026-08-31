@@ -629,7 +629,9 @@ def test_smart_slide_count_is_chosen_by_llm(monkeypatch):
     assert captured["json_schema"]["properties"]["n_slides"]["maximum"] == 20
 
 
-def test_eand_explicit_content_plan_reserves_title_and_thank_you_slides():
+def test_eand_explicit_content_plan_keeps_every_supplied_section():
+    # The count returned is content slides only; the caller adds the fixed
+    # cover/thank-you slides on top to get the deck's true total.
     count = asyncio.run(
         determine_smart_slide_count(
             content="""
@@ -642,15 +644,15 @@ Slide 4 — Rollout
             source_context="",
             include_title_slide=True,
             include_table_of_contents=False,
-            minimum_slide_count=3,
+            minimum_slide_count=1,
             fixed_slide_count=2,
         )
     )
 
-    assert count == 6
+    assert count == 4
 
 
-def test_eand_colon_delimited_outline_reserves_title_and_thank_you_slides():
+def test_eand_colon_delimited_outline_keeps_every_supplied_section():
     count = asyncio.run(
         determine_smart_slide_count(
             content="""
@@ -667,9 +669,39 @@ Rollout
             source_context="",
             include_title_slide=True,
             include_table_of_contents=False,
-            minimum_slide_count=3,
+            minimum_slide_count=1,
             fixed_slide_count=2,
         )
     )
 
-    assert count == 6
+    assert count == 4
+
+
+def test_eand_slide_count_is_capped_so_total_with_fixed_slides_fits(monkeypatch):
+    captured = {}
+
+    async def fake_generate_structured(_client, _model, **kwargs):
+        captured.update(kwargs)
+        return {"n_slides": kwargs["json_schema"]["properties"]["n_slides"]["maximum"]}
+
+    monkeypatch.setattr(
+        smart_generation, "generate_structured_with_schema_retries", fake_generate_structured
+    )
+    monkeypatch.setattr(smart_generation, "get_llm_config", lambda **_kwargs: {})
+    monkeypatch.setattr(smart_generation, "get_client", lambda **_kwargs: object())
+    monkeypatch.setattr(smart_generation, "get_model", lambda: "test-model")
+
+    count = asyncio.run(
+        determine_smart_slide_count(
+            content="A topic with no explicit slide plan",
+            instructions=None,
+            source_context="",
+            include_title_slide=True,
+            include_table_of_contents=False,
+            minimum_slide_count=1,
+            fixed_slide_count=2,
+        )
+    )
+
+    assert captured["json_schema"]["properties"]["n_slides"]["maximum"] == 18
+    assert count + 2 <= smart_generation.MAX_SMART_SLIDE_COUNT

@@ -82,6 +82,9 @@ class PresentationModel(SQLModel, table=True):
     smart_template: Optional[str] = Field(
         sa_column=Column(String, nullable=True), default=None
     )
+    smart_brand_colors: Optional[List[str]] = Field(
+        sa_column=Column(JSON), default=None
+    )
 
     def get_new_presentation(self):
         return PresentationModel(
@@ -107,6 +110,7 @@ class PresentationModel(SQLModel, table=True):
             generation_mode=self.generation_mode,
             community_design_ids=copy.deepcopy(self.community_design_ids),
             smart_template=self.smart_template,
+            smart_brand_colors=copy.deepcopy(self.smart_brand_colors),
         )
 
     def get_presentation_outline(self):

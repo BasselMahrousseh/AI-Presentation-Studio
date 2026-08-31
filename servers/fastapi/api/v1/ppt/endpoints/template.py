@@ -44,6 +44,10 @@ from templates.preview import (
     FontsUploadAndSlidesPreviewResponse,
     upload_fonts_and_slides_preview_handler,
 )
+from templates.pptx_color_extraction import (
+    PptxColorPaletteResponse,
+    extract_pptx_color_palette_handler,
+)
 from templates.v2.generation import (
     MAX_PARALLEL_SLIDE_LAYOUTS,
     generate_prompted_slide_layout,
@@ -982,6 +986,16 @@ async def upload_template_fonts_and_slides_preview(
         google_font_names=google_font_names,
         google_font_urls=google_font_urls,
     )
+
+
+@TEMPLATE_ROUTER.post(
+    "/extract-color-palette",
+    response_model=PptxColorPaletteResponse,
+)
+async def extract_pptx_color_palette(
+    pptx_file: UploadFile = File(..., description="PPTX file to extract a color palette from"),
+):
+    return await extract_pptx_color_palette_handler(pptx_file=pptx_file)
 
 
 @TEMPLATE_ROUTER.post(

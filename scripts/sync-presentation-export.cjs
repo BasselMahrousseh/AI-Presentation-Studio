@@ -11,6 +11,17 @@
  *
  * On every run (including --check-only), index.cjs is overwritten from index.js
  * so the CommonJS entrypoint never drifts from the bundled ESM build.
+ *
+ * KNOWN_BUNDLE_PATCHES below are applied to index.js in place (before it is
+ * copied to index.cjs) to work around known upstream presenton-export bugs.
+ * The bundle is minified, so each patch's `find` string is a large, verified
+ * unique substring rather than a bare identifier — minifier-generated names
+ * like the local `Hn`/`ks` below are reused across many unrelated closures in
+ * the same file. Patches are pinned to the exact presentationExportVersion in
+ * package.json: if that version is bumped and a patch's `find` string no
+ * longer matches exactly once, the patch is skipped with a warning (not
+ * applied blindly and not a hard failure) so it can be re-verified against
+ * the new bundle.
  */
 const fs = require("fs");
 const path = require("path");
@@ -31,6 +42,58 @@ const packageJsonFile = path.join(repoRoot, "package.json");
 const cacheDir = path.join(repoRoot, ".cache", "presentation-export");
 const exportRepoBase =
   "https://github.com/presenton/presenton-export/releases/download";
+
+// Each patched bundle build (v0.4.8) only ever emits ASCII from esbuild's
+// minifier, so plain string matching (not regex) is used throughout.
+const KNOWN_BUNDLE_PATCHES = [
+  {
+    id: "stadium-pill-not-oval",
+    appliesToVersion: "v0.4.8",
+    description:
+      "A fully-rounded non-square element (e.g. a `rounded-full` pill badge, " +
+      "width != height) is misclassified as a circle/oval instead of a " +
+      "rounded rectangle, so PowerPoint renders it as a flattened ellipse " +
+      "and its text re-wraps. Gate the circle classification on the " +
+      "element's aspect ratio actually being ~1:1.",
+    find:
+      'function Hn(Jt,Wt,vt){let Sr=ks(Jt,Wt,vt);return Jt.tagName.toLowerCase()==="img"?Sr?"circle":"rectangle":Sr?"circle":void 0}',
+    replace:
+      'function Hn(Jt,Wt,vt){let Sr=ks(Jt,Wt,vt);if(Sr){let pd=Jt.getBoundingClientRect(),pa=pd.height>0?pd.width/pd.height:1;Sr=pa>0.85&&pa<1.15}return Jt.tagName.toLowerCase()==="img"?Sr?"circle":"rectangle":Sr?"circle":void 0}',
+  },
+];
+
+function applyKnownBundlePatches(filePath, expectedVersion) {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+  let content = fs.readFileSync(filePath, "utf8");
+  let changed = false;
+  for (const patch of KNOWN_BUNDLE_PATCHES) {
+    if (patch.appliesToVersion && patch.appliesToVersion !== expectedVersion) {
+      continue;
+    }
+    if (content.includes(patch.replace)) {
+      continue; // already patched
+    }
+    const occurrences = content.split(patch.find).length - 1;
+    if (occurrences !== 1) {
+      console.warn(
+        `[presentation-export] Skipping bundle patch "${patch.id}": expected ` +
+          `exactly 1 match for its target code in ${path.basename(filePath)}, ` +
+          `found ${occurrences}. The vendored bundle likely changed shape; this ` +
+          "patch needs re-verification against the new build before it is safe " +
+          "to apply."
+      );
+      continue;
+    }
+    content = content.split(patch.find).join(patch.replace);
+    changed = true;
+    console.log(`[presentation-export] Applied bundle patch: ${patch.id}`);
+  }
+  if (changed) {
+    fs.writeFileSync(filePath, content, "utf8");
+  }
+}
 
 const cliArgs = new Set(process.argv.slice(2));
 const forceDownload = cliArgs.has("--force");
@@ -243,10 +306,12 @@ function normalizeRuntimeLayout() {
   }
 }
 
-function ensureCommonJsEntrypoint() {
+function ensureCommonJsEntrypoint(expectedVersion) {
   if (!fs.existsSync(targetIndexJs)) {
     return { ok: false, reason: `Missing runtime bundle: ${targetIndexJs}` };
   }
+
+  applyKnownBundlePatches(targetIndexJs, expectedVersion);
 
   try {
     fs.copyFileSync(targetIndexJs, targetIndexCjs);
@@ -280,7 +345,7 @@ function validateExistingRuntime(expectedVersion) {
 
   normalizeRuntimeLayout();
 
-  const entrypoint = ensureCommonJsEntrypoint();
+  const entrypoint = ensureCommonJsEntrypoint(expectedVersion);
   if (!entrypoint.ok) {
     return { ok: false, reason: entrypoint.reason };
   }

@@ -6,7 +6,6 @@ from utils.smart_brand_templates import (
     apply_smart_brand_template,
     build_eand_thank_you_slide,
     build_eand_title_slide,
-    get_eand_content_slide_count,
     get_smart_brand_prompt,
     normalize_smart_template_id,
 )
@@ -80,7 +79,3 @@ def test_eand_title_subtitle_is_a_safe_brand_label():
     assert "Generate a 12-slide strategy deck" not in title_slide
 
 
-def test_eand_deck_reserves_two_fixed_slides():
-    assert get_eand_content_slide_count(5) == 3
-    with pytest.raises(HTTPException, match="at least three slides"):
-        get_eand_content_slide_count(2)

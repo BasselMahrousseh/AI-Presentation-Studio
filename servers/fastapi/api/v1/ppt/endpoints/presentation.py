@@ -114,12 +114,13 @@ from utils.llm_calls.generate_smart_presentation import (
     resolve_smart_slide_count,
 )
 from utils.smart_brand_templates import (
+    EAND_FIXED_SLIDE_COUNT,
     EAND_SMART_TEMPLATE_ID,
     EAND_TITLE_SUBTITLE,
     apply_smart_brand_template,
     build_eand_thank_you_slide,
     build_eand_title_slide,
-    get_eand_content_slide_count,
+    normalize_smart_brand_colors,
     normalize_smart_template_id,
 )
 import uuid
@@ -1465,6 +1466,7 @@ async def create_presentation(
     generation_mode: Annotated[Literal["standard", "smart"], Body()] = "standard",
     community_design_ids: Annotated[Optional[List[int]], Body()] = None,
     smart_template: Annotated[Optional[str], Body()] = None,
+    smart_brand_colors: Annotated[Optional[List[str]], Body()] = None,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
 
@@ -1488,6 +1490,7 @@ async def create_presentation(
 
     normalized_community_ids = normalize_community_ids(community_design_ids)
     normalized_smart_template = normalize_smart_template_id(smart_template)
+    normalized_smart_brand_colors = normalize_smart_brand_colors(smart_brand_colors)
     if generation_mode != "smart" and normalized_community_ids:
         raise HTTPException(
             status_code=400,
@@ -1498,11 +1501,11 @@ async def create_presentation(
             status_code=400,
             detail="Smart brand templates are available only in Smart mode",
         )
-    if (
-        normalized_smart_template == EAND_SMART_TEMPLATE_ID
-        and n_slides is not None
-    ):
-        get_eand_content_slide_count(n_slides)
+    if normalized_smart_brand_colors and normalized_smart_template != EAND_SMART_TEMPLATE_ID:
+        raise HTTPException(
+            status_code=400,
+            detail="Custom brand colors require the e& Smart brand template",
+        )
     if generation_mode == "smart" and not (
         content.strip() or file_paths or normalized_community_ids
     ):
@@ -1537,6 +1540,7 @@ async def create_presentation(
         generation_mode=generation_mode,
         community_design_ids=normalized_community_ids or None,
         smart_template=normalized_smart_template,
+        smart_brand_colors=normalized_smart_brand_colors,
     )
 
     sql_session.add(presentation)
@@ -1791,26 +1795,27 @@ async def _stream_smart_presentation(
             source_context = source_context[:90_000]
 
         is_eand_template = presentation.smart_template == EAND_SMART_TEMPLATE_ID
+        fixed_slide_count = EAND_FIXED_SLIDE_COUNT if is_eand_template else 0
         if presentation.n_slides > 0:
-            slide_count = resolve_smart_slide_count(presentation.n_slides)
+            # For e& decks, a user-specified count means content slides only —
+            # the fixed cover/thank-you slides are added on top below.
+            generated_slide_count = resolve_smart_slide_count(
+                presentation.n_slides, fixed_slide_count=fixed_slide_count
+            )
         else:
             yield SSEStatusResponse(
                 status="Choosing the right number of slides"
             ).to_string()
-            slide_count = await determine_smart_slide_count(
+            generated_slide_count = await determine_smart_slide_count(
                 content=presentation.content,
                 instructions=presentation.instructions,
                 source_context=source_context,
                 include_title_slide=presentation.include_title_slide,
                 include_table_of_contents=presentation.include_table_of_contents,
-                minimum_slide_count=3 if is_eand_template else 1,
-                fixed_slide_count=2 if is_eand_template else 0,
+                minimum_slide_count=1,
+                fixed_slide_count=fixed_slide_count,
             )
-        generated_slide_count = (
-            get_eand_content_slide_count(slide_count)
-            if is_eand_template
-            else slide_count
-        )
+        slide_count = generated_slide_count + fixed_slide_count
         presentation.n_slides = slide_count
         presentation.fonts = reference_fonts or {
             "Inter": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
@@ -1885,6 +1890,7 @@ async def _stream_smart_presentation(
                 on_slide=emit_slide,
                 on_metrics=emit_metrics,
                 smart_template=presentation.smart_template,
+                smart_brand_colors=presentation.smart_brand_colors,
             )
         )
 

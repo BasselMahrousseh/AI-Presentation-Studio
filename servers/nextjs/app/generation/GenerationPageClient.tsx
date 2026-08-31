@@ -91,6 +91,18 @@ export default function GenerationPageClient() {
     setGenerationMode(useEandTemplate ? "eand" : "standard");
     try {
       const filePaths = await uploadDocuments();
+      let smartBrandColors: string[] | undefined;
+      if (useEandTemplate) {
+        const referenceDeck = files.find((file) => file.name.toLowerCase().endsWith(".pptx"));
+        if (referenceDeck) {
+          try {
+            const { colors } = await PresentationGenerationApi.extractPptxColorPalette(referenceDeck);
+            if (colors && colors.length > 0) smartBrandColors = colors;
+          } catch {
+            // Non-fatal: fall back to the default e& palette rather than blocking generation.
+          }
+        }
+      }
       const presentation = await PresentationGenerationApi.createPresentation({
         content,
         n_slides: null,
@@ -98,6 +110,7 @@ export default function GenerationPageClient() {
         language: "English",
         generation_mode: "smart",
         smart_template: useEandTemplate ? "eand" : undefined,
+        smart_brand_colors: smartBrandColors,
         include_title_slide: true,
         include_table_of_contents: false,
       });
@@ -187,6 +200,9 @@ export default function GenerationPageClient() {
                 </select>
                 <ChevronDown className="pointer-events-none absolute inset-y-0 right-3 my-auto h-3.5 w-3.5 text-[#8d8080]" />
               </label>
+              {selectedTemplateId && selectedTemplateId !== CUSTOM_TEMPLATE_VALUE && (
+                <span className="text-xs text-[#9a8a8a]">Only used by Outline — Generate ignores it</span>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2">
