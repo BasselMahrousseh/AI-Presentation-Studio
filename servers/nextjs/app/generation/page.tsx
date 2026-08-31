@@ -3,7 +3,7 @@ import { ConfigurationInitializer } from "../ConfigurationInitializer";
 import GenerationPageClient from "./GenerationPageClient";
 
 export const metadata = {
-  title: "e& Create | Presentation Studio",
+  title: "e& Present | Presentation Studio",
   description: "Create an e& Etisalat presentation with AI.",
 };
 

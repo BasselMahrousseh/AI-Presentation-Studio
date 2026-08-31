@@ -59,6 +59,8 @@ export const useOutlineStreaming = (
     let retryCount = 0;
     let isClosed = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let outlinePublishTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingOutlineSlides: { content: string }[] | null = null;
 
     const closeEventSource = () => {
       if (eventSource) {
@@ -74,6 +76,32 @@ export const useOutlineStreaming = (
       }
     };
 
+    const clearPendingOutlinePublish = () => {
+      if (outlinePublishTimer) {
+        clearTimeout(outlinePublishTimer);
+        outlinePublishTimer = null;
+      }
+      pendingOutlineSlides = null;
+    };
+
+    const publishPendingOutlines = () => {
+      outlinePublishTimer = null;
+      const slidesToPublish = pendingOutlineSlides;
+      pendingOutlineSlides = null;
+      if (slidesToPublish) {
+        dispatch(setOutlines(slidesToPublish));
+      }
+    };
+
+    const scheduleOutlinePublish = (slides: { content: string }[]) => {
+      pendingOutlineSlides = slides;
+      if (outlinePublishTimer) return;
+
+      // Batch repaired JSON snapshots so React can paint between partial
+      // outline updates instead of receiving a Redux update for every chunk.
+      outlinePublishTimer = setTimeout(publishPendingOutlines, 75);
+    };
+
     const scheduleRetry = (reason: string): boolean => {
       if (retryCount >= MAX_STREAM_RETRIES || isClosed) {
         return false;
@@ -87,6 +115,7 @@ export const useOutlineStreaming = (
 
       closeEventSource();
       clearRetryTimer();
+      clearPendingOutlinePublish();
       accumulatedChunks = "";
       prevSlidesRef.current = [];
       activeIndexRef.current = -1;
@@ -179,7 +208,7 @@ export const useOutlineStreaming = (
                 } catch {}
 
                 prevSlidesRef.current = nextSlides;
-                dispatch(setOutlines(nextSlides));
+                scheduleOutlinePublish(nextSlides);
                 setIsLoading((wasLoading) => (wasLoading ? false : wasLoading));
               }
             } catch {
@@ -191,6 +220,7 @@ export const useOutlineStreaming = (
             try {
               const outlinesData: { content: string }[] =
                 limitOutlines(data.presentation.outlines.slides);
+              clearPendingOutlinePublish();
               dispatch(setOutlines(outlinesData));
               setIsStreaming(false);
               setIsLoading(false);
@@ -265,6 +295,7 @@ export const useOutlineStreaming = (
       isClosed = true;
       closeEventSource();
       clearRetryTimer();
+      clearPendingOutlinePublish();
     };
   }, [presentationId, dispatch, enabled]);
 

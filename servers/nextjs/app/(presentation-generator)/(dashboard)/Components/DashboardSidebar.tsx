@@ -42,7 +42,7 @@ const DashboardSidebar = ({
   const pathname = usePathname();
 
   return (
-    <aside className="sticky top-0 flex h-screen w-[88px] shrink-0 flex-col border-r border-[#e1e3e8] bg-[#f6f6f8] px-2 py-5" aria-label="Primary navigation">
+    <aside className="sticky top-0 flex h-screen w-[88px] shrink-0 flex-col border-r border-[#e1e3e8] bg-[#f6f6f8]/84 px-2 py-5 backdrop-blur-sm" aria-label="Primary navigation">
       <Link href="/" aria-label="e& Etisalat home" className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#172a5c] p-2 shadow-[0_4px_12px_rgba(23,42,92,0.2)]">
         <Image src="/eand-logo.png" alt="e&" width={56} height={56} className="h-full w-full object-contain" />
       </Link>

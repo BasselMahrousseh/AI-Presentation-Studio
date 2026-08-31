@@ -8,6 +8,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { OverlayLoader } from "@/components/ui/overlay-loader";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import EandLightOverlay from "@/app/components/EandLightOverlay";
 import { RootState, store } from "@/store/store";
 import { setOutlines, setPresentationId } from "@/store/slices/presentationGeneration";
 import {
@@ -265,7 +266,8 @@ const OutlinePage: React.FC = () => {
 
   if (!presentation_id) {
     return (
-      <div className="min-h-screen bg-[#FEFEFF]">
+      <div className="relative min-h-screen overflow-hidden bg-[#FEFEFF]">
+        <EandLightOverlay />
         <OutlineStandardHeader
           title="Outline Generation"
           onBack={() => router.push("/")}
@@ -278,10 +280,11 @@ const OutlinePage: React.FC = () => {
   return (
     <div
       className={cn(
-        "min-h-screen overflow-x-clip font-syne",
-        isTemplateStage ? "bg-white" : "bg-[#F3F6FA]"
+        "relative min-h-screen overflow-x-clip font-syne",
+        isTemplateStage ? "bg-white/70" : "bg-[#F3F6FA]/70"
       )}
     >
+      <EandLightOverlay />
       <OverlayLoader
         show={isStartingSmartDeck}
         text="Starting Smart presentation..."

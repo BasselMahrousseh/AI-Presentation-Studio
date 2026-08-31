@@ -21,6 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { notify } from "@/components/ui/sonner";
 import { useTemplateSummaries } from "@/app/(presentation-generator)/hooks/useTemplateSummaries";
 import { PresentationGenerationApi } from "@/app/(presentation-generator)/services/api/presentation-generation";
+import EandLightOverlay from "@/app/components/EandLightOverlay";
 
 const CUSTOM_TEMPLATE_VALUE = "__create_custom_template__";
 const MAX_ATTACHMENTS = 8;
@@ -83,7 +84,7 @@ export default function GenerationPageClient() {
   const generateDeck = async (useEandTemplate: boolean) => {
     const content = getGenerationContent();
     if (!content) {
-      notify.error("Add a brief or source files", "Tell e& Create what you want to present, or attach source documents.");
+      notify.error("Add a brief or source files", "Tell e& Present what you want to present, or attach source documents.");
       return;
     }
 
@@ -110,7 +111,7 @@ export default function GenerationPageClient() {
   const generateOutline = async () => {
     const content = getGenerationContent();
     if (!content) {
-      notify.error("Add a brief or source files", "Tell e& Create what you want to present, or attach source documents.");
+      notify.error("Add a brief or source files", "Tell e& Present what you want to present, or attach source documents.");
       return;
     }
 
@@ -138,8 +139,8 @@ export default function GenerationPageClient() {
   const isGenerating = generationMode !== null;
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[#fff] px-5 py-6 text-[#151515] sm:px-8">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-[440px] bg-[radial-gradient(ellipse_at_top,_rgba(230,0,0,0.055),_transparent_62%)]" />
+    <main className="relative min-h-screen overflow-hidden bg-[#fcfcfe] px-5 py-6 text-[#151515] sm:px-8">
+      <EandLightOverlay />
       <header className="relative mx-auto flex w-full max-w-[1240px] items-center justify-between">
         <Link href="/" className="flex items-center gap-2.5 rounded-lg outline-none transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-[#e60000] focus-visible:ring-offset-4">
           <Image src="/eand-logo.png" alt="e&" width={42} height={42} className="h-8 w-8 object-contain" />
@@ -149,15 +150,15 @@ export default function GenerationPageClient() {
       </header>
 
       <section className="relative mx-auto flex w-full max-w-[1080px] flex-col items-center pb-14 pt-[min(16vh,130px)] text-center">
-        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#f2dddd] bg-[#fff8f8] px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#d60000]"><Sparkles className="h-3.5 w-3.5" /> e&amp; AI workspace</div>
+        {/* <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#f2dddd] bg-[#fff8f8] px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#d60000]"><Sparkles className="h-3.5 w-3.5" /> e&amp; AI workspace</div> */}
         <h1 className="font-serif text-[45px] font-semibold leading-[0.98] tracking-[-0.045em] text-[#131313] sm:text-[62px]">
-          Hi, I am <span className="text-[#e60000]">e&amp; Create</span>
+          Hi, I am <span className="text-[#e60000]">e&amp; Present</span>
         </h1>
         <p className="mt-6 max-w-[700px] font-serif text-[20px] leading-8 text-[#7c7171] sm:text-[24px]">Your AI workspace for presentations that make every idea matter.</p>
 
         <div className="mt-11 w-full rounded-[22px] border border-[#dfd9d9] bg-white p-4 text-left shadow-[0_22px_55px_rgba(43,23,23,0.08)] transition-shadow focus-within:shadow-[0_24px_65px_rgba(230,0,0,0.13)] sm:p-5">
           <label htmlFor="presentation-brief" className="sr-only">Presentation brief</label>
-          <Textarea id="presentation-brief" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Ask e& Create to make a presentation, or describe a task…" className="min-h-[150px] resize-none border-0 bg-transparent px-1 py-1.5 text-[17px] leading-7 text-[#1f1f1f] shadow-none placeholder:text-[#aaa2a2] focus-visible:ring-0 sm:min-h-[168px]" />
+          <Textarea id="presentation-brief" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Ask e& Present to make a presentation, or describe a task…" className="min-h-[150px] resize-none border-0 bg-transparent px-1 py-1.5 text-[17px] leading-7 text-[#1f1f1f] shadow-none placeholder:text-[#aaa2a2] focus-visible:ring-0 sm:min-h-[168px]" />
 
           {files.length > 0 && (
             <ul className="mb-3 flex flex-wrap gap-2" aria-label="Attached source files">

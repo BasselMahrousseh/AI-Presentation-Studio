@@ -64,14 +64,59 @@ From the repository root:
 ```powershell
 cd servers\fastapi
 uv sync --group dev
-$env:APP_DATA_DIRECTORY = "app_data"
-.\.venv\Scripts\python.exe -m alembic upgrade head
-.\.venv\Scripts\python.exe server.py --port 8000 --reload true
+.\.venv\Scripts\Activate.ps1
+uv run python server.py --port 8000  
 ```
 
 `uv sync --group dev` installs the locked Python dependencies and creates `.venv`. If needed, install uv with `pip install uv`. Keep this terminal running.
 
-### 3. Start the frontend
+### 3. Configure the Next.js runtime
+
+Create `servers/nextjs/.env.local`. Next.js loads this file when it starts, so restart `npm run dev` after adding or changing it.
+
+```dotenv
+# Local development only. Do not use DISABLE_AUTH in a shared deployment.
+DISABLE_AUTH=true
+CAN_CHANGE_KEYS=false
+FAST_API_INTERNAL_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_FAST_API=http://127.0.0.1:8000
+NEXT_PUBLIC_URL=http://127.0.0.1:3000
+
+# Use absolute paths on Windows. The converter is required for PPTX export.
+BUILT_PYTHON_MODULE_PATH=C:/path/to/convert-win32-x64.exe
+APP_DATA_DIRECTORY=C:/path/to/project/servers/fastapi/app_data
+TEMP_DIRECTORY=C:/path/to/project/servers/fastapi/app_data/temp
+```
+
+Keep `CAN_CHANGE_KEYS` aligned with FastAPI. When it is `false`, the frontend does not request editable provider settings; a direct `/api/user-config` request correctly returns `403`.
+
+### 4. Install the document-extraction runtime
+
+PDF and document uploads use LiteParse through a small Node.js runner. Install the root runtime dependencies from the repository root:
+
+```powershell
+npm install --omit=dev --ignore-scripts
+```
+
+The runner is stored at `resources/document-extraction/liteparse_runner.mjs` and FastAPI detects it automatically. Restart FastAPI after installing dependencies or changing its environment.
+
+### 5. Install the PPTX export runtime
+
+From the repository root, download the pinned presentation-export package:
+
+```powershell
+node scripts\sync-presentation-export.cjs
+```
+
+Verify a previously installed runtime with:
+
+```powershell
+node scripts\sync-presentation-export.cjs --check-only
+```
+
+The export route reports `presentation-export runtime is not available` when this step has not been completed. On Windows, also ensure `BUILT_PYTHON_MODULE_PATH` points to an existing `convert-win32-x64.exe`.
+
+### 6. Start the frontend
 
 Open another terminal from the repository root:
 
@@ -133,6 +178,10 @@ npm test
 | An old deck has no e& title/footer/closing slide | Generate a new deck; brand slides are applied during generation. |
 | e& artwork does not load | Verify `servers/nextjs/public/smart-templates/eand/` and restart Next.js after asset changes. |
 | Model/API error | Check the API key and model values in `servers/fastapi/.env`. |
+| `/api/user-config` returns `403` | Set the same `CAN_CHANGE_KEYS` value in `servers/nextjs/.env.local` and `servers/fastapi/.env`, then restart both services. A `403` is expected when the value is `false`. |
+| `LiteParse runner not found` when uploading a PDF | Run `npm install --omit=dev --ignore-scripts` from the repository root, confirm `resources/document-extraction/liteparse_runner.mjs` exists, then restart FastAPI. |
+| `presentation-export runtime is not available` or PPTX export returns `500` | From the repository root, run `node scripts\\sync-presentation-export.cjs`; then verify the Windows converter configured by `BUILT_PYTHON_MODULE_PATH` exists. |
+| Editing or regenerating a slide reports `socket hang up` | The failure is in FastAPI's LLM-backed `/api/v1/ppt/slide/edit-html` request. Check the FastAPI terminal traceback, then verify its provider endpoint, deployment/model name, and API credential. |
 
 ## License
 

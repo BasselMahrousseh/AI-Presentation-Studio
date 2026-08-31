@@ -31,7 +31,7 @@ const libraryNavItems = [
 
 function WorkspaceSidebar({ onSearch }: { onSearch: () => void }) {
   return (
-    <aside className="hidden h-screen w-[300px] shrink-0 border-r border-[#e7e8ec] bg-[#fbfbfc] px-4 py-6 xl:flex xl:flex-col" aria-label="Workspace navigation">
+    <aside className="hidden h-screen w-[300px] shrink-0 border-r border-[#e7e8ec] bg-[#fbfbfc]/85 px-4 py-6 backdrop-blur-sm xl:flex xl:flex-col" aria-label="Workspace navigation">
       <button type="button" className="flex w-full items-center gap-3 rounded-xl px-2 py-1 text-left transition-colors hover:bg-[#f1f2f4]">
         <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[#172a5c] text-sm font-semibold text-white shadow-sm">e&amp;</span>
         <span className="min-w-0 flex-1"><span className="block truncate text-[15px] font-semibold text-[#17213c]">e&amp; Presentation Studio</span><span className="block text-xs text-[#7a8090]">Enterprise</span></span>
@@ -114,7 +114,7 @@ const DashboardPage: React.FC<{ workspaceSidebarCollapsed?: boolean }> = ({
   const removeLegacyPresentations = (presentationIds: string[]) => { const deletedIds = new Set(presentationIds); setLegacyPresentations((current) => current.filter((presentation) => !deletedIds.has(presentation.id))); };
 
   return (
-    <div className="flex min-h-screen w-full bg-white font-sans text-[#17213c]">
+    <div className="relative flex min-h-screen w-full bg-white/55 font-sans text-[#17213c] backdrop-blur-[1px]">
       {!workspaceSidebarCollapsed && <WorkspaceSidebar onSearch={() => searchInputRef.current?.focus()} />}
       <main className="min-w-0 flex-1 px-5 py-6 sm:px-8 lg:px-10">
         <header className="flex min-h-10 items-center justify-between gap-4"><div className="flex items-center gap-3"><FileText className="h-5 w-5 text-[#e60000]" strokeWidth={2.3} /><h1 className="text-xl font-bold tracking-[-0.02em] text-[#17213c]">Presentations</h1></div><div className="flex items-center gap-5"><span className="hidden items-center gap-2 text-sm font-semibold text-[#d60000] sm:flex"><Sparkles className="h-4 w-4" /> e&amp; credits</span><button type="button" aria-label="Notifications" className="rounded-lg p-2 text-[#253452] transition-colors hover:bg-[#f2f0f5]"><Bell className="h-5 w-5" /></button></div></header>

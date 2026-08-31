@@ -27,6 +27,7 @@ import {
 } from "../hooks";
 import { PresentationPageProps } from "../types";
 import { applyPresentationThemeToElement } from "../utils/applyPresentationThemeDom";
+import EandLightOverlay from "@/app/components/EandLightOverlay";
 import { getStreamProgressLabel } from "../utils/streamProgressLabel";
 
 import { replaceSlidesWithBlankFallback } from "@/store/slices/presentationGeneration";
@@ -495,7 +496,8 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
   }
 
   return (
-    <div className="eand-presentation h-dvh overflow-hidden bg-[#f5f6f8] font-syne">
+    <div className="eand-presentation relative h-dvh overflow-hidden bg-[#f5f6f8] font-syne">
+      <EandLightOverlay />
       <OverlayLoader
         show={loadingState.isLoading}
         text={loadingState.message}
@@ -505,9 +507,8 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
         extra_info={loadingState.extra_info}
       />
       <div
-        style={{ background: isSmartPresentation ? "#f6f8f8" : "#f7f7f8" }}
         id="presentation-slides-wrapper"
-        className="relative flex h-full flex-col overflow-hidden"
+        className="relative z-10 flex h-full flex-col overflow-hidden"
       >
         <PresentationHeader
           presentation_id={presentation_id}
