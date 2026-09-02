@@ -145,6 +145,26 @@ _DEFAULT_EAND_PANEL_COLOR = ("#E00600", "e& red")
 _DEFAULT_EAND_ACCENT_COLOR = ("#0B1F3A", "dark blue")
 _MAX_SUPPORTING_BRAND_COLORS = 2
 
+# Etisalat's pre-"e&" logo green (independently sourced: "Sushi" #82AA40 with
+# lighter "Wattle" #CCDB3B accent from a logo-color-extraction site, closely
+# matching a separate "Lime Green Pantone 381C #CADB2A" reference) - not part
+# of the rebranded e& red/dark-blue/white/black UI palette, but real brand
+# heritage, and the user explicitly asked for it to be available for charts.
+_EAND_CHART_GREEN = "#82AA40"
+_EAND_CHART_GREEN_LIGHT = "#CCDB3B"
+
+
+def _tint_hex(hex_color: str, white_mix: float) -> str:
+    """Lightens `hex_color` by blending it toward white by `white_mix` (0-1)."""
+    value = hex_color.lstrip("#")
+    r, g, b = int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+    tinted = (
+        round(r * (1 - white_mix) + 255 * white_mix),
+        round(g * (1 - white_mix) + 255 * white_mix),
+        round(b * (1 - white_mix) + 255 * white_mix),
+    )
+    return "#{:02X}{:02X}{:02X}".format(*tinted)
+
 
 def _brand_palette_roles(
     custom_colors: list[str] | None,
@@ -199,6 +219,41 @@ def get_smart_brand_prompt(
         else "This is the default e& corporate palette."
     )
 
+    # Chart series need more distinct colors than the main UI palette offers
+    # (the default palette is only red/dark-blue/white/black - a 5+ category
+    # pie or bar chart runs out, repeating red or using white, which
+    # disappears against a white slice background). Only expand the default
+    # palette this way; an uploaded reference deck's extracted colors already
+    # represent that deck's real brand, so leave `supporting_colors` as the
+    # only chart-color guidance in that case rather than inventing more.
+    chart_palette_block = ""
+    if not custom_colors:
+        chart_colors = ", ".join(
+            [
+                panel_hex,
+                accent_hex,
+                _EAND_CHART_GREEN,
+                _tint_hex(panel_hex, 0.35),
+                _tint_hex(accent_hex, 0.35),
+                _EAND_CHART_GREEN_LIGHT,
+                _tint_hex(panel_hex, 0.65),
+            ]
+        )
+        chart_palette_block = f"""
+
+CHART COLOR PALETTE (charts only - never use these extra colors anywhere else)
+Chart.js `backgroundColor`/`borderColor` values (pie/donut slices, bar/line
+series) may use this wider palette instead of being limited to
+{panel_hex}/{accent_hex}/white/black: {chart_colors}. {_EAND_CHART_GREEN} is
+Etisalat's own heritage brand green (from before the e& rebrand), included
+specifically to give charts enough distinct colors. Never use white as a
+chart slice/bar color - it disappears against the white slide background.
+Every category in a pie/donut, and every series in a bar/line chart, must
+get a visually distinct color from this list - never repeat a color across
+categories/series in the same chart. This wider palette applies only inside
+`<canvas>` chart configs; every other element on the slide still uses only
+{panel_hex}, {accent_hex}, white, and black as instructed above."""
+
     return f"""
 
 e& BRAND TEMPLATE CONTRACT
@@ -226,10 +281,17 @@ COLOUR PALETTE (required)
   with a black or {panel_hex} border rather than a new tinted colour.
 - Use {accent_hex} sparingly against white or {panel_hex} for high-contrast
   emphasis; never use {accent_hex} for long paragraphs of body text.
+{chart_palette_block}
 
 Generate only the main content layer. Keep all meaningful content within x=64
-to x=1216 and y=48 to y=630. The area from y=640 to y=720 is reserved for the
-fixed e& footer and must remain empty. Do not add a footer, page number, logo,
+to x=1216 and y=48 to y=630 - that is 1152px of usable width and only 582px of
+usable height, NOT the full 720px of the canvas. Size the content block that
+sits below the y=48 offset to at most 582px tall: a block sized for the whole
+720px canvas and then placed after a 48px top offset ends at y=768 and
+overflows the slide by exactly that 48px offset, which is a frequent and
+easily-avoided failure. Never give the content wrapper `h-[720px]`, `h-screen`,
+or any other full-canvas height; budget from 582px downwards. The area from
+y=640 to y=720 is reserved for the fixed e& footer and must remain empty. Do not add a footer, page number, logo,
 or other content in that reserved area. Use clean executive layouts and
 restrained colour accents from this palette.
 
@@ -246,6 +308,15 @@ CONTENT DESIGN DIRECTION (required)
   bottom of the slide instead of visibly colliding with anything. Cap it at
   3-4 items with a short, single-line description each; do not give it more
   items or longer descriptions than that.
+- A pie or donut chart is a frequent source of overflow specifically within
+  this narrower 582px (y=48 to y=630) content window: unlike a bar or line
+  chart, which can stay short and wide, a pie/donut needs to stay close to
+  square to remain legible, so its chart card alone typically needs at least
+  380-420px of height. Budget that chart card's real height first, then size
+  the headline, subtitle, and any supporting stat cards to fit the remaining
+  space - do not default to the same spacious header-plus-short-chart
+  composition that works for a bar or line chart, since it will not leave
+  enough room for a legible pie/donut.
 - For checklist content, use compact {accent_hex} circular check markers with a white
   check, or a thin {accent_hex} vertical rule; never use colours outside this palette.
 - Keep typography editorial and high contrast: a concise {panel_hex} headline,

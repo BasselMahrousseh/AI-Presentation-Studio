@@ -46,6 +46,11 @@ interface PresentationGenerationState {
   enableHtmlSelector: boolean;
   chatHtmlSelection: ChatHtmlSelection | null;
   streamTotalSlides: number | null;
+  /** Slides the backend will actually generate. For the e& template this
+   * excludes the fixed cover/thank-you slides, which are spliced in after
+   * generation rather than streamed, so progress can count what is really
+   * being produced. Null for streams that do not report it. */
+  streamGeneratedSlides: number | null;
   streamStageMessage: string | null;
 }
 
@@ -61,6 +66,7 @@ const initialState: PresentationGenerationState = {
   enableHtmlSelector: false,
   chatHtmlSelection: null,
   streamTotalSlides: null,
+  streamGeneratedSlides: null,
   streamStageMessage: null,
 };
 
@@ -100,10 +106,14 @@ const presentationGenerationSlice = createSlice({
       state.presentationData = null;
       state.chatHtmlSelection = null;
       state.streamTotalSlides = null;
+      state.streamGeneratedSlides = null;
       state.streamStageMessage = null;
     },
     setStreamTotalSlides: (state, action: PayloadAction<number>) => {
       state.streamTotalSlides = action.payload;
+    },
+    setStreamGeneratedSlides: (state, action: PayloadAction<number>) => {
+      state.streamGeneratedSlides = action.payload;
     },
     setStreamStageMessage: (state, action: PayloadAction<string | null>) => {
       state.streamStageMessage = action.payload;
@@ -570,6 +580,7 @@ export const {
   setError,
   clearPresentationData,
   setStreamTotalSlides,
+  setStreamGeneratedSlides,
   setStreamStageMessage,
   clearOutlines,
   deleteSlideOutline,

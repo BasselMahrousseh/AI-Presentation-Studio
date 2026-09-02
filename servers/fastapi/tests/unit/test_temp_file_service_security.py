@@ -27,6 +27,24 @@ def test_create_temp_file_path_uses_safe_basename(managed_temp_dir):
     )
 
 
+def test_cleanup_temp_dir_removes_symlinked_directories(managed_temp_dir):
+    # Mirrors a macOS .framework bundle (e.g. Chrome for Testing, downloaded
+    # by Puppeteer into the temp dir): Versions/Current is a symlink to a
+    # real versioned directory, not a directory itself. os.rmdir() refuses
+    # to remove a symlink even when it points at a directory (ENOTDIR).
+    upload_dir = TEMP_FILE_SERVICE.create_temp_dir("framework-case")
+    versions_dir = os.path.join(upload_dir, "Versions")
+    real_version_dir = os.path.join(versions_dir, "A")
+    os.makedirs(real_version_dir)
+    with open(os.path.join(real_version_dir, "binary"), "w") as f:
+        f.write("fake binary contents")
+    os.symlink(real_version_dir, os.path.join(versions_dir, "Current"))
+
+    TEMP_FILE_SERVICE.cleanup_temp_dir(upload_dir)
+
+    assert not os.path.exists(upload_dir)
+
+
 def test_resolve_temp_path_rejects_paths_outside_managed_temp_dir(
     managed_temp_dir, tmp_path
 ):

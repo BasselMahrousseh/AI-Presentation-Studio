@@ -600,6 +600,7 @@ def _build_slide_preview_html(
     font_links: str = "",
     width: int = PREVIEW_WIDTH,
     height: int = PREVIEW_HEIGHT,
+    background: str = "#ffffff",
 ) -> str:
     fastapi_base = absolute_fastapi_asset_url("/").rstrip("/") + "/"
     tailwind_browser_url = absolute_fastapi_asset_url(
@@ -622,7 +623,7 @@ def _build_slide_preview_html(
       margin: 0;
       padding: 0;
       overflow: hidden;
-      background: #ffffff;
+      background: {background};
     }}
 
     *,
@@ -638,7 +639,7 @@ def _build_slide_preview_html(
       margin: 0;
       padding: 0;
       overflow: hidden;
-      background: #ffffff;
+      background: {background};
     }}
 
     .slide-container {{

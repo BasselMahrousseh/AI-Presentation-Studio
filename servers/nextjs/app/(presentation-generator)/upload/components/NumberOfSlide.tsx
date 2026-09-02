@@ -1,3 +1,7 @@
+// ORPHANED (inherited from upstream presenton.ai, kept for reference only):
+// exported but never imported anywhere in the app. Unlike the rest of this
+// upload/ folder (which IS live, see CLAUDE.md's "Route reachability map"),
+// this specific file has zero importers.
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { clampSlideCountValue, MAX_NUMBER_OF_SLIDES } from '@/utils/presentationLimits';

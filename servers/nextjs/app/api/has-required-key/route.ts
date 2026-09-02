@@ -1,3 +1,6 @@
+// ORPHANED (inherited from upstream presenton.ai, kept for reference only):
+// zero callers found in the Next.js frontend or the FastAPI backend. See
+// CLAUDE.md's "Route reachability map".
 import { NextResponse } from "next/server";
 import { readUserConfigFile } from "@/lib/user-config-store";
 

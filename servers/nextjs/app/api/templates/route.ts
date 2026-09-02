@@ -1,3 +1,9 @@
+// ORPHANED (inherited from upstream presenton.ai, kept for reference only):
+// zero callers anywhere, AND the directory it reads (app/presentation-templates/)
+// doesn't exist on disk, so it can only ever return []. Real template
+// listing goes through app/(presentation-generator)/services/api/template.ts
+// -> FastAPI's /api/v1/ppt/template/all instead. See CLAUDE.md's "Route
+// reachability map".
 import { NextResponse } from 'next/server'
 import { promises as fs } from 'fs'
 import path from 'path'

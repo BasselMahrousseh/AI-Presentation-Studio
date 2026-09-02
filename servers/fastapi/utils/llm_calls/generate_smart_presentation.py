@@ -49,6 +49,53 @@ LOGGER = logging.getLogger(__name__)
 MIN_SMART_SLIDE_COUNT = 1
 MAX_SMART_SLIDE_COUNT = 20
 SMART_GENERATION_MAX_ATTEMPTS = 8
+
+# How many times the *same* slide position may be rejected by a render-based
+# quality gate before that gate is waived for it and the slide is accepted as
+# generated. Without this, a single slide the model cannot get under the
+# overflow threshold consumes every remaining attempt and takes the whole deck
+# down with it - observed in production on a chart-heavy e& deck, where slide 7
+# failed repeatedly and generation ended with "N valid slides were retained"
+# and no usable presentation at all. These render checks are *quality* gates,
+# not correctness gates: a slide that overflows somewhat is far better for the
+# user than no deck, so past this many consecutive failures at one position the
+# check steps aside and lets generation move on. Hard validity checks (malformed
+# HTML, missing chart initializer, wrong slide type/count) are never waived.
+SMART_MAX_CONSECUTIVE_SLIDE_FAILURES = 3
+
+# A slide whose content is slightly taller than the canvas is scaled down to
+# fit rather than rejected: the render that already measures the overflow also
+# tells us exactly how tall the content is, so the exact scale that makes it
+# fit is known for free. This is strictly better than the alternatives it
+# replaces - clipping loses content outright, and retrying burns a full LLM
+# call on a slide the model usually reproduces almost identically. Below this
+# floor the shrink would be visible enough to hurt legibility (0.85 of 720px
+# still reads cleanly; much past that starts to look shrunken), so those
+# slides keep going through the normal retry/waiver path and stay the model's
+# problem to fix by generating less content.
+SMART_MIN_FIT_SCALE = 0.85
+
+# Measurement-only switch for the "is salvaging discarded slides worth it?"
+# question. Normally the first slide that fails validation raises straight out
+# of handle_chunk, which aborts consumption of the rest of the streamed
+# response - so we never learn how many *more* slides the model had already
+# produced behind the failing one, or how many of those would have passed. With
+# SMART_SALVAGE_PROBE=1 the attempt keeps draining the stream after that first
+# failure, validating (but never accepting, streaming, or persisting) every
+# later slide purely to count them, then raises the original error so the retry
+# behaviour is exactly what it would otherwise have been. It costs a real
+# render per downstream slide, so it is off unless explicitly enabled.
+SMART_SALVAGE_PROBE_ENV = "SMART_SALVAGE_PROBE"
+
+
+def _salvage_probe_enabled() -> bool:
+    return os.getenv(SMART_SALVAGE_PROBE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
 SMART_GENERATION_METRICS_INTERVAL_SECONDS = 5.0
 SMART_TITLE_MAX_VISIBLE_CHARACTERS = 800
 SMART_TITLE_MAX_VISIBLE_WORDS = 80
@@ -78,6 +125,32 @@ _EAND_FOOTER_BACKGROUND_RGB = (255, 255, 255)
 _EAND_FOOTER_PIXEL_TOLERANCE = 12
 _EAND_FOOTER_MIN_VIOLATION_PIXELS = 150
 
+# Every Smart slide's own root <section> is required (see
+# normalize_smart_slide_html below) to carry a fixed `h-[720px]
+# overflow-hidden` canvas, so overflowing content can never literally paint
+# past the slide's visible edge - it's clipped. But plain, unshrunk
+# normal-flow content (a title + a few card rows + a footer, none of it
+# `flex-1`/`min-h-0`/absolutely positioned) has no ceiling on its own natural
+# height, and inspect_smart_slide_layout's static class analysis cannot know
+# that height without an actual browser layout pass (same limitation as the
+# e& footer check above). When that natural height exceeds 720px, the clip
+# lands mid-content - often mid-line of text - which reads as content
+# "bleeding"/being sliced off the bottom edge, even though overflow-hidden is
+# working exactly as intended; the real bug is that the model generated more
+# content than the fixed canvas can hold. Verified by re-rendering the same
+# slide with its own fixed height/overflow-hidden removed (so its natural
+# height shows) against a page background color that should never
+# legitimately appear in generated slide content, then checking whether any
+# non-background pixel paints below y=720. Unlike the e& footer check, this
+# runs for every Smart slide regardless of brand template.
+SMART_OVERFLOW_SAFE_AREA_WIDTH = 1280
+SMART_OVERFLOW_MEASURE_HEIGHT = 1440
+SMART_SLIDE_CANVAS_HEIGHT = 720
+_SMART_OVERFLOW_SENTINEL_HEX = "#ff00ff"
+_SMART_OVERFLOW_SENTINEL_RGB = (255, 0, 255)
+_SMART_OVERFLOW_PIXEL_TOLERANCE = 12
+_SMART_OVERFLOW_MIN_VIOLATION_PIXELS = 150
+
 SMART_DECK_SYSTEM_PROMPT = (
     "You are an expert presentation designer and frontend engineer. Return the "
     "entire production-ready deck in the requested delimiter format. Use real "
@@ -91,6 +164,12 @@ Overflow prevention is a hard requirement:
 - The slide is exactly 1280Ã—720. Keep a 48-64px safe area and design the main
   content to fit inside it; root `overflow-hidden` is only a final canvas
   boundary, never a way to conceal content that does not fit.
+- The safe area is subtracted from the canvas, not added to it. With a 48px
+  top offset the content block below it must be at most 672px tall (720-48),
+  and less again once bottom padding is reserved. A block sized for the full
+  720px canvas and then placed after a top offset ends past y=720 and overflows
+  by exactly that offset. Never give the content wrapper `h-[720px]`,
+  `h-screen`, or any other full-canvas height.
 - Plan vertical space before writing HTML. Budget the title, subtitle, content,
   footer, padding, gaps, and line heights so their combined height stays within
   the canvas. Prefer fewer, shorter points over dense copy.
@@ -145,6 +224,14 @@ Overflow prevention is a hard requirement:
   single short phrase, drop the panel to `h-auto` sized to its real content
   instead of matching a sibling's height, or split the items across more than
   one column.
+- A pie or donut chart is a frequent overflow source: unlike a bar or line
+  chart, which can stay short and wide, a pie/donut needs to stay close to
+  square to remain legible, so its chart card alone typically needs at least
+  380-420px of height. Budget that chart card's real height first, then size
+  the headline, subtitle, and any supporting stat cards to fit the remaining
+  space - do not default to the same spacious header-plus-short-chart
+  composition that works for a bar or line chart, since it will not leave
+  enough room for a legible pie/donut.
 - Use this font-size step-down ladder when space is tight: 48, 43, 36, 32, 28,
   24, 20, 18, 16, 14. Never reduce body text below 14px.
 - Never use `overflow-auto`, `overflow-scroll`, `overflow-x-auto`,
@@ -721,51 +808,167 @@ def _validate_smart_slide_layout_safety(html: str) -> None:
         )
 
 
-def _count_non_background_pixels_in_footer_band(image_path: str) -> int:
+def _diff_band_against(
+    band: "Image.Image", background_rgb: tuple[int, int, int], tolerance: int
+) -> tuple[int, int]:
+    """Count pixels in `band` that differ from a known flat background, and
+    report how far down the band the deepest such pixel sits. Shared by both
+    layout checks so they can run off a single render."""
+    background = Image.new("RGB", band.size, background_rgb)
+    diff = ImageChops.difference(band, background).convert("L")
+    thresholded = diff.point(lambda value: 255 if value > tolerance else 0)
+    bbox = thresholded.getbbox()
+    return thresholded.histogram()[255], (bbox[3] if bbox else 0)
+
+
+def _measure_smart_slide_layout(
+    image_path: str, *, measure_footer: bool
+) -> tuple[int, int, int, int]:
+    """Measure both layout violations from ONE render: content spilling past
+    the 720px canvas, and (e& only) content intruding into the reserved
+    y=630-720 footer band.
+
+    These used to be two separate `render_html_to_image` calls - i.e. two full
+    cold Chromium launches per slide - even though both just measure the same
+    rendered page. Profiling a real e& generation put render checks at ~13-15%
+    of total wall time, with e& paying that twice over, so they now share one
+    render. The bands read against different backgrounds on purpose: past y=720
+    is outside the slide's own box, so it shows the sentinel page colour, while
+    y=630-720 is still inside the (white) slide, so it reads against white -
+    exactly the comparison the standalone footer check made before.
+    """
     with Image.open(image_path) as image:
         rgb_image = image.convert("RGB")
-        footer_band = rgb_image.crop(
-            (0, EAND_FOOTER_RESERVED_TOP_Y, rgb_image.width, rgb_image.height)
+        width, height = rgb_image.size
+        overflow_band = rgb_image.crop((0, SMART_SLIDE_CANVAS_HEIGHT, width, height))
+        footer_band = (
+            rgb_image.crop(
+                (0, EAND_FOOTER_RESERVED_TOP_Y, width, SMART_SLIDE_CANVAS_HEIGHT)
+            )
+            if measure_footer
+            else None
         )
-    background = Image.new("RGB", footer_band.size, _EAND_FOOTER_BACKGROUND_RGB)
-    diff = ImageChops.difference(footer_band, background).convert("L")
-    thresholded = diff.point(
-        lambda value: 255 if value > _EAND_FOOTER_PIXEL_TOLERANCE else 0
+
+    overflow_pixels, overshoot_px = _diff_band_against(
+        overflow_band, _SMART_OVERFLOW_SENTINEL_RGB, _SMART_OVERFLOW_PIXEL_TOLERANCE
     )
-    return thresholded.histogram()[255]
+    footer_pixels = 0
+    footer_depth_px = 0
+    if footer_band is not None:
+        footer_pixels, footer_depth_px = _diff_band_against(
+            footer_band, _EAND_FOOTER_BACKGROUND_RGB, _EAND_FOOTER_PIXEL_TOLERANCE
+        )
+    return overflow_pixels, overshoot_px, footer_pixels, footer_depth_px
 
 
-async def _check_smart_slide_eand_footer_safe_area(html: str) -> None:
-    """Render the model's own slide content (before the fixed e& footer chrome
-    is spliced on by apply_smart_brand_template) and reject it if any content
-    paints below the reserved y=630 line. This is a real render, not a class
-    guess: inspect_smart_slide_layout can only compute exact geometry for
-    `position: absolute` elements, and normal-flow content (what the prompt
-    tells the model to use for almost everything) has no knowable rendered
-    height without actually laying it out."""
+def _slide_html_without_canvas_clip(html: str) -> str:
+    """Return a copy of the slide's HTML with only its own root <section>'s
+    `overflow-hidden` clip removed, so any content that would otherwise be
+    silently clipped becomes visible past the box instead. Deliberately
+    keeps `h-[720px]` intact rather than switching to an auto/natural height:
+    an early version did that and produced wildly wrong measurements (a
+    known-clean slide "measured" as overflowing by nearly 400px) because
+    Tailwind's `h-full`/flex-column/grid-stretch sizing throughout the slide
+    all depend on that 720px box being a *definite* height - making it auto
+    changes how every descendant's height is computed, not just whether
+    overflow is visible. Keeping the box's own size pinned at exactly 720px
+    preserves all of that internal layout math byte-for-byte identical to
+    the real render; only the clip itself is lifted. Only the root section's
+    own classes are touched - any overflow-hidden used deeper in the slide
+    (e.g. a rounded card clipping its own children) is left alone."""
+    root_match = _SECTION_OPEN.match(html)
+    if root_match is None:
+        return html
+    attributes = root_match.group(1)
+    class_value = _attribute(attributes, "class")
+    kept_classes = [
+        token for token in class_value.split() if token != "overflow-hidden"
+    ]
+    new_attributes = re.sub(
+        r'class\s*=\s*(?:"[^"]*"|\'[^\']*\')',
+        'class="' + " ".join(kept_classes) + '"',
+        attributes,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    return f"<section{new_attributes}>" + html[len(root_match.group(0)) :]
+
+
+def _slide_html_scaled_to_fit(html: str, scale: float) -> str:
+    """Wrap the slide's own children in a box that is scaled down just enough
+    for the content to fit inside the canvas.
+
+    The wrapper deliberately mirrors the root section's exact box
+    (position:relative, 1280x720) instead of being a bare <div>. A transformed
+    element becomes the containing block for its absolutely-positioned
+    descendants, so a wrapper of any other size or position would silently
+    re-anchor every `absolute`/`bottom-*` element in the slide - a much worse
+    bug than the overflow being fixed. Matching the section's box exactly means
+    those elements resolve against a rectangle identical to the one they
+    already resolved against.
+
+    `transform-origin: top center` keeps the content pinned to the top of the
+    slide (so the first line does not drift) and shrinks it toward the middle
+    horizontally, leaving symmetric side gutters rather than a lopsided margin.
+    Transforms do not affect layout, so the section's own 720px box and its
+    `overflow-hidden` are untouched - this only changes what is painted.
+    """
+    root_match = _SECTION_OPEN.match(html)
+    if root_match is None:
+        return html
+    open_tag = root_match.group(0)
+    body = html[len(open_tag) :]
+    closing = "</section>"
+    if body.rstrip().endswith(closing):
+        stripped = body.rstrip()
+        body, tail = stripped[: -len(closing)], stripped[-len(closing) :]
+    else:
+        tail = ""
+    wrapper_style = (
+        "position:relative;"
+        f"width:{SMART_OVERFLOW_SAFE_AREA_WIDTH}px;"
+        f"height:{SMART_SLIDE_CANVAS_HEIGHT}px;"
+        f"transform:scale({scale:.4f});"
+        "transform-origin:top center;"
+    )
+    return (
+        f'{open_tag}<div data-smart-fit-scale="{scale:.4f}" '
+        f'style="{wrapper_style}">{body}</div>{tail}'
+    )
+
+
+async def _check_smart_slide_layout(
+    html: str, *, check_eand_footer: bool
+) -> float | None:
+    """Run every render-based layout check for one slide off a SINGLE render.
+
+    Replaces the previous pair of independent checks
+    (_check_smart_slide_canvas_overflow + _check_smart_slide_eand_footer_safe_area),
+    which each spawned their own cold Chromium to look at the same page - so e&
+    slides paid the render cost twice per slide for no additional information.
+    """
     preview_html = _build_slide_preview_html(
-        html,
+        _slide_html_without_canvas_clip(html),
         font_css="",
-        width=EAND_FOOTER_SAFE_AREA_WIDTH,
-        height=EAND_FOOTER_SAFE_AREA_HEIGHT,
+        width=SMART_OVERFLOW_SAFE_AREA_WIDTH,
+        height=SMART_OVERFLOW_MEASURE_HEIGHT,
+        background=_SMART_OVERFLOW_SENTINEL_HEX,
     )
     image_path: str | None = None
+    measurement: tuple[int, int, int, int] | None = None
     try:
         result = await EXPORT_TASK_SERVICE.render_html_to_image(
-            preview_html, EAND_FOOTER_SAFE_AREA_WIDTH, EAND_FOOTER_SAFE_AREA_HEIGHT
+            preview_html, SMART_OVERFLOW_SAFE_AREA_WIDTH, SMART_OVERFLOW_MEASURE_HEIGHT
         )
         image_path = result.path
-        violation_pixels = await asyncio.to_thread(
-            _count_non_background_pixels_in_footer_band, image_path
+        measurement = await asyncio.to_thread(
+            _measure_smart_slide_layout, image_path, measure_footer=check_eand_footer
         )
-    except HTTPException:
-        raise
     except Exception:
-        # A render failure here is an environment/infra problem, not evidence
-        # the slide is unsafe. Fail open rather than blocking every e& smart
-        # generation on this one safety net.
+        # Fail open on any render/infra failure, HTTPException included - see
+        # the note on the standalone checks below for why that matters.
         LOGGER.exception(
-            "[smart-generation] eand_footer_safe_area_check_failed; skipping check"
+            "[smart-generation] slide_layout_check_failed; skipping check"
         )
         return
     finally:
@@ -775,7 +978,49 @@ async def _check_smart_slide_eand_footer_safe_area(html: str) -> None:
             except OSError:
                 pass
 
-    if violation_pixels > _EAND_FOOTER_MIN_VIOLATION_PIXELS:
+    overflow_pixels, overshoot_px, footer_pixels, footer_depth_px = measurement
+
+    # Work out the single scale that satisfies every violated constraint. Each
+    # one is "the deepest painted row must sit at or above <limit>", and the
+    # render already told us where that row is, so the needed scale is exact
+    # rather than a guess: a row at H maps to H*scale under a top-anchored
+    # transform, so scale = limit / H.
+    required_scales: list[float] = []
+    if overflow_pixels > _SMART_OVERFLOW_MIN_VIOLATION_PIXELS:
+        deepest_row = SMART_SLIDE_CANVAS_HEIGHT + overshoot_px
+        required_scales.append(SMART_SLIDE_CANVAS_HEIGHT / deepest_row)
+    if check_eand_footer and footer_pixels > _EAND_FOOTER_MIN_VIOLATION_PIXELS:
+        # e& is the tighter constraint: content must clear the reserved footer
+        # band, not merely stay inside the canvas.
+        deepest_row = EAND_FOOTER_RESERVED_TOP_Y + footer_depth_px
+        required_scales.append(EAND_FOOTER_RESERVED_TOP_Y / deepest_row)
+    if required_scales:
+        fit_scale = min(required_scales)
+        if fit_scale >= SMART_MIN_FIT_SCALE:
+            LOGGER.info(
+                "[smart-generation] scaling slide to fit scale=%.4f "
+                "(overshoot=%spx footer_depth=%spx) instead of rejecting it",
+                fit_scale,
+                overshoot_px,
+                footer_depth_px,
+            )
+            return fit_scale
+
+    if overflow_pixels > _SMART_OVERFLOW_MIN_VIOLATION_PIXELS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The Smart slide's own content is approximately "
+                f"{overshoot_px}px taller than the fixed "
+                f"{SMART_SLIDE_CANVAS_HEIGHT}px canvas allows, and would be "
+                "silently clipped, cutting off text or cards mid-way. "
+                "Shorten the content, reduce the number of stacked "
+                "rows/cards, or redistribute it across more slides so "
+                f"everything fits within the 1280x{SMART_SLIDE_CANVAS_HEIGHT} "
+                "canvas."
+            ),
+        )
+    if check_eand_footer and footer_pixels > _EAND_FOOTER_MIN_VIOLATION_PIXELS:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -786,6 +1031,7 @@ async def _check_smart_slide_eand_footer_safe_area(html: str) -> None:
                 "within y=48 to y=630 and leave the area below y=630 empty."
             ),
         )
+    return None
 
 
 def _slide_from_html(value: Any, index: int) -> dict[str, str]:
@@ -1031,11 +1277,24 @@ async def generate_smart_presentation(
     title = ""
     last_exception: Exception | None = None
     retry_error: str | None = None
+    # Position of the slide the previous attempt died on, and how many
+    # consecutive attempts have now died at that same position - see
+    # SMART_MAX_CONSECUTIVE_SLIDE_FAILURES.
+    stalled_at_index: int | None = None
+    consecutive_stalls = 0
 
     for _attempt in range(SMART_GENERATION_MAX_ATTEMPTS):
+        waive_render_checks = consecutive_stalls >= SMART_MAX_CONSECUTIVE_SLIDE_FAILURES
         LOGGER.info(
-            "[smart-generation] attempt=%s/%s accepted_slides=%s",
+            "[smart-generation] attempt=%s/%s accepted_slides=%s%s",
             _attempt + 1, SMART_GENERATION_MAX_ATTEMPTS, len(accepted_slides),
+            (
+                f" (slide {len(accepted_slides) + 1} has failed "
+                f"{consecutive_stalls}x in a row - waiving render-based layout "
+                "checks for it so generation can continue)"
+                if waive_render_checks
+                else ""
+            ),
         )
         messages = get_smart_messages(
             content=content,
@@ -1055,7 +1314,12 @@ async def generate_smart_presentation(
             smart_brand_colors=smart_brand_colors,
         )
 
-        print(messages)
+        # Debug-only: this dumps the entire prompt (tens of KB, and it grows on
+        # every retry as accepted slide HTML is appended for visual continuity).
+        # It was a bare print() to stdout, which made real backend logs almost
+        # unreadable when diagnosing generation failures - the one place these
+        # logs matter most. Set LOG_LEVEL=DEBUG to get it back.
+        LOGGER.debug("[smart-generation] prompt messages=%s", messages)
 
         parser = SmartSlideStreamParser()
         attempt_slides: list[dict[str, str]] = []
@@ -1063,26 +1327,92 @@ async def generate_smart_presentation(
         streamed_thinking = ""
         model_supports_thinking = configured_thinking_support
         attempt_started_at = time.perf_counter()
+        # Measurement only - see SMART_SALVAGE_PROBE_ENV. `failed` holds the
+        # exception the attempt would normally have raised straight away;
+        # `downstream_*` count the slides that arrived behind it.
+        probe = {
+            "enabled": _salvage_probe_enabled(),
+            "failed_index": None,
+            "failed_error": None,
+            "downstream_total": 0,
+            "downstream_valid": 0,
+        }
         estimated_input_tokens = estimate_message_tokens(messages)
 
         async def handle_chunk(chunk: str) -> None:
             nonlocal streamed_response
             streamed_response += chunk
             for slide in parser.feed(chunk):
+                if probe["failed_index"] is not None:
+                    # Probe mode only: this attempt has already failed and will
+                    # raise once the stream drains. Every later slide is
+                    # measured and thrown away - never appended to
+                    # attempt_slides, never streamed to the client - so the
+                    # accepted prefix and the retry are unaffected.
+                    probe_index = probe["failed_index"] + probe["downstream_total"] + 1
+                    if probe_index >= n_slides:
+                        continue
+                    probe["downstream_total"] += 1
+                    try:
+                        _validate_slide_position(
+                            slide,
+                            probe_index,
+                            include_title_slide=include_title_slide,
+                            include_table_of_contents=include_table_of_contents,
+                        )
+                        await _check_smart_slide_layout(
+                            slide["html"],
+                            check_eand_footer=smart_template == EAND_SMART_TEMPLATE_ID,
+                        )
+                    except Exception:
+                        pass
+                    else:
+                        probe["downstream_valid"] += 1
+                    continue
                 index = len(accepted_slides) + len(attempt_slides)
                 if index >= n_slides:
                     raise HTTPException(
                         status_code=400,
                         detail="The model generated too many Smart slides",
                     )
-                _validate_slide_position(
-                    slide,
-                    index,
-                    include_title_slide=include_title_slide,
-                    include_table_of_contents=include_table_of_contents,
-                )
-                if smart_template == EAND_SMART_TEMPLATE_ID:
-                    await _check_smart_slide_eand_footer_safe_area(slide["html"])
+                try:
+                    _validate_slide_position(
+                        slide,
+                        index,
+                        include_title_slide=include_title_slide,
+                        include_table_of_contents=include_table_of_contents,
+                    )
+                    # Waived only for the one slide position that has already
+                    # stalled the deck repeatedly - see
+                    # SMART_MAX_CONSECUTIVE_SLIDE_FAILURES. Scoped to that
+                    # position, not the whole attempt, so later slides in the
+                    # same response are still fully checked.
+                    if not (waive_render_checks and index == len(accepted_slides)):
+                        fit_scale = await _check_smart_slide_layout(
+                            slide["html"],
+                            check_eand_footer=smart_template == EAND_SMART_TEMPLATE_ID,
+                        )
+                        if fit_scale is not None:
+                            # Slightly-too-tall content is made to fit rather
+                            # than clipped or regenerated - see
+                            # SMART_MIN_FIT_SCALE.
+                            slide["html"] = _slide_html_scaled_to_fit(
+                                slide["html"], fit_scale
+                            )
+                except Exception as slide_error:
+                    if not probe["enabled"]:
+                        raise
+                    probe["failed_index"] = index
+                    probe["failed_error"] = slide_error
+                    continue
+                if waive_render_checks and index == len(accepted_slides):
+                    LOGGER.warning(
+                        "[smart-generation] accepting slide=%s without render-based "
+                        "layout checks after %s consecutive failures at this position "
+                        "- it may overflow, which is preferable to failing the deck",
+                        index + 1,
+                        consecutive_stalls,
+                    )
                 attempt_slides.append(slide)
                 image_sources = [
                     next(source for source in match if source)
@@ -1163,6 +1493,16 @@ async def generate_smart_presentation(
                     await asyncio.gather(metrics_task, return_exceptions=True)
             if on_metrics is not None:
                 await on_metrics(metrics)
+            if probe["failed_error"] is not None:
+                LOGGER.info(
+                    "[smart-generation] salvage-probe attempt=%s failed_slide=%s "
+                    "downstream_slides=%s downstream_valid=%s",
+                    _attempt + 1,
+                    probe["failed_index"] + 1,
+                    probe["downstream_total"],
+                    probe["downstream_valid"],
+                )
+                raise probe["failed_error"]
             parsed_title, parsed_slides = parse_smart_presentation_html(
                 response,
                 expected_slide_count=n_slides - len(accepted_slides),
@@ -1192,6 +1532,32 @@ async def generate_smart_presentation(
             if not title and title_match is not None:
                 title = title_match.group(1).strip()
             accepted_slides.extend(attempt_slides)
+            # Track whether this attempt died at the same slide position as the
+            # last one. Progress (any newly accepted slide) resets the counter,
+            # so the waiver only ever kicks in for a genuinely stuck position.
+            failed_at_index = len(accepted_slides)
+            # The single most useful line when diagnosing a slow or failing
+            # generation: *where* in the deck the attempt died. An attempt that
+            # dies at slide 1 wasted a whole LLM call for nothing; one that dies
+            # at slide 12 of 14 kept almost the entire deck.
+            LOGGER.info(
+                "[smart-generation] attempt_failed attempt=%s/%s died_at_slide=%s "
+                "of=%s new_slides_this_attempt=%s total_accepted=%s "
+                "elapsed=%.1fs error=%r",
+                _attempt + 1,
+                SMART_GENERATION_MAX_ATTEMPTS,
+                failed_at_index + 1,
+                n_slides,
+                len(attempt_slides),
+                failed_at_index,
+                time.perf_counter() - attempt_started_at,
+                (retry_error or "")[:200],
+            )
+            if failed_at_index == stalled_at_index:
+                consecutive_stalls += 1
+            else:
+                stalled_at_index = failed_at_index
+                consecutive_stalls = 1
             if len(accepted_slides) >= n_slides:
                 return {
                     "title": title or accepted_slides[0]["title"],

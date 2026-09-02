@@ -6,6 +6,7 @@ import {
   setStreaming,
   setStreamStageMessage,
   setStreamTotalSlides,
+  setStreamGeneratedSlides,
   type PresentationData,
 } from "@/store/slices/presentationGeneration";
 import { jsonrepair } from "jsonrepair";
@@ -304,6 +305,9 @@ export const usePresentationStreaming = (
             if (typeof data.total_slides === "number") {
               dispatch(setStreamTotalSlides(data.total_slides));
             }
+            if (typeof data.generated_slide_count === "number") {
+              dispatch(setStreamGeneratedSlides(data.generated_slide_count));
+            }
             if (data.fonts && typeof data.fonts === "object") {
               const prev = store.getState().presentationGeneration.presentationData;
               dispatch(
@@ -329,6 +333,9 @@ export const usePresentationStreaming = (
             const html = typeof data.html === "string" ? data.html : "";
             if (typeof data.total_slides === "number") {
               dispatch(setStreamTotalSlides(data.total_slides));
+            }
+            if (typeof data.generated_slide_count === "number") {
+              dispatch(setStreamGeneratedSlides(data.generated_slide_count));
             }
             if (!Number.isFinite(slideIndex) || !html) break;
 
@@ -363,6 +370,9 @@ export const usePresentationStreaming = (
           case "chunk":
             if (typeof data.total_slides === "number") {
               dispatch(setStreamTotalSlides(data.total_slides));
+            }
+            if (typeof data.generated_slide_count === "number") {
+              dispatch(setStreamGeneratedSlides(data.generated_slide_count));
             }
             accumulatedChunks += data.chunk;
             const streamedSlide = parseStreamedSlideChunk(data.chunk);

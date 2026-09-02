@@ -104,6 +104,7 @@ const PresentationHeader = ({
     presentationData,
     isStreaming,
     streamTotalSlides,
+    streamGeneratedSlides,
     streamStageMessage,
   } = useSelector((state: RootState) => state.presentationGeneration);
 
@@ -111,6 +112,7 @@ const PresentationHeader = ({
   const streamProgressLabel = getStreamProgressLabel({
     isStreaming,
     streamTotalSlides,
+    streamGeneratedSlides,
     streamStageMessage,
     slidesGenerated,
   });

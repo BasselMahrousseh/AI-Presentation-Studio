@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { RootState } from "@/store/store";
 import "@/app/(presentation-generator)/utils/prism-languages";
@@ -22,6 +22,8 @@ import {
 import { normalizeBackendAssetUrls } from "@/utils/api";
 import { ensureTailwindBrowserScript } from "@/lib/tailwind-browser";
 import { useSmartChartInjection } from "@/app/(presentation-generator)/components/useSmartChartInjection";
+import { captureAllChartsOnPage } from "@/lib/chart-export-capture";
+import { applyArbitraryTextStyles } from "@/lib/smart-slide-arbitrary-styles";
 
 const PDF_PRINT_STYLE = `
   html,
@@ -97,6 +99,7 @@ const PDF_PRINT_STYLE = `
 type PresentationPageProps = {
   presentation_id: string;
   exportCookie?: string;
+  chartCaptureToken?: string;
 };
 
 const SmartHtmlPdfSlide = ({
@@ -120,6 +123,17 @@ const SmartHtmlPdfSlide = ({
     containerRef,
   });
 
+  // The export page has no Tailwind-JIT-settle logic at all (unlike
+  // SmartHtmlEditor.tsx's own mitigation for the same shared-engine race),
+  // which is why a small heading baked itself into real exported files.
+  // useLayoutEffect so this runs synchronously right after React commits
+  // this dangerouslySetInnerHTML, before the browser paints.
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    applyArbitraryTextStyles(container);
+  }, [html]);
+
   return (
     <div className="smart-slide-export-root h-[720px] w-[1280px] overflow-hidden bg-white">
       <div className="smart-slide-export-content h-[720px] w-[1280px] overflow-hidden bg-white">
@@ -134,7 +148,11 @@ const SmartHtmlPdfSlide = ({
   );
 };
 
-const PresentationPage = ({ presentation_id, exportCookie }: PresentationPageProps) => {
+const PresentationPage = ({
+  presentation_id,
+  exportCookie,
+  chartCaptureToken,
+}: PresentationPageProps) => {
   const pathname = usePathname();
   const [contentLoading, setContentLoading] = useState(true);
   const exportCookieFromHash =
@@ -251,6 +269,18 @@ const PresentationPage = ({ presentation_id, exportCookie }: PresentationPagePro
 
   const slides = presentationData?.slides ?? [];
   const isLoading = contentLoading || slides.length === 0;
+
+  const chartCaptureRanRef = useRef(false);
+  useEffect(() => {
+    if (isLoading || !chartCaptureToken || chartCaptureRanRef.current) return;
+    chartCaptureRanRef.current = true;
+
+    void captureAllChartsOnPage({
+      token: chartCaptureToken,
+      presentationId: presentation_id,
+      reportUrl: "/api/export-chart-capture",
+    });
+  }, [isLoading, chartCaptureToken, presentation_id]);
 
   return (
     <div className="m-0 flex flex-col overflow-visible p-0">

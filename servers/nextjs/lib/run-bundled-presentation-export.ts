@@ -2,11 +2,61 @@ import path from "path";
 import os from "os";
 import fs from "fs/promises";
 import { spawn } from "child_process";
+import { randomUUID } from "crypto";
 import { sanitizeFilename } from "@/app/(presentation-generator)/utils/others";
 import {
   BoundedTextBuffer,
   memorySnapshotMb,
 } from "@/lib/runtime-limits";
+
+function getFastApiInternalBaseUrl(): string {
+  const internal = process.env.FAST_API_INTERNAL_URL?.trim();
+  if (internal) return internal.replace(/\/+$/, "");
+  const configured = process.env.NEXT_PUBLIC_FAST_API?.trim();
+  if (configured) return configured.replace(/\/+$/, "");
+  return "http://127.0.0.1:8000";
+}
+
+/**
+ * Runs the post-export native-chart upgrade pass (swaps flattened chart
+ * images for real, editable PPTX charts) for a deck this function just
+ * exported. Best-effort and awaited before the caller returns the file to
+ * the browser: any failure here must never block the (already-successful)
+ * download, so it only ever logs.
+ */
+async function requestNativeChartUpgrade(params: {
+  token: string;
+  presentationId: string;
+  pptxPath: string;
+  cookieHeader?: string;
+}): Promise<void> {
+  try {
+    const response = await fetch(
+      `${getFastApiInternalBaseUrl()}/api/v1/ppt/presentation/export/upgrade-charts`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(params.cookieHeader ? { Cookie: params.cookieHeader } : {}),
+        },
+        body: JSON.stringify({
+          token: params.token,
+          presentation_id: params.presentationId,
+          pptx_path: params.pptxPath,
+        }),
+      }
+    );
+    if (!response.ok) {
+      console.error(
+        "[bundled-export] chart upgrade request failed",
+        response.status,
+        await response.text().catch(() => "")
+      );
+    }
+  } catch (error) {
+    console.error("[bundled-export] chart upgrade request failed", error);
+  }
+}
 
 /** Repo `presentation-export/` at app root (`/app/presentation-export` in Docker). */
 export function getExportPackageRoot(): string {
@@ -193,6 +243,10 @@ async function runBundledPresentationExportLocked(params: {
   if (fastapiUrl) {
     q.set("fastapiUrl", fastapiUrl);
   }
+  const chartCaptureToken = format === "pptx" ? randomUUID() : undefined;
+  if (chartCaptureToken) {
+    q.set("chartCaptureToken", chartCaptureToken);
+  }
   const basePptUrl = `${nextjsUrl}/pdf-maker?${q.toString()}`;
   const pptUrl = cookieHeader?.trim()
     ? `${basePptUrl}#exportCookie=${encodeURIComponent(cookieHeader)}`
@@ -288,6 +342,16 @@ async function runBundledPresentationExportLocked(params: {
     });
 
     await ensureExportFileReadable(outPath);
+
+    if (chartCaptureToken) {
+      await requestNativeChartUpgrade({
+        token: chartCaptureToken,
+        presentationId,
+        pptxPath: outPath,
+        cookieHeader,
+      });
+    }
+
     console.info("[bundled-export] finish", {
       presentationId,
       format,

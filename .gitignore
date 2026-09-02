@@ -62,3 +62,6 @@ $RECYCLE.BIN/
 .Trash-*
 .nfs*
 .fuse_hidden*
+# Chrome for Testing, downloaded via @puppeteer/browsers for the export bundle.
+# ~358MB of binaries; never commit these.
+chrome/

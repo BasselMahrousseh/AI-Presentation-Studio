@@ -1828,6 +1828,12 @@ async def _stream_smart_presentation(
                     "type": "fonts",
                     "fonts": presentation.fonts,
                     "total_slides": slide_count,
+                    # Slides the model actually generates. For
+                    # e& this excludes the fixed cover/thank-you
+                    # slides, which are spliced in after
+                    # generation rather than streamed - so
+                    # progress reads "slide 4 of 10", not "of 12".
+                    "generated_slide_count": generated_slide_count,
                 }
             ),
         ).to_string()
@@ -1926,6 +1932,12 @@ async def _stream_smart_presentation(
                             "html": streamed_slide.html_content,
                             "slide": streamed_slide.model_dump(mode="json"),
                             "total_slides": slide_count,
+                            # Slides the model actually generates. For
+                            # e& this excludes the fixed cover/thank-you
+                            # slides, which are spliced in after
+                            # generation rather than streamed - so
+                            # progress reads "slide 4 of 10", not "of 12".
+                            "generated_slide_count": generated_slide_count,
                         }
                     ),
                 ).to_string()
@@ -1962,6 +1974,12 @@ async def _stream_smart_presentation(
                         "html": title_slide.html_content,
                         "slide": title_slide.model_dump(mode="json"),
                         "total_slides": slide_count,
+                        # Slides the model actually generates. For
+                        # e& this excludes the fixed cover/thank-you
+                        # slides, which are spliced in after
+                        # generation rather than streamed - so
+                        # progress reads "slide 4 of 10", not "of 12".
+                        "generated_slide_count": generated_slide_count,
                     }
                 ),
             ).to_string()
@@ -1992,6 +2010,12 @@ async def _stream_smart_presentation(
                             "html": final_slide.html_content,
                             "slide": final_slide.model_dump(mode="json"),
                             "total_slides": slide_count,
+                            # Slides the model actually generates. For
+                            # e& this excludes the fixed cover/thank-you
+                            # slides, which are spliced in after
+                            # generation rather than streamed - so
+                            # progress reads "slide 4 of 10", not "of 12".
+                            "generated_slide_count": generated_slide_count,
                         }
                     ),
                 ).to_string()
@@ -2022,6 +2046,12 @@ async def _stream_smart_presentation(
                         "html": thank_you_slide.html_content,
                         "slide": thank_you_slide.model_dump(mode="json"),
                         "total_slides": slide_count,
+                        # Slides the model actually generates. For
+                        # e& this excludes the fixed cover/thank-you
+                        # slides, which are spliced in after
+                        # generation rather than streamed - so
+                        # progress reads "slide 4 of 10", not "of 12".
+                        "generated_slide_count": generated_slide_count,
                     }
                 ),
             ).to_string()

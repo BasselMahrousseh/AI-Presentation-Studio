@@ -3,6 +3,7 @@ from fastapi import HTTPException
 
 from utils.smart_brand_templates import (
     EAND_TITLE_SUBTITLE,
+    _tint_hex,
     apply_smart_brand_template,
     build_eand_thank_you_slide,
     build_eand_title_slide,
@@ -77,5 +78,43 @@ def test_eand_title_subtitle_is_a_safe_brand_label():
 
     assert "e&amp; presentation" in title_slide
     assert "Generate a 12-slide strategy deck" not in title_slide
+
+
+def test_tint_hex_blends_toward_white():
+    assert _tint_hex("#E00600", 0.0) == "#E00600"
+    assert _tint_hex("#E00600", 1.0) == "#FFFFFF"
+    # A partial tint should land strictly between the base color and white
+    # on every channel.
+    tinted = _tint_hex("#0B1F3A", 0.5)
+    base = (0x0B, 0x1F, 0x3A)
+    tinted_rgb = tuple(int(tinted[i : i + 2], 16) for i in (1, 3, 5))
+    assert all(base[i] < tinted_rgb[i] < 255 for i in range(3))
+
+
+def test_default_eand_palette_gets_a_wider_chart_only_color_set():
+    prompt = get_smart_brand_prompt("eand", None)
+
+    assert "CHART COLOR PALETTE" in prompt
+    # The base panel/accent colors, Etisalat's heritage green, and computed
+    # tints must all be present as concrete hex values the model can use.
+    assert "#82AA40" in prompt
+    assert "#CCDB3B" in prompt
+    assert _tint_hex("#E00600", 0.35) in prompt
+    assert _tint_hex("#0B1F3A", 0.35) in prompt
+    # Never offer white as a chart color - it disappears against the white
+    # slide/card background, which is exactly the bug this fixes.
+    chart_section = prompt[prompt.index("CHART COLOR PALETTE") :]
+    palette_line = chart_section.split("may use this wider palette")[1].split("\n")[0]
+    assert "#FFFFFF" not in palette_line
+    assert "#FFF" not in palette_line
+
+
+def test_custom_color_palette_does_not_get_the_synthetic_chart_palette():
+    # An uploaded reference deck's extracted colors represent that deck's
+    # real brand - don't invent additional (unbranded) colors on top of it.
+    prompt = get_smart_brand_prompt("eand", ["#123456", "#654321", "#AABBCC"])
+
+    assert "CHART COLOR PALETTE" not in prompt
+    assert "#82AA40" not in prompt
 
 

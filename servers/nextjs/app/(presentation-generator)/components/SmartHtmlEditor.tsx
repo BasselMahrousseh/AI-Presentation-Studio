@@ -23,6 +23,7 @@ import ImageEditor from "./ImageEditor";
 import SmartChartEditor, { type SmartChartDraft } from "./SmartChartEditor";
 import SmartHtmlSlide from "./SmartHtmlSlide";
 import { useSmartChartInjection } from "./useSmartChartInjection";
+import { applyArbitraryTextStyles } from "@/lib/smart-slide-arbitrary-styles";
 
 type ActiveMedia = {
   element: HTMLImageElement;
@@ -213,6 +214,7 @@ export default function SmartHtmlEditor({
   );
   const [activeMedia, setActiveMedia] = useState<ActiveMedia | null>(null);
   const [activeChart, setActiveChart] = useState<SmartChartDraft | null>(null);
+  const [stylesSettled, setStylesSettled] = useState(false);
   const hoveredElementRef = useRef<HTMLElement | null>(null);
   const selectedElementRef = useRef<HTMLElement | null>(null);
   const [hoverRect, setHoverRect] = useState<SelectionRect | null>(null);
@@ -329,10 +331,55 @@ export default function SmartHtmlEditor({
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !tailwindReady) return;
+    setStylesSettled(false);
     container.innerHTML = html;
     dirtyRef.current = false;
+    // Deterministic fix for arbitrary-value text sizing (font-size/
+    // line-height/letter-spacing) - see smart-slide-arbitrary-styles.ts.
+    // This makes the MutationObserver/timeout dance below no longer the
+    // thing protecting font size specifically; it's kept for everything
+    // else (fonts, other arbitrary utilities) this doesn't cover.
+    applyArbitraryTextStyles(container);
 
-    const cleanups: Array<() => void> = [];
+    // Injecting new HTML fires the shared Tailwind runtime's own
+    // MutationObserver, which asynchronously recompiles CSS for any new
+    // arbitrary-value classes (e.g. text-[43px]) into its single shared
+    // <style> element - there's no public "wait until done" API for this
+    // (public/vendor/tailwindcss-browser-*.js is a purely passive,
+    // auto-injecting engine by design, same as the real Tailwind CDN
+    // script). Without waiting for that rebuild, this container can render
+    // text at Tailwind's un-styled default size until the rebuild catches
+    // up - the reported "heading looks small" bug, since the sidebar
+    // thumbnail (a fresh, isolated iframe per slide) never hits this because
+    // its own Tailwind engine always compiles fresh from a clean slate.
+    // Watch document.head for that rebuild to actually land (or a bounded
+    // timeout, e.g. when no new classes were needed at all - the common
+    // case once other slides have already compiled the same utilities)
+    // before flipping stylesSettled, so the known-correct SmartHtmlSlide
+    // fallback below keeps showing in the meantime instead of this
+    // container being revealed prematurely.
+    let settled = false;
+    const styleObserver = new MutationObserver(() => markSettled());
+    const timeoutId = window.setTimeout(markSettled, 500);
+    function markSettled() {
+      if (settled) return;
+      settled = true;
+      styleObserver.disconnect();
+      window.clearTimeout(timeoutId);
+      setStylesSettled(true);
+    }
+    styleObserver.observe(document.head, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+
+    const cleanups: Array<() => void> = [
+      () => {
+        styleObserver.disconnect();
+        window.clearTimeout(timeoutId);
+      },
+    ];
     const markEditable = (element: HTMLElement, isWrapper = false) => {
       if (element.closest('[data-editable-text="1"]')) return;
       element.setAttribute("data-editable-text", "1");
@@ -643,13 +690,25 @@ export default function SmartHtmlEditor({
 
   return (
     <>
-      <div
-        ref={containerRef}
-        data-smart-slide-instance={instanceId}
-        data-smart-selecting={enableHtmlSelector ? "true" : undefined}
-        className="smart-html-editor relative h-full w-full overflow-hidden bg-white"
-        aria-label={title}
-      />
+      <div className="relative h-full w-full">
+        <div
+          ref={containerRef}
+          data-smart-slide-instance={instanceId}
+          data-smart-selecting={enableHtmlSelector ? "true" : undefined}
+          className="smart-html-editor relative h-full w-full overflow-hidden bg-white"
+          aria-label={title}
+        />
+        {!stylesSettled && (
+          // The editable container above is always mounted (the styles-ready
+          // effect needs it to exist), but its Tailwind classes may not have
+          // finished compiling yet - overlay the known-correct iframe
+          // fallback on top until they have, rather than briefly (or
+          // persistently) showing text at the wrong size underneath.
+          <div className="absolute inset-0 z-10" aria-hidden="true">
+            <SmartHtmlSlide fixedSize fonts={fonts} html={html} title={title} />
+          </div>
+        )}
+      </div>
       <style jsx global>{`
         .smart-html-editor [contenteditable="true"] {
           cursor: text;

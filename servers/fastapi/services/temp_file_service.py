@@ -175,7 +175,17 @@ class TempFileService:
             for name in files:
                 os.remove(os.path.join(root, name))
             for name in dirs:
-                os.rmdir(os.path.join(root, name))
+                # os.walk() lists a symlink-to-directory in `dirs` without
+                # following it, but os.rmdir() refuses to remove a symlink
+                # even when it points at a real directory (ENOTDIR) - seen
+                # with Chrome for Testing's macOS .framework bundles
+                # (Versions/Current -> <version>) downloaded into this temp
+                # dir by Puppeteer. Unlink those like a file instead.
+                path = os.path.join(root, name)
+                if os.path.islink(path):
+                    os.remove(path)
+                else:
+                    os.rmdir(path)
 
     def cleanup_temp_dir(self, dir_path: str):
         try:

@@ -1,3 +1,6 @@
+// ORPHANED (inherited from upstream presenton.ai, kept for reference only):
+// an alternate sidebar/nav variant, never imported anywhere. The live nav
+// is DashboardSidebar.tsx. See CLAUDE.md's "Route reachability map".
 "use client";
 
 import { ChevronRight } from 'lucide-react';

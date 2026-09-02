@@ -1,3 +1,7 @@
+// ORPHANED (inherited from upstream presenton.ai, kept for reference only):
+// zero callers found in the Next.js frontend or the FastAPI backend. Likely
+// a leftover from upstream's open-source landing page. See CLAUDE.md's
+// "Route reachability map".
 import { NextResponse } from "next/server";
 
 const GITHUB_REPOSITORY_API_URL =

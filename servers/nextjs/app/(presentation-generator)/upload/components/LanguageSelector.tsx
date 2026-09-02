@@ -1,3 +1,7 @@
+// ORPHANED (inherited from upstream presenton.ai, kept for reference only):
+// exported but never imported anywhere in the app. Unlike the rest of this
+// upload/ folder (which IS live, see CLAUDE.md's "Route reachability map"),
+// this specific file has zero importers.
 import { Button } from '@/components/ui/button';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';

@@ -153,12 +153,18 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
   const shouldPreloadTemplateV2Presentation =
     searchParams.get("editor") === "v2" || searchParams.get("type") === "smart";
 
-  const { presentationData, isStreaming, streamTotalSlides, streamStageMessage } =
-    useSelector((state: RootState) => state.presentationGeneration);
+  const {
+    presentationData,
+    isStreaming,
+    streamTotalSlides,
+    streamGeneratedSlides,
+    streamStageMessage,
+  } = useSelector((state: RootState) => state.presentationGeneration);
   const slidesLength = presentationData?.slides?.length ?? 0;
   const streamProgressLabel = getStreamProgressLabel({
     isStreaming,
     streamTotalSlides,
+    streamGeneratedSlides,
     streamStageMessage,
     slidesGenerated: slidesLength,
   });

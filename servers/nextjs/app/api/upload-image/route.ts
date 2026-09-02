@@ -1,3 +1,7 @@
+// ORPHANED (inherited from upstream presenton.ai, kept for reference only):
+// zero callers found. Real image uploads go through
+// app/(presentation-generator)/services/api/images.ts -> FastAPI's
+// /api/v1/ppt/images/upload instead. See CLAUDE.md's "Route reachability map".
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";

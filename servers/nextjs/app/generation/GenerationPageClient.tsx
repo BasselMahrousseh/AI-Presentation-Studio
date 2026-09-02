@@ -7,7 +7,6 @@ import { useRouter } from "next/navigation";
 import {
   ArrowUp,
   ChevronDown,
-  FileText,
   File as FileIcon,
   LayoutTemplate,
   Loader2,
@@ -187,7 +186,6 @@ export default function GenerationPageClient() {
 
           <div className="flex flex-col gap-3 border-t border-[#f0eded] pt-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <span className="inline-flex h-9 items-center gap-2 rounded-full bg-[#f8f6f6] px-3 text-sm font-semibold text-[#3c3636]"><FileText className="h-4 w-4 text-[#e60000]" /> Presentation</span>
               <input ref={fileInputRef} type="file" accept={DOCUMENT_ACCEPT} multiple className="hidden" onChange={handleFilesSelected} />
               <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isGenerating || files.length >= MAX_ATTACHMENTS} className="inline-flex h-9 items-center gap-2 rounded-full border border-[#eee6e6] bg-white px-3 text-sm font-semibold text-[#5a4e4e] transition-colors hover:border-[#e6bcbc] hover:bg-[#fffafa] disabled:cursor-not-allowed disabled:opacity-55"><Paperclip className="h-4 w-4 text-[#d60000]" />{files.length > 0 ? `Attach files (${files.length})` : "Attach files"}</button>
               <label className="relative inline-flex h-9 items-center min-w-0">

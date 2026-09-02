@@ -1,3 +1,8 @@
+// ORPHANED (inherited from upstream presenton.ai, kept for reference only):
+// fully wired (it calls router.replace("/outline") internally) but nothing
+// links into "/documents-preview" anymore - only referenced defensively in
+// Header.tsx's back-button path-matching array. See CLAUDE.md's "Route
+// reachability map" before trusting this as a real step in the live flow.
 /**
  * DocumentPreviewPage Component
  *

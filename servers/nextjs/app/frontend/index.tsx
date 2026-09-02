@@ -1,3 +1,9 @@
+// ORPHANED (inherited from upstream presenton.ai, kept for reference only):
+// not even imported by the sibling page.tsx in this same directory, let
+// alone linked from anywhere live. A self-contained alternate
+// dashboard/generate/editor prototype whose "Generate" action also
+// hardcodes http://127.0.0.1:8000, bypassing the Next.js proxy. See
+// CLAUDE.md's "Route reachability map" before trusting this as real UI.
 'use client';
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
