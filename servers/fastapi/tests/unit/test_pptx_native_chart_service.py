@@ -880,6 +880,45 @@ def test_pie_data_labels_show_category_name_and_percentage_outside_end():
     assert dLblPos.get("val") == "outEnd"
 
 
+def test_pie_data_labels_ignore_the_browser_captured_color():
+    """Real reported bug: a pie chart's labels were present in the exported
+    PPTX but invisible - white text on the white page background. Cause:
+    pie labels are repositioned OUTSIDE the slice on export (see the test
+    above - PowerPoint requires this to legally fit "Category NN%" outside a
+    slim slice), but the captured `dataLabelColor` was chosen in the browser
+    for a label sitting INSIDE a colored slice (this app's own prompt asks
+    for white text there specifically), so applying it verbatim to the
+    now-outside, now-against-white-background label produced white-on-white.
+    Pie must leave the color unset - same "let PowerPoint pick a sane
+    default" approach already used for donut's data-label position."""
+    prs, slide, picture, emu_x, emu_y = _make_presentation_with_picture(0, 0, 400, 300)
+    captured_chart = _donut_capture(kind="pie", dataLabelColor="#FFFFFF")
+    claimed: set = set()
+    assert svc._try_upgrade_one_chart(slide, captured_chart, emu_x, emu_y, claimed) is True
+    chart = list(slide.shapes)[0].chart
+    data_labels = chart.plots[0].data_labels
+    with pytest.raises(AttributeError):
+        # python-pptx raises when no color has ever been set - this is the
+        # "unset, PowerPoint picks its own default" state, not a color that
+        # merely happens to be black/dark.
+        _ = data_labels.font.color.rgb
+
+
+def test_donut_data_labels_still_get_the_captured_color():
+    """Contrast case for the fix above: donut labels stay INSIDE the ring on
+    export (no OUTSIDE_END repositioning), so the browser-captured
+    inside-slice color is still correct there and must still be applied -
+    the pie fix must not accidentally suppress this for every circular
+    chart kind."""
+    prs, slide, picture, emu_x, emu_y = _make_presentation_with_picture(0, 0, 400, 300)
+    captured_chart = _donut_capture(dataLabelColor="#FFFFFF")
+    claimed: set = set()
+    assert svc._try_upgrade_one_chart(slide, captured_chart, emu_x, emu_y, claimed) is True
+    chart = list(slide.shapes)[0].chart
+    data_labels = chart.plots[0].data_labels
+    assert data_labels.font.color.rgb == RGBColor.from_string("FFFFFF")
+
+
 def test_donut_data_labels_show_percentage_only_and_never_emit_dLblPos():
     """PowerPoint rejects <c:dLblPos> on a doughnut chart outright - a real
     export with it set failed to open and PowerPoint's repair silently

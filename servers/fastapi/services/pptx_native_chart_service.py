@@ -502,11 +502,24 @@ def _apply_chart_styling(
             # literally nothing. Confirmed in a real export: every bar/line/
             # area/radar chart's data labels were invisible for this reason.
             data_labels.show_value = True
-        data_label_color = _hex_from_css_color(
-            captured_chart.get("dataLabelColor") or captured_chart.get("tickColor")
-        )
-        if data_label_color:
-            data_labels.font.color.rgb = RGBColor.from_string(data_label_color)
+        # Skip the captured color for OUTSIDE_END-positioned labels (pie):
+        # that color was chosen in the browser for a label sitting INSIDE a
+        # colored slice (this app's pie/donut prompt asks for white text
+        # there specifically, per CLAUDE.md), but this app's own native-
+        # export code repositions pie labels OUTSIDE the slice - against the
+        # white page background - regardless of what the browser preview
+        # used. Applying the browser's inside-slice color there produces
+        # white-on-white, invisible text; a real reported bug. Leaving the
+        # color unset here lets PowerPoint use its own default text color
+        # (dark, legible against a white page) instead - the same
+        # "let PowerPoint choose a sane default" approach already used for
+        # donut's data-label position a few lines up.
+        if kind not in _OUTSIDE_END_LABEL_KINDS:
+            data_label_color = _hex_from_css_color(
+                captured_chart.get("dataLabelColor") or captured_chart.get("tickColor")
+            )
+            if data_label_color:
+                data_labels.font.color.rgb = RGBColor.from_string(data_label_color)
         data_label_size = next(
             (pt for pt in (data_label_pt, default_pt) if pt is not None), None
         )
