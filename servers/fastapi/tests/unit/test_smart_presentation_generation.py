@@ -115,7 +115,7 @@ def test_smart_prompt_matches_cloud_one_shot_method_without_speaker_notes():
     assert "do not silently discard" in prompt
     # Pie/donut chart-sizing guidance (added after a real generation got
     # stuck repeatedly failing the canvas-overflow check on a pie slide).
-    assert "pie or donut chart is a frequent overflow source" in prompt
+    assert "pie or donut chart is a good choice for a simple part-to-whole story" in prompt
     assert "380-420px" in prompt
 
 
@@ -161,7 +161,7 @@ def test_smart_prompt_uses_the_eand_brand_contract_without_embedding_the_shell()
     # Pie/donut chart-sizing guidance, e&-specific version (added after a
     # real e& generation got stuck repeatedly failing the canvas-overflow
     # check on a pie slide - see CLAUDE.md).
-    assert "pie or donut chart is a frequent source of overflow" in prompt
+    assert "pie or donut chart is a good choice for a simple part-to-whole story" in prompt
     assert "380-420px" in prompt
 
 
@@ -1320,3 +1320,83 @@ def test_prompt_forbids_fixed_height_title_header_rows():
     assert "title/header row" in prompt
     assert "can wrap to two lines" in prompt
     assert "never give that row a fixed pixel height" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Fit-scale wrapper geometry when the root <section> carries its own padding
+# - a real, previously-latent bug (documented in CLAUDE.md as unconfirmed
+# until a real padded, overflowing slide was seen) that fired for real: a
+# user's 2x2 card grid bled off the right edge of an e& slide whose root
+# section carried `px-[64px] pb-[90px] pt-[48px]` directly, instead of the
+# more common pattern of padding an inner wrapper div.
+# ---------------------------------------------------------------------------
+
+
+def test_scaled_wrapper_inherits_root_padding_classes_and_strips_them_from_section():
+    """Reproduces the real broken slide's exact class combination: standard-
+    scale (`pt-12`) and arbitrary-bracket (`px-[64px]`, `pb-[90px]`) padding
+    mixed on one root section. All three must move to the wrapper - not be
+    recomputed to a pixel value, just relocated - so the browser's own
+    Tailwind engine resolves them exactly as it would have for the section,
+    while the section itself is left with none."""
+    html = (
+        '<section data-slide-type="content" data-slide-title="Recommended decision" '
+        'class="relative h-[720px] w-[1280px] overflow-hidden bg-white '
+        'px-[64px] pb-[90px] pt-12">Content</section>'
+    )
+
+    scaled = smart_generation._slide_html_scaled_to_fit(html, 0.9474)
+
+    root_open, rest = scaled.split(">", 1)
+    assert "px-[64px]" not in root_open
+    assert "pb-[90px]" not in root_open
+    assert "pt-12" not in root_open
+    # Everything else about the section is untouched.
+    assert "h-[720px]" in root_open
+    assert "w-[1280px]" in root_open
+    assert "overflow-hidden" in root_open
+    assert "bg-white" in root_open
+
+    wrapper_open = rest.split(">", 1)[0]
+    assert "px-[64px]" in wrapper_open
+    assert "pb-[90px]" in wrapper_open
+    assert "pt-12" in wrapper_open
+    # The wrapper's own box (what keeps absolute-positioned descendants
+    # anchored correctly) must still be the full, undiminished 1280x720 -
+    # padding shrinks its *content* box, not its outer size.
+    assert f"width:{smart_generation.SMART_OVERFLOW_SAFE_AREA_WIDTH}px" in scaled
+    assert f"height:{smart_generation.SMART_SLIDE_CANVAS_HEIGHT}px" in scaled
+
+
+def test_scaled_wrapper_gets_no_class_attribute_when_root_has_no_padding():
+    """The common case (padding lives on an inner div, not the root section)
+    must be completely unaffected - no class attribute appears on the
+    wrapper at all, matching pre-fix behavior byte-for-byte."""
+    html = _smart_slide_html(body="<div>Content</div>")
+
+    scaled = smart_generation._slide_html_scaled_to_fit(html, 0.9)
+
+    wrapper_open = scaled.split(">", 2)[1]
+    assert "class=" not in wrapper_open
+
+
+def test_scaled_wrapper_padding_extraction_does_not_false_positive_on_similar_classes():
+    """Classes that merely start with `p` (pointer-events-none) or contain a
+    hyphen-number pattern unrelated to padding (opacity-50) must never be
+    mistaken for padding utilities and relocated."""
+    html = (
+        '<section data-slide-type="content" data-slide-title="T" '
+        'class="relative h-[720px] w-[1280px] overflow-hidden '
+        'pointer-events-none opacity-50 pl-4">Content</section>'
+    )
+
+    scaled = smart_generation._slide_html_scaled_to_fit(html, 0.9)
+
+    root_open, rest = scaled.split(">", 1)
+    assert "pointer-events-none" in root_open
+    assert "opacity-50" in root_open
+    assert "pl-4" not in root_open
+    wrapper_open = rest.split(">", 1)[0]
+    assert "pl-4" in wrapper_open
+    assert "pointer-events-none" not in wrapper_open
+    assert "opacity-50" not in wrapper_open
