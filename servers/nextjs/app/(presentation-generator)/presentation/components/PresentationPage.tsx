@@ -178,7 +178,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
     hasTemplateV2Slides(presentationData?.slides);
   const editingDisabled = isStreaming === true;
 
-  const { isSaving } = useAutoSave({
+  const { isSaving, flushSave } = useAutoSave({
     debounceMs: 2000,
     enabled: !!presentationData && !isStreaming,
   });
@@ -521,6 +521,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
           isPresentationSaving={isSaving}
           currentSlide={selectedSlide}
           generationMode={isSmartPresentation ? "smart" : "standard"}
+          flushAutoSave={flushSave}
         />
         <div className="flex min-h-0 flex-1 overflow-hidden">
           <div className="sticky top-0 hidden h-full w-[196px] shrink-0 self-start border-r border-[#e7e5e5] bg-white md:block">

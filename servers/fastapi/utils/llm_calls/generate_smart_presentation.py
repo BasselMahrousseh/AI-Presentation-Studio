@@ -195,6 +195,17 @@ Overflow prevention is a hard requirement:
 - Cards containing text should use content-driven height (`h-auto`) unless a
   fixed height is essential. When fixed height is essential, reduce copy,
   padding, gaps, font size, and line height until the full text fits.
+- The same rule applies to a slide's own title/header row (a heading plus a
+  subtitle, often next to a badge or stat on the other side of a flex row):
+  never give that row a fixed pixel height. A long or numbered title (e.g.
+  restating the slide number and visual type: "13 — Horizontal Stacked Bar
+  Chart: Weekly Hours by Team and Activity") can wrap to two lines once
+  placed in the actual width available next to a sibling badge, and a fixed
+  height sized for one line has no room left for the second line plus the
+  subtitle beneath it - they silently overlap instead of pushing the row
+  taller, because CSS never grows a fixed-height box to fit overflowing
+  content. Give the header row `h-auto` (or omit a height entirely) so it
+  always grows to fit however many lines the title actually needs.
 - A row of equal-height cards (e.g. `grid grid-cols-3`/`grid-cols-4` with each
   card given the same `h-[Npx]`) is a frequent overflow source: the card with
   the most text (often a "the challenge"/summary card with an extra heading
@@ -299,7 +310,32 @@ CHART_JS_INSTRUCTIONS = """
 - Initialize each chart immediately inside an IIFE. Do not add event listeners.
   Set `responsive: false` and `animation: false`.
 - Use the slide palette. Configure `options.plugins.datalabels` for visible
-  value labels outside bar and pie/donut charts.
+  value labels outside bar charts.
+- Pie and donut charts need a DIFFERENT datalabel setup than bar charts, not
+  the same `anchor: 'end', align: 'end'` pattern: a bar's outside label has
+  the whole axis margin to sit in, but a pie/donut slice can point in any
+  direction, including straight left/right/top/bottom at the very edge of
+  the canvas, so an outside label there is one of the most common ways a
+  chart silently gets its own text clipped by the canvas boundary. Canvases
+  clip at their own pixel edge with no scrollbar or overflow to fall back
+  on, so once a label is drawn past that edge it is gone, not just visually
+  crowded. This gets worse fast if the datalabel formatter also concatenates
+  the category name onto the value (e.g. `labels[i] + '\\n' + value + '%'`)
+  when a legend or side list already shows that name - the label is now two
+  lines and as wide as the longer of the name or the percentage, needing far
+  more clearance than a short "45%" would. For pie/donut: if the slide
+  already shows each category's name anywhere else (a legend, a side list of
+  labeled figures), keep the on-slice datalabel to the value alone (e.g.
+  `formatter: (v) => v + '%'`) - never repeat the category name on the slice
+  too. If the name must appear on the slice itself, use `anchor: 'center',
+  align: 'center'` so the label sits inside the slice instead of past the
+  chart's edge.
+- Never make a pie/donut datalabel formatter return an empty string for
+  small values (e.g. `(v) => v >= 10 ? v + '%' : ''`) to avoid crowding a
+  thin slice. This silently deletes that slice's own on-chart value with no
+  visual indicator anything is missing, even when every other slice keeps
+  its label - it reads as a bug, not a deliberate design choice. Every
+  slice's `formatter` must return its value unconditionally.
 - A chart is incomplete unless the same slide contains both its canvas and its
   inline initialization script. Never return a chart canvas by itself.
 - Example:

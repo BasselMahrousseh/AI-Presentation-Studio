@@ -38,6 +38,7 @@ import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { sanitizeAnalyticsError } from "@/utils/analytics";
 import { v4 as uuidv4 } from "uuid";
 import { getStreamProgressLabel } from "../utils/streamProgressLabel";
+import { ApiResponseHandler } from "../../services/api/api-error-handler";
 
 const MAX_EXPORT_TITLE_LENGTH = 40;
 
@@ -80,12 +81,20 @@ const PresentationHeader = ({
   isPresentationSaving,
   currentSlide,
   generationMode = "standard",
-
+  flushAutoSave,
 }: {
   presentation_id: string;
   isPresentationSaving: boolean;
   currentSlide?: number;
   generationMode?: "standard" | "smart";
+  /**
+   * Forces the editor's debounced autosave to complete before export starts.
+   * PPTX/PDF export reads the presentation from the database, not from the
+   * editor's live state (see PdfMakerPage.tsx) - without this, an edit made
+   * just before clicking Export could ship the file with the pre-edit
+   * content, silently, since the debounce window (2s) can still be open.
+   */
+  flushAutoSave?: () => Promise<void>;
 }) => {
   const [open, setOpen] = useState(false);
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false);
@@ -215,6 +224,10 @@ const PresentationHeader = ({
         "Your presentation is being exported. This may take a moment."
       );
       setIsExporting(true);
+      // Must happen before the export request is built, for both the
+      // electron and browser_api runtimes - a just-made edit is just as
+      // real either way.
+      await flushAutoSave?.();
       await trackExportLifecycle(
         MixpanelEvent.Presentation_Export_Started,
         "pptx",
@@ -239,11 +252,18 @@ const PresentationHeader = ({
           }),
         });
 
-        if (!response.ok) {
-          throw new Error("Failed to export PPTX");
-        }
-
-        const { path: pptxPath } = await response.json();
+        // The route reports the REAL cause on failure - e.g. "Cannot find
+        // module 'sharp'" or "presentation-export runtime is not available" -
+        // in its JSON body (`{ error, success: false }`). Discarding that
+        // and throwing a fixed "Failed to export PPTX" (the previous
+        // behavior) meant every export failure showed the user the same
+        // generic toast regardless of cause, so a real infra problem looked
+        // identical to a transient one. ApiResponseHandler is the existing
+        // shared parser for exactly this response shape.
+        const { path: pptxPath } = await ApiResponseHandler.handleResponse(
+          response,
+          "Failed to export PPTX"
+        );
         if (!pptxPath) {
           throw new Error("No path returned from export");
         }
@@ -274,7 +294,9 @@ const PresentationHeader = ({
       );
       notify.error(
         "Export failed",
-        "We are having trouble exporting your presentation. Please try again.",
+        error instanceof Error && error.message
+          ? error.message
+          : "We are having trouble exporting your presentation. Please try again.",
         exportToastId !== undefined ? { id: exportToastId } : undefined
       );
     } finally {
@@ -297,6 +319,10 @@ const PresentationHeader = ({
         "Your presentation is being exported. This may take a moment."
       );
       setIsExporting(true);
+      // Must happen before the export request is built, for both the
+      // electron and browser_api runtimes - a just-made edit is just as
+      // real either way.
+      await flushAutoSave?.();
       await trackExportLifecycle(
         MixpanelEvent.Presentation_Export_Started,
         "pdf",
@@ -321,15 +347,16 @@ const PresentationHeader = ({
           }),
         });
 
-        if (response.ok) {
-          const { path: pdfPath } = await response.json();
-          if (!pdfPath) {
-            throw new Error("No path returned from export");
-          }
-          downloadLink(pdfPath, safePdfFileName);
-        } else {
-          throw new Error("Failed to export PDF");
+        // See the matching comment in handleExportPptx above - same route,
+        // same failure-message loss, same fix.
+        const { path: pdfPath } = await ApiResponseHandler.handleResponse(
+          response,
+          "Failed to export PDF"
+        );
+        if (!pdfPath) {
+          throw new Error("No path returned from export");
         }
+        downloadLink(pdfPath, safePdfFileName);
       }
       await trackExportLifecycle(
         MixpanelEvent.Presentation_Export_Completed,
@@ -355,7 +382,9 @@ const PresentationHeader = ({
       );
       notify.error(
         "Export failed",
-        "We are having trouble exporting your presentation. Please try again.",
+        error instanceof Error && error.message
+          ? error.message
+          : "We are having trouble exporting your presentation. Please try again.",
         exportToastId !== undefined ? { id: exportToastId } : undefined
       );
     } finally {

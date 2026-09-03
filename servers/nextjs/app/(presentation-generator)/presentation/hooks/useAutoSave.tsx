@@ -36,6 +36,12 @@ export const useAutoSave = ({
     const pendingSaveRef = useRef(false);
     const saveLatestRef = useRef<() => Promise<void>>(async () => undefined);
     const isSavingRef = useRef(false);
+    // Tracks whichever saveLatest() call is currently running, whether it was
+    // started by the debounce timer, its own trailing-pending-change retry,
+    // or an explicit flush() - see the comment on flushSave below for why a
+    // single tracked promise is what makes flush() correct rather than a
+    // guess.
+    const activeSaveRef = useRef<Promise<void> | null>(null);
     const [isSaving, setIsSaving] = useState<boolean>(false);
 
     const autoSavePaused =
@@ -130,7 +136,7 @@ export const useAutoSave = ({
             if (pendingSaveRef.current && !autoSavePausedRef.current) {
                 pendingSaveRef.current = false;
                 saveTimeoutRef.current = setTimeout(() => {
-                    void saveLatestRef.current();
+                    void triggerSave();
                 }, 250);
             }
         }
@@ -139,6 +145,47 @@ export const useAutoSave = ({
     useEffect(() => {
         saveLatestRef.current = saveLatest;
     }, [saveLatest]);
+
+    // Every actual invocation of saveLatest - whether started by the debounce
+    // timer, its own trailing-pending-change retry above, or an explicit
+    // flush - goes through this single wrapper, so activeSaveRef always
+    // reflects "the save that is genuinely running right now" regardless of
+    // which of those three triggered it.
+    const triggerSave = useCallback(() => {
+        const promise = saveLatestRef.current().finally(() => {
+            if (activeSaveRef.current === promise) {
+                activeSaveRef.current = null;
+            }
+        });
+        activeSaveRef.current = promise;
+        return promise;
+    }, []);
+
+    /**
+     * Forces any pending or in-flight save to complete immediately, bypassing
+     * the debounce window. Exporting reads the presentation straight from the
+     * database (see PdfMakerPage.tsx), not from the editor's live Redux
+     * state, so an edit made just before clicking Export could otherwise ship
+     * in the file the debounce hadn't saved yet - a silent stale-export bug.
+     * The trailing triggerSave() call is what makes this correct rather than
+     * a race: after cancelling the timer and waiting out anything already in
+     * flight, it re-runs the same diff-and-save-if-needed logic saveLatest
+     * always uses against the latest data, so it costs nothing when there is
+     * genuinely nothing left to save (the diff check inside saveLatest no-ops
+     * immediately) and still catches a change that arrived while the earlier
+     * save was running.
+     */
+    const flushSave = useCallback(async () => {
+        if (saveTimeoutRef.current) {
+            clearTimeout(saveTimeoutRef.current);
+            saveTimeoutRef.current = null;
+        }
+        pendingSaveRef.current = false;
+        if (activeSaveRef.current) {
+            await activeSaveRef.current;
+        }
+        await triggerSave();
+    }, [triggerSave]);
 
     // Effect to trigger auto-save when presentation data changes
     useEffect(() => {
@@ -191,9 +238,9 @@ export const useAutoSave = ({
             clearTimeout(saveTimeoutRef.current);
         }
         saveTimeoutRef.current = setTimeout(() => {
-            void saveLatestRef.current();
+            void triggerSave();
         }, debounceMs);
-       
+
         // Cleanup timeout on unmount
         return () => {
             if (saveTimeoutRef.current) {
@@ -205,9 +252,11 @@ export const useAutoSave = ({
         autoSavePaused,
         debounceMs,
         dispatch,
+        triggerSave,
     ]);
-    
+
     return {
         isSaving,
+        flushSave,
     };
 };

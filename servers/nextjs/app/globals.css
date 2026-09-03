@@ -100,14 +100,35 @@ input[type="number"] {
   -moz-appearance: textfield;
 }
 
-thead,
-tbody tr {
+/*
+ * Sticky-header trick for MiniDataTable (components/slide-editor/charts/
+ * ChartEditorContent.tsx): forcing thead and each body <tr> into their own
+ * `display: table` box lets `position: sticky` keep the header aligned with
+ * body columns while only the body scrolls. Scoped to `.sticky-header-table`
+ * - this used to be a bare `thead, tbody tr` selector with no scoping at
+ * all, so it silently rewrote the display/width/table-layout of every
+ * <thead>/<tr> on the page, including tables an LLM generates for Smart-mode
+ * slide content (tables that never asked for or wanted this behavior). A
+ * `<tr>` forced to `display: table` no longer inherits the outer <table>'s
+ * <colgroup> column widths - it has none of its own - so with no other
+ * width source and `table-layout: fixed`, its cells fell back to equal
+ * division among however many <td>s that one row happened to have, while
+ * the row's own `width: 100%` resolved against a shrunken containing block
+ * once it left the normal table layout context. The result: badly squeezed
+ * columns (single-character-per-line wrapping in extreme cases) with a
+ * large empty gap between the last real column and the table's own outer
+ * border. Confirmed live by neutralizing the unscoped rule on a real broken
+ * slide (Puppeteer against the running app) and watching the columns
+ * resolve to their authored percentages immediately.
+ */
+.sticky-header-table thead,
+.sticky-header-table tbody tr {
   display: table;
   width: 100%;
   table-layout: fixed;
 }
 
-thead {
+.sticky-header-table thead {
   width: calc(100% - 1em);
   /* scrollbar is average 1em/16px width, remove it from thead width */
 }

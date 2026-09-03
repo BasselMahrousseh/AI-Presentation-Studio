@@ -1236,3 +1236,87 @@ def test_scaled_slide_html_is_what_gets_accepted(monkeypatch):
     assert len(result["slides"]) == 3
     for slide in result["slides"]:
         assert 'data-smart-fit-scale="0.9000"' in slide["html"]
+
+
+def test_prompt_warns_against_outside_anchored_pie_donut_labels_that_clip():
+    """Root cause of a real reported bug: pie/donut slice labels rendered
+    partially or fully off the edge of the canvas (e.g. "Organic" showing as
+    "Orga\\n45%") because the only Chart.js datalabels example in this prompt
+    used anchor:'end'/align:'end' - correct for a bar chart's outside-the-
+    axis label, but unsafe for a pie/donut slice, which can point straight at
+    the canvas edge in any direction. A canvas clips at its own pixel
+    boundary with no overflow to fall back on, so an outside label there is
+    silently gone, not just crowded - worse still when the formatter also
+    concatenates the category name onto the value, since a slide's existing
+    legend/list already shows that name."""
+    messages = get_smart_messages(
+        content="Build a marketing report",
+        n_slides=4,
+        language="English",
+        tone=None,
+        verbosity=None,
+        instructions=None,
+        include_title_slide=True,
+        include_table_of_contents=False,
+        source_context="",
+        community_design_context="",
+    )
+    prompt = str(messages[1].content)
+
+    assert "DIFFERENT datalabel setup than bar charts" in prompt
+    assert "clipped by the canvas boundary" in prompt
+    assert "keep the on-slice datalabel to the value alone" in prompt
+    assert "anchor: 'center'" in prompt
+    assert "align: 'center'" in prompt
+
+
+def test_prompt_forbids_conditionally_blanking_pie_donut_slice_labels():
+    """Real reported bug: a pie chart's own generated formatter,
+    `(v) => v >= 10 ? v + '%' : ''`, silently deleted the smallest slice's
+    on-chart label (5% of 5) while every other slice kept its label -
+    confirmed by live reproduction on the exact deck that surfaced it, not
+    just a static reading. The model added this threshold on its own; the
+    prior pie/donut guidance never asked for it and never forbade it."""
+    messages = get_smart_messages(
+        content="Build a marketing report",
+        n_slides=4,
+        language="English",
+        tone=None,
+        verbosity=None,
+        instructions=None,
+        include_title_slide=True,
+        include_table_of_contents=False,
+        source_context="",
+        community_design_context="",
+    )
+    prompt = str(messages[1].content)
+
+    assert "empty string for" in prompt
+    assert "small values" in prompt
+    assert "unconditionally" in prompt
+
+
+def test_prompt_forbids_fixed_height_title_header_rows():
+    """Real reported bug: a slide's own title/subtitle header row had a
+    hard-coded `h-[72px]`. The title text was long enough to wrap to two
+    lines at its actual rendered width, and the fixed height had no room for
+    the second line plus the subtitle - they visually overlapped instead of
+    the row growing taller. Confirmed by live reproduction on the exact
+    reported slide, matching the screenshot pixel-for-pixel."""
+    messages = get_smart_messages(
+        content="Build a marketing report",
+        n_slides=4,
+        language="English",
+        tone=None,
+        verbosity=None,
+        instructions=None,
+        include_title_slide=True,
+        include_table_of_contents=False,
+        source_context="",
+        community_design_context="",
+    )
+    prompt = str(messages[1].content)
+
+    assert "title/header row" in prompt
+    assert "can wrap to two lines" in prompt
+    assert "never give that row a fixed pixel height" in prompt

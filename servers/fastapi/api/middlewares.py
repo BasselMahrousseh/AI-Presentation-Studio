@@ -33,6 +33,18 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
         "/api/v1/auth/setup",
         "/api/v1/auth/login",
         "/api/v1/auth/logout",
+        # Best-effort sink for chart data captured from the export page. It is
+        # designed to be unauthenticated - see chart_capture_store.py and
+        # chart_capture.py's own docstrings - because the capture call is
+        # fired via navigator.sendBeacon (required to avoid the export
+        # bundle's networkidle0 hang, see CLAUDE.md), which cannot attach the
+        # session cookie. Safety comes from the token itself: a server-minted
+        # uuid4 (utils/export_utils.py, run-bundled-presentation-export.ts),
+        # sanitized against path traversal before touching the filesystem
+        # (chart_capture_store._capture_path). Without this exemption every
+        # capture 401s whenever auth is enabled, and every chart in every
+        # PPTX export silently stays a flattened image with no visible error.
+        "/api/v1/ppt/presentation/export/chart-capture",
     }
     _PUBLIC_AUTH_PREFIXES: tuple[str, ...] = ()
     _PUBLIC_APP_DATA_PREFIXES = (

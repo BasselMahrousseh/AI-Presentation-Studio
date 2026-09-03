@@ -32,6 +32,69 @@ def test_other_app_data_prefixes_still_require_auth():
     assert middleware._requires_auth("/app_data/exports/deck.pdf") is True
 
 
+def test_chart_capture_path_is_registered_as_a_public_auth_path():
+    """`_requires_auth` alone can't express this exemption - the chart-capture
+    path starts with /api/, so _requires_auth returns True for it exactly
+    like every other API route. The actual bypass happens one level up, in
+    dispatch()'s `path in self._PUBLIC_AUTH_PATHS` check (see the dispatch-
+    level test below), the same mechanism the five /api/v1/auth/* paths use.
+    This test pins the exact string so a rename of the route doesn't silently
+    drop the exemption."""
+    middleware = SessionAuthMiddleware(app=None)
+
+    assert middleware._requires_auth(
+        "/api/v1/ppt/presentation/export/chart-capture"
+    ) is True
+    assert (
+        "/api/v1/ppt/presentation/export/chart-capture"
+        in middleware._PUBLIC_AUTH_PATHS
+    )
+    # A neighboring endpoint under the same prefix must NOT be exempt - this
+    # guards against a future refactor swapping the exact-string membership
+    # check for a prefix match, which would accidentally exempt a real,
+    # cookie-bearing endpoint under the same /presentation/export/ tree.
+    assert (
+        "/api/v1/ppt/presentation/export/upgrade-charts"
+        not in middleware._PUBLIC_AUTH_PATHS
+    )
+
+
+def test_chart_capture_dispatch_bypasses_auth_entirely(monkeypatch):
+    """End-to-end proof, at the same level as
+    test_auth_disabled_runtime_still_checks_presenton_cloud_proxy below: a
+    request with no session must still reach the route handler for this one
+    path, because navigator.sendBeacon (see CLAUDE.md's networkidle0 note)
+    cannot attach the session cookie the way a real authenticated request
+    would. Without this exemption every capture from a real export 401s and
+    native chart export silently never fires - the exact bug this middleware
+    entry fixes. DISABLE_AUTH is explicitly turned off so this genuinely
+    exercises the auth-required branch rather than short-circuiting past it -
+    it defaults on in this project's own .env, which is exactly how the
+    original bug went unnoticed."""
+    monkeypatch.delenv("DISABLE_AUTH", raising=False)
+
+    async def next_handler(_request):
+        return Response("reached-the-route")
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/v1/ppt/presentation/export/chart-capture",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 1234),
+            "server": ("127.0.0.1", 5001),
+        }
+    )
+    response = asyncio.run(
+        SessionAuthMiddleware(app=None).dispatch(request, next_handler)
+    )
+
+    assert response.body == b"reached-the-route"
+
+
 def test_presenton_provider_endpoints_require_a_local_session():
     middleware = SessionAuthMiddleware(app=None)
 

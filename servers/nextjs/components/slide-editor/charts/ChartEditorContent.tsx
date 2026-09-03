@@ -299,7 +299,13 @@ function MiniDataTable({
   return (
     <div className="overflow-hidden rounded-xl bg-[#F7F7FA]">
       <div className="max-h-[210px] overflow-auto">
-        <table className="min-w-full border-collapse text-[12px] text-[#191919]">
+        {/* sticky-header-table: opts into the global.css sticky-header rule
+            (forces thead/tbody-tr into their own display:table boxes so the
+            sticky header stays column-aligned with the scrolling body) -
+            see the comment above that rule in globals.css for why this must
+            stay an explicit opt-in class rather than a bare element
+            selector. */}
+        <table className="sticky-header-table min-w-full border-collapse text-[12px] text-[#191919]">
           <thead>
             <tr>
               <th className="sticky left-0 top-0 min-w-[110px] border-b border-r border-[#E6E6EA] bg-[#F3F4F7] px-3 py-3 text-left font-medium" />

@@ -23,7 +23,11 @@ import ImageEditor from "./ImageEditor";
 import SmartChartEditor, { type SmartChartDraft } from "./SmartChartEditor";
 import SmartHtmlSlide from "./SmartHtmlSlide";
 import { useSmartChartInjection } from "./useSmartChartInjection";
-import { applyArbitraryTextStyles } from "@/lib/smart-slide-arbitrary-styles";
+import {
+  applyArbitraryGridStyles,
+  applyArbitraryTextStyles,
+  applyGridItemMinWidthGuard,
+} from "@/lib/smart-slide-arbitrary-styles";
 
 type ActiveMedia = {
   element: HTMLImageElement;
@@ -340,6 +344,15 @@ export default function SmartHtmlEditor({
     // thing protecting font size specifically; it's kept for everything
     // else (fonts, other arbitrary utilities) this doesn't cover.
     applyArbitraryTextStyles(container);
+    // Deterministic fix for a separate, real arbitrary-grid-cols compile
+    // race - see applyArbitraryGridStyles's own docstring.
+    applyArbitraryGridStyles(container);
+    // The actual fix for the reported "Desktop"/"55%" mid-word-wrap bug -
+    // see applyGridItemMinWidthGuard's docstring for the full mechanism
+    // (a CSS Grid/Flexbox min-content default, not a compile race - found
+    // by live reproduction with Puppeteer against this exact slide, not
+    // static analysis).
+    applyGridItemMinWidthGuard(container);
 
     // Injecting new HTML fires the shared Tailwind runtime's own
     // MutationObserver, which asynchronously recompiles CSS for any new

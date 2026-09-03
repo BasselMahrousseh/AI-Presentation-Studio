@@ -23,7 +23,11 @@ import { normalizeBackendAssetUrls } from "@/utils/api";
 import { ensureTailwindBrowserScript } from "@/lib/tailwind-browser";
 import { useSmartChartInjection } from "@/app/(presentation-generator)/components/useSmartChartInjection";
 import { captureAllChartsOnPage } from "@/lib/chart-export-capture";
-import { applyArbitraryTextStyles } from "@/lib/smart-slide-arbitrary-styles";
+import {
+  applyArbitraryGridStyles,
+  applyArbitraryTextStyles,
+  applyGridItemMinWidthGuard,
+} from "@/lib/smart-slide-arbitrary-styles";
 
 const PDF_PRINT_STYLE = `
   html,
@@ -132,6 +136,19 @@ const SmartHtmlPdfSlide = ({
     const container = containerRef.current;
     if (!container) return;
     applyArbitraryTextStyles(container);
+    // Same reasoning as SmartHtmlEditor.tsx's equivalent call - see
+    // applyArbitraryGridStyles's docstring. This page has zero other
+    // protection against the grid-cols-[...] compile race (no
+    // MutationObserver fallback exists here at all), so this is the only
+    // thing standing between a fresh export and a baked-in broken column
+    // split.
+    applyArbitraryGridStyles(container);
+    // The real fix for the "Desktop"/"55%" wrap bug - see
+    // applyGridItemMinWidthGuard's docstring. Unlike the compile race above,
+    // this is a CSS min-content default that would bake a squeezed column
+    // into every export of an affected slide regardless of Tailwind timing,
+    // so it belongs here just as much as in the live editor.
+    applyGridItemMinWidthGuard(container);
   }, [html]);
 
   return (

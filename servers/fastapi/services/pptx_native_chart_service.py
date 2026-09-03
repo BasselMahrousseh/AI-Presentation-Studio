@@ -566,13 +566,32 @@ def _replace_picture_with_native_chart(
             return False
 
         sp_tree = slide.shapes._spTree
-        original_index = list(sp_tree).index(picture_shape._element)
+        picture_element = picture_shape._element
+        original_index = list(sp_tree).index(picture_element)
         left, top, width, height = _shape_rect(picture_shape)
 
-        sp_tree.remove(picture_shape._element)
-        graphic_frame = slide.shapes.add_chart(
-            xl_type, left, top, width, height, chart_data
-        )
+        # The picture must come out of the tree before add_chart() can be
+        # called (python-pptx has no "build a chart, then swap it in" API),
+        # but add_chart() itself can raise - a malformed category/series
+        # shape, for instance. An earlier version removed the picture here
+        # and only caught the failure in the outer except below, which
+        # returned False (chart upgrade skipped) while leaving the picture
+        # already gone from the tree - so a single failing chart in an
+        # otherwise-successful deck saved with a blank hole where a chart
+        # used to be, and the log line ("failed to build native chart for
+        # one slide") actively suggested the flattened image was still
+        # there. Restoring the picture on failure keeps the documented
+        # contract ("upgrade fails -> chart stays a flattened image") true
+        # in the one case that used to violate it.
+        sp_tree.remove(picture_element)
+        try:
+            graphic_frame = slide.shapes.add_chart(
+                xl_type, left, top, width, height, chart_data
+            )
+        except Exception:
+            sp_tree.insert(original_index, picture_element)
+            raise
+
         # add_chart() appends at the end of the tree; move it back to the
         # picture's original position so z-order/stacking is unchanged.
         sp_tree.remove(graphic_frame._element)

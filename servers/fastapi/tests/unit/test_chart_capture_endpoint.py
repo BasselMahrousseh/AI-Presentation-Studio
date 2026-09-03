@@ -63,6 +63,68 @@ def test_report_chart_capture_never_raises_when_storage_fails(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Abuse guards: this endpoint is intentionally exempt from auth (see
+# api/middlewares.py), which means the caps below are what actually bounds
+# what an untrusted caller can write to disk - not the pydantic model alone.
+# ---------------------------------------------------------------------------
+
+
+def test_charts_field_rejects_more_than_the_configured_maximum():
+    with pytest.raises(Exception):
+        endpoint.ChartCaptureReportRequest(
+            token="tok-many",
+            charts=[{"kind": "bar"}] * (endpoint._MAX_CHARTS_PER_REQUEST + 1),
+        )
+
+    # The configured maximum itself must still be accepted - this is an
+    # abuse guard, not a limit on any real deck (measured: no stored slide in
+    # this app's own database has more than 2 charts).
+    endpoint.ChartCaptureReportRequest(
+        token="tok-max",
+        charts=[{"kind": "bar"}] * endpoint._MAX_CHARTS_PER_REQUEST,
+    )
+
+
+def test_report_chart_capture_rejects_an_oversized_payload_without_storing_it(
+    monkeypatch,
+):
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError(
+            "an oversized payload must be rejected before storage is attempted"
+        )
+
+    monkeypatch.setattr(endpoint.chart_capture_store, "write_capture", _fail_if_called)
+    monkeypatch.setattr(endpoint, "_MAX_PAYLOAD_BYTES", 100)
+
+    payload = endpoint.ChartCaptureReportRequest(
+        token="tok-huge",
+        charts=[{"data": "x" * 1000}],
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(endpoint.report_chart_capture(payload))
+    assert excinfo.value.status_code == 413
+
+
+def test_report_chart_capture_accepts_a_normal_sized_payload(monkeypatch):
+    recorded = {}
+    monkeypatch.setattr(
+        endpoint.chart_capture_store,
+        "write_capture",
+        lambda token, presentation_id, charts: recorded.update(charts=charts),
+    )
+
+    payload = endpoint.ChartCaptureReportRequest(
+        token="tok-normal",
+        charts=[{"kind": "bar", "labels": ["a", "b", "c"], "data": [1, 2, 3]}],
+    )
+    result = asyncio.run(endpoint.report_chart_capture(payload))
+
+    assert result == {"success": True}
+    assert recorded["charts"] == payload.charts
+
+
+# ---------------------------------------------------------------------------
 # /upgrade-charts - used by the Next.js-side bundled export path
 # (lib/run-bundled-presentation-export.ts), which never goes through
 # export_utils.py's export_presentation().

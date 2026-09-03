@@ -207,6 +207,51 @@ def test_try_upgrade_one_chart_replaces_matching_picture_with_native_chart():
     assert list(shapes[0].chart.plots[0].categories) == ["Q1", "Q2", "Q3"]
 
 
+def test_failed_add_chart_leaves_the_original_picture_in_place(monkeypatch):
+    """A slide's picture must not disappear when the native-chart upgrade
+    fails partway through. Reproduces a real bug: add_chart() was called
+    after the picture had already been removed from the shape tree, and the
+    failure path returned False without restoring it - so a deck with one
+    bad chart among several good ones still saved, with a blank hole where
+    that chart used to be, while the log line said only "failed to build
+    native chart for one slide" (which reads as "the picture is still
+    there"). This is the one chart in the deck whose real slide.shapes call
+    must raise, so the fixture patches add_chart on that specific
+    SlideShapes instance rather than monkeypatching python-pptx globally."""
+    prs, slide, picture, emu_x, emu_y = _make_presentation_with_picture(
+        100, 100, 400, 300
+    )
+    original_element = picture._element
+    original_index = list(slide.shapes._spTree).index(original_element)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("malformed chart data")
+
+    monkeypatch.setattr(slide.shapes, "add_chart", _boom)
+
+    captured_chart = {
+        "kind": "bar",
+        "hasMarkers": False,
+        "boundingBox": {"left": 100, "top": 100, "width": 400, "height": 300},
+        "labels": ["Q1", "Q2", "Q3"],
+        "datasets": [{"label": "Revenue", "data": [10, 20, 30]}],
+    }
+    claimed: set = set()
+    upgraded = svc._try_upgrade_one_chart(slide, captured_chart, emu_x, emu_y, claimed)
+
+    assert upgraded is False
+    shapes = list(slide.shapes)
+    assert len(shapes) == 1
+    assert shapes[0].shape_type == MSO_SHAPE_TYPE.PICTURE
+    # The exact original element, not merely "a picture" - proves it was
+    # restored rather than a new one being created.
+    assert shapes[0]._element is original_element
+    # Position/order preserved too: it must land back at its original spot
+    # in the shape tree, not appended at the end.
+    sp_tree = slide.shapes._spTree
+    assert list(sp_tree).index(original_element) == original_index
+
+
 # ---------------------------------------------------------------------------
 # Visual polish: per-point colors, data labels, font, category axis order
 # ---------------------------------------------------------------------------
