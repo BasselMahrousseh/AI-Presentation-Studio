@@ -290,30 +290,45 @@ sits below the y=48 offset to at most 582px tall: a block sized for the whole
 720px canvas and then placed after a 48px top offset ends at y=768 and
 overflows the slide by exactly that 48px offset, which is a frequent and
 easily-avoided failure. Never give the content wrapper `h-[720px]`, `h-screen`,
-or any other full-canvas height; budget from 582px downwards. The area from
+or any other full-canvas height; budget from 582px downwards. Treat 582px as
+a ceiling to stay under, not a target to land well short of: even a shortfall
+of a few dozen pixels is worth closing, since it reads as a visibly
+top-heavy slide once combined with the footer clearance already below the
+content. Actively grow into that slack (step back up the font-size ladder,
+use roomier padding and gaps, add a genuinely useful closing element) rather
+than leaving a visible band of blank canvas. When in doubt, prefer landing a
+little under budget over ever risking
+overflow. The area from
 y=640 to y=720 is reserved for the fixed e& footer and must remain empty. Do not add a footer, page number, logo,
 or other content in that reserved area. Use clean executive layouts and
 restrained colour accents from this palette.
 
 CONTENT DESIGN DIRECTION (required)
+- Decorative structure — cards, section bands, side rails, and divider rules —
+  is core to this brand's executive look, not optional polish: use it freely
+  wherever it clarifies grouping or hierarchy, alongside generous white
+  space, not instead of it. Use {panel_hex} section bands or side rails, thin
+  {panel_hex}/#D9DEE7 rules, and {accent_hex} highlights. Cards should be
+  white, flat, thin-{panel_hex}/#D9DEE7-bordered, or very subtly shadowed,
+  with square-to-softly-rounded corners.
 - Avoid generic document-like bullet lists. Turn grouped ideas into a clear
-  executive composition: a numbered sequence, a 2–4 card grid, a comparison,
-  a process, or a strong single-statement layout, selected to fit the content.
-- Use generous white space, {panel_hex} section bands or side rails, thin
-  {panel_hex}/#D9DEE7 rules, and {accent_hex} highlights. Cards should be white,
-  flat or very subtly shadowed, with square-to-softly-rounded corners.
-- A full-height {panel_hex} side rail (e.g. matching the height of a card grid
-  next to it) is a frequent source of overflow: its checklist items stack
-  vertically with nothing to shrink them, so it silently overflows past the
-  bottom of the slide instead of visibly colliding with anything. Cap it at
-  3-4 items with a short, single-line description each; do not give it more
-  items or longer descriptions than that.
-- A pie or donut chart is a frequent source of overflow specifically within
-  this narrower 582px (y=48 to y=630) content window: unlike a bar or line
-  chart, which can stay short and wide, a pie/donut needs to stay close to
-  square to remain legible, so its chart card alone typically needs at least
-  380-420px of height. Budget that chart card's real height first, then size
-  the headline, subtitle, and any supporting stat cards to fit the remaining
+  executive composition: a numbered sequence (e.g. each number set inside
+  its own rounded, bordered/backed box), a 2–4 card grid, a comparison, a
+  process, or a strong single-statement layout, selected to fit the content.
+- A full-height {panel_hex} side rail (e.g. matching the height of a card
+  grid next to it) is a strong way to add visual weight next to a card grid.
+  Budget it the same way: its checklist items stack vertically with nothing
+  to shrink them, so it can silently overflow past the bottom of the slide
+  instead of visibly colliding with anything. Cap it at 3-4 items with a
+  short, single-line description each; do not give it more items or longer
+  descriptions than that.
+- A pie or donut chart is a good choice for a simple part-to-whole story,
+  even within this narrower 582px (y=48 to y=630) content window; budget its
+  height correctly and it fits cleanly. Unlike a bar or line chart, which can
+  stay short and wide, a pie/donut needs to stay close to square to remain
+  legible, so its chart card alone typically needs at least 380-420px of
+  height. Budget that chart card's real height first, then size the
+  headline, subtitle, and any supporting stat cards to fit the remaining
   space - do not default to the same spacious header-plus-short-chart
   composition that works for a bar or line chart, since it will not leave
   enough room for a legible pie/donut.
