@@ -4,44 +4,35 @@ import { useRef, useState, type ChangeEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useDispatch } from "react-redux";
 import {
   ArrowUp,
-  ChevronDown,
   File as FileIcon,
-  LayoutTemplate,
   Loader2,
   Paperclip,
   Sparkles,
-  TableOfContents,
   WandSparkles,
   X,
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { notify } from "@/components/ui/sonner";
-import { useTemplateSummaries } from "@/app/(presentation-generator)/hooks/useTemplateSummaries";
 import { PresentationGenerationApi } from "@/app/(presentation-generator)/services/api/presentation-generation";
 import EandLightOverlay from "@/app/components/EandLightOverlay";
+import { setPendingSmartGeneration } from "@/store/slices/presentationGeneration";
 
-const CUSTOM_TEMPLATE_VALUE = "__create_custom_template__";
 const MAX_ATTACHMENTS = 8;
 const DOCUMENT_ACCEPT = ".pdf,.txt,.doc,.docx,.docm,.odt,.rtf,.ppt,.pptx,.pptm,.odp,.xls,.xlsx,.xlsm,.ods,.csv,.tsv,.jpg,.jpeg,.png,.gif,.bmp,.tiff,.webp";
 const ALLOWED_DOCUMENT_EXTENSIONS = new Set(DOCUMENT_ACCEPT.split(","));
 
-type GenerationMode = "standard" | "eand" | "outline" | null;
+type GenerationMode = "standard" | "eand" | null;
 
 export default function GenerationPageClient() {
   const router = useRouter();
-  const { defaultTemplates, customTemplates, loading: templatesLoading } = useTemplateSummaries();
+  const dispatch = useDispatch();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [prompt, setPrompt] = useState("");
-  const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [generationMode, setGenerationMode] = useState<GenerationMode>(null);
-
-  const handleTemplateSelection = (value: string) => {
-    setSelectedTemplateId(value);
-    if (value === CUSTOM_TEMPLATE_VALUE) router.push("/custom-template");
-  };
 
   const addFiles = (candidates: File[]) => {
     const allowedFiles = candidates.filter((file) => {
@@ -107,43 +98,19 @@ export default function GenerationPageClient() {
         n_slides: null,
         file_paths: filePaths,
         language: "English",
-        generation_mode: "smart",
-        smart_template: useEandTemplate ? "eand" : undefined,
-        smart_brand_colors: smartBrandColors,
-        include_title_slide: true,
-        include_table_of_contents: false,
-      });
-      router.replace(`/presentation?id=${presentation.id}&stream=true&type=smart`);
-    } catch (error) {
-      notify.error("Could not start generation", error instanceof Error ? error.message : "Please try again.");
-      setGenerationMode(null);
-    }
-  };
-
-  const generateOutline = async () => {
-    const content = getGenerationContent();
-    if (!content) {
-      notify.error("Add a brief or source files", "Tell e& Present what you want to present, or attach source documents.");
-      return;
-    }
-
-    setGenerationMode("outline");
-    try {
-      const filePaths = await uploadDocuments();
-      const presentation = await PresentationGenerationApi.createPresentation({
-        content,
-        n_slides: null,
-        file_paths: filePaths,
-        language: "English",
         generation_mode: "standard",
         include_title_slide: true,
         include_table_of_contents: false,
       });
-      const params = new URLSearchParams({ id: presentation.id, autostart: "true" });
-      if (selectedTemplateId) params.set("template", selectedTemplateId);
-      router.push(`/outline?${params.toString()}`);
+      dispatch(
+        setPendingSmartGeneration({
+          target: useEandTemplate ? "eand" : "smart",
+          brandColors: smartBrandColors ?? null,
+        })
+      );
+      router.push(`/outline?id=${presentation.id}&autostart=true`);
     } catch (error) {
-      notify.error("Could not create outline", error instanceof Error ? error.message : "Please try again.");
+      notify.error("Could not start generation", error instanceof Error ? error.message : "Please try again.");
       setGenerationMode(null);
     }
   };
@@ -188,23 +155,9 @@ export default function GenerationPageClient() {
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <input ref={fileInputRef} type="file" accept={DOCUMENT_ACCEPT} multiple className="hidden" onChange={handleFilesSelected} />
               <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isGenerating || files.length >= MAX_ATTACHMENTS} className="inline-flex h-9 items-center gap-2 rounded-full border border-[#eee6e6] bg-white px-3 text-sm font-semibold text-[#5a4e4e] transition-colors hover:border-[#e6bcbc] hover:bg-[#fffafa] disabled:cursor-not-allowed disabled:opacity-55"><Paperclip className="h-4 w-4 text-[#d60000]" />{files.length > 0 ? `Attach files (${files.length})` : "Attach files"}</button>
-              <label className="relative inline-flex h-9 items-center min-w-0">
-                <LayoutTemplate className="pointer-events-none absolute inset-y-0 left-3 my-auto h-4 w-4 text-[#9a7f7f]" />
-                <select value={selectedTemplateId} disabled={templatesLoading || isGenerating} onChange={(event) => handleTemplateSelection(event.target.value)} className="h-9 max-w-[215px] appearance-none rounded-full border border-[#eee6e6] bg-white py-0 pl-9 pr-8 text-sm font-medium text-[#5a4e4e] outline-none transition focus:border-[#e60000] disabled:cursor-wait disabled:opacity-60">
-                  <option value="">{templatesLoading ? "Loading templates…" : "Choose a template"}</option>
-                  {defaultTemplates.length > 0 && <optgroup label="Built-in templates">{defaultTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</optgroup>}
-                  {customTemplates.length > 0 && <optgroup label="Your templates">{customTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</optgroup>}
-                  <optgroup label="Create"><option value={CUSTOM_TEMPLATE_VALUE}>Create a custom template…</option></optgroup>
-                </select>
-                <ChevronDown className="pointer-events-none absolute inset-y-0 right-3 my-auto h-3.5 w-3.5 text-[#8d8080]" />
-              </label>
-              {selectedTemplateId && selectedTemplateId !== CUSTOM_TEMPLATE_VALUE && (
-                <span className="text-xs text-[#9a8a8a]">Only used by Outline — Generate ignores it</span>
-              )}
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <button type="button" disabled={isGenerating} onClick={() => void generateOutline()} className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm font-semibold text-[#625656] transition-colors hover:bg-[#f7f3f3] disabled:cursor-wait disabled:opacity-60"><TableOfContents className="h-4 w-4" />{generationMode === "outline" ? "Starting…" : "Outline"}</button>
               <button type="button" disabled={isGenerating} onClick={() => void generateDeck(false)} className="inline-flex h-10 items-center gap-2 rounded-full border border-[#e7dddd] bg-white px-4 text-sm font-semibold text-[#3a3333] transition-colors hover:border-[#cfb4b4] hover:bg-[#fffafa] disabled:cursor-wait disabled:opacity-60"><WandSparkles className="h-4 w-4 text-[#d60000]" />{generationMode === "standard" ? "Starting…" : "Generate Standard"}<ArrowUp className="h-4 w-4 text-[#d60000]" /></button>
               <button type="button" disabled={isGenerating} onClick={() => void generateDeck(true)} className="inline-flex h-10 items-center gap-2 rounded-full bg-[#e60000] px-4 text-sm font-semibold text-white shadow-[0_6px_16px_rgba(230,0,0,0.22)] transition-all hover:bg-[#bc0000] hover:shadow-[0_8px_20px_rgba(230,0,0,0.3)] disabled:cursor-wait disabled:opacity-65"><span className="hidden sm:inline">{generationMode === "eand" ? "Starting…" : "Generate e& deck"}</span><span className="sm:hidden">{generationMode === "eand" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-5 w-5" />}</span><span className="hidden sm:block"><ArrowUp className="h-4 w-4" /></span></button>
             </div>

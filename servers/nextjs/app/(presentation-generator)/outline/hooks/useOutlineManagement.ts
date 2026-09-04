@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useDispatch } from "react-redux";
 import { arrayMove } from "@dnd-kit/sortable";
-import { setOutlines } from "@/store/slices/presentationGeneration";
+import { deleteSlideOutline, setOutlines } from "@/store/slices/presentationGeneration";
 import { notify } from "@/components/ui/sonner";
 import { MAX_NUMBER_OF_SLIDES } from "@/utils/presentationLimits";
 
@@ -41,5 +41,15 @@ export const useOutlineManagement = (outlines: { content: string }[] | null) => 
     dispatch(setOutlines(updatedOutlines));
   }, [outlines, dispatch]);
 
-  return { handleDragEnd, handleAddSlide };
+  const handleDeleteSlide = useCallback(
+    (index: number) => {
+      if (!outlines) return;
+      if (index < 0 || index >= outlines.length) return;
+
+      dispatch(deleteSlideOutline({ index }));
+    },
+    [outlines, dispatch]
+  );
+
+  return { handleDragEnd, handleAddSlide, handleDeleteSlide };
 };

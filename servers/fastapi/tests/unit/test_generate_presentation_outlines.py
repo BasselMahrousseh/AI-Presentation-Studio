@@ -5,9 +5,10 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
-from llmai.shared import WebSearchTool
+from llmai.shared import ReasoningConfig, ReasoningEffortValue, WebSearchTool
 from pydantic import ValidationError
 
+from enums.llm_provider import LLMProvider
 from enums.web_search_provider import WebSearchProvider
 from models.presentation_outline_model import PresentationOutlineModel
 from tests.mocks.llm import content_event
@@ -96,6 +97,37 @@ def test_system_prompt_requires_content_only_outlines_for_visual_instructions():
     assert "never copy production instructions into slide content" in prompt
 
 
+def test_system_prompt_omits_explicit_structure_instruction_by_default():
+    prompt = outline_module.get_system_prompt()
+
+    assert "already divided into explicitly numbered slide" not in prompt
+
+
+def test_system_prompt_adds_explicit_structure_instruction_when_flagged():
+    prompt = outline_module.get_system_prompt(has_explicit_slide_structure=True)
+
+    assert "already divided into explicitly numbered slide" in prompt
+    assert "overrides the earlier instruction to split" in prompt
+    assert "Do not merge two labeled sections into one slide" in prompt
+
+
+def test_system_prompt_requires_title_slide_content_when_include_title_slide_is_true():
+    prompt = outline_module.get_system_prompt(include_title_slide=True)
+
+    assert "Title slide must only contain title, presenter name, date and overview" in prompt
+    assert "First slide title must be the same as the presentation title" in prompt
+    assert "Include presenter name in first slide." in prompt
+
+
+def test_system_prompt_omits_title_slide_directives_when_include_title_slide_is_false():
+    prompt = outline_module.get_system_prompt(include_title_slide=False)
+
+    assert "Title slide must only contain title, presenter name, date and overview" not in prompt
+    assert "First slide title must be the same as the presentation title" not in prompt
+    assert "Do not add a separate title-only slide" in prompt
+    assert "Do not include presenter name in any slides." in prompt
+
+
 def test_outline_schema_describes_audience_facing_content_only():
     content_schema = PresentationOutlineModel.model_json_schema()["$defs"][
         "SlideOutlineModel"
@@ -161,6 +193,8 @@ def test_generate_ppt_outline_streams_json_chunks_and_keeps_schema_shape():
     with patch.object(outline_module, "get_model", return_value="fake-model"), patch.object(
         outline_module, "get_client", return_value=object()
     ), patch.object(outline_module, "get_llm_config", return_value={}), patch.object(
+        outline_module, "get_outline_reasoning_config", return_value=(None, False)
+    ), patch.object(
         outline_module,
         "get_generate_kwargs",
         side_effect=lambda **kwargs: kwargs,
@@ -192,6 +226,8 @@ def test_generate_ppt_outline_returns_http_exception_chunk_on_failure():
         outline_module,
         "get_llm_config",
         return_value={},
+    ), patch.object(
+        outline_module, "get_outline_reasoning_config", return_value=(None, False)
     ), patch.object(
         outline_module,
         "get_generate_kwargs",
@@ -228,6 +264,8 @@ def test_generate_ppt_outline_injects_external_search_context_without_hosted_too
     with patch.object(outline_module, "get_model", return_value="fake-model"), patch.object(
         outline_module, "get_client", return_value=object()
     ), patch.object(outline_module, "get_llm_config", return_value={}), patch.object(
+        outline_module, "get_outline_reasoning_config", return_value=(None, False)
+    ), patch.object(
         outline_module, "should_use_native_web_search", return_value=False
     ), patch.object(
         outline_module, "should_expose_external_web_search_tool", return_value=True
@@ -267,6 +305,8 @@ def test_generate_ppt_outline_emits_provider_aware_external_search_statuses():
     with patch.object(outline_module, "get_model", return_value="fake-model"), patch.object(
         outline_module, "get_client", return_value=object()
     ), patch.object(outline_module, "get_llm_config", return_value={}), patch.object(
+        outline_module, "get_outline_reasoning_config", return_value=(None, False)
+    ), patch.object(
         outline_module, "should_use_native_web_search", return_value=False
     ), patch.object(
         outline_module, "should_expose_external_web_search_tool", return_value=True
@@ -313,6 +353,8 @@ def test_generate_ppt_outline_emits_model_native_search_status():
     with patch.object(outline_module, "get_model", return_value="fake-model"), patch.object(
         outline_module, "get_client", return_value=object()
     ), patch.object(outline_module, "get_llm_config", return_value={}), patch.object(
+        outline_module, "get_outline_reasoning_config", return_value=(None, False)
+    ), patch.object(
         outline_module, "should_use_native_web_search", return_value=True
     ), patch.object(
         outline_module, "should_expose_external_web_search_tool", return_value=False
@@ -357,6 +399,8 @@ def test_generate_ppt_outline_uses_fallback_query_when_query_generation_fails():
     with patch.object(outline_module, "get_model", return_value="fake-model"), patch.object(
         outline_module, "get_client", return_value=object()
     ), patch.object(outline_module, "get_llm_config", return_value={}), patch.object(
+        outline_module, "get_outline_reasoning_config", return_value=(None, False)
+    ), patch.object(
         outline_module, "should_use_native_web_search", return_value=False
     ), patch.object(
         outline_module, "should_expose_external_web_search_tool", return_value=True
@@ -401,6 +445,8 @@ def test_generate_ppt_outline_uses_fallback_query_when_generated_query_is_null()
     with patch.object(outline_module, "get_model", return_value="fake-model"), patch.object(
         outline_module, "get_client", return_value=object()
     ), patch.object(outline_module, "get_llm_config", return_value={}), patch.object(
+        outline_module, "get_outline_reasoning_config", return_value=(None, False)
+    ), patch.object(
         outline_module, "should_use_native_web_search", return_value=False
     ), patch.object(
         outline_module, "should_expose_external_web_search_tool", return_value=True
@@ -436,3 +482,66 @@ def test_presentation_outline_model_schema_validation_rejects_invalid_ai_payload
 
     with pytest.raises(ValidationError):
         PresentationOutlineModel.model_validate(invalid_payload)
+
+
+def test_outline_reasoning_uses_high_effort_for_openai(monkeypatch):
+    monkeypatch.setattr("utils.llm_reasoning.disable_thinking", lambda: False)
+    monkeypatch.setattr(
+        "utils.llm_reasoning.get_llm_provider", lambda: LLMProvider.OPENAI
+    )
+    monkeypatch.setattr(
+        "utils.llm_reasoning.llmai.supports_thinking",
+        lambda model, provider=None: True,
+    )
+
+    reasoning, supports_thinking = outline_module.get_outline_reasoning_config(
+        "gpt-5"
+    )
+
+    assert supports_thinking is True
+    assert reasoning is not None
+    assert reasoning.enabled is True
+    assert reasoning.effort == ReasoningEffortValue.HIGH
+
+
+def test_outline_reasoning_respects_disable_thinking(monkeypatch):
+    monkeypatch.setattr("utils.llm_reasoning.disable_thinking", lambda: True)
+
+    reasoning, supports_thinking = outline_module.get_outline_reasoning_config(
+        "gpt-5"
+    )
+
+    assert reasoning is None
+    assert supports_thinking is False
+
+
+def test_generate_ppt_outline_passes_reasoning_config_to_generate_kwargs():
+    captured_kwargs = {}
+    sentinel_reasoning = ReasoningConfig(enabled=True, effort=ReasoningEffortValue.HIGH)
+
+    async def fake_stream_generate_events(_client, **kwargs):
+        captured_kwargs.update(kwargs)
+        yield content_event('{"slides": [{"content": "## Current facts"}]}')
+
+    with patch.object(outline_module, "get_model", return_value="fake-model"), patch.object(
+        outline_module, "get_client", return_value=object()
+    ), patch.object(outline_module, "get_llm_config", return_value={}), patch.object(
+        outline_module,
+        "get_outline_reasoning_config",
+        return_value=(sentinel_reasoning, True),
+    ), patch.object(
+        outline_module,
+        "get_generate_kwargs",
+        side_effect=lambda **kwargs: kwargs,
+    ), patch.object(
+        outline_module, "stream_generate_events", side_effect=fake_stream_generate_events
+    ):
+        _collect_async_chunks(
+            outline_module.generate_ppt_outline(
+                content="topic",
+                n_slides=1,
+                language="English",
+            )
+        )
+
+    assert captured_kwargs["reasoning"] is sentinel_reasoning

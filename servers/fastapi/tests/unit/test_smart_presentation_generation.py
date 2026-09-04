@@ -165,17 +165,17 @@ def test_smart_prompt_uses_the_eand_brand_contract_without_embedding_the_shell()
     assert "380-420px" in prompt
 
 
-def test_smart_reasoning_uses_low_effort_for_openai(monkeypatch):
+def test_smart_reasoning_uses_medium_effort_for_openai(monkeypatch):
     monkeypatch.setattr(
-        "utils.llm_calls.generate_smart_presentation.disable_thinking",
+        "utils.llm_reasoning.disable_thinking",
         lambda: False,
     )
     monkeypatch.setattr(
-        "utils.llm_calls.generate_smart_presentation.get_llm_provider",
+        "utils.llm_reasoning.get_llm_provider",
         lambda: LLMProvider.OPENAI,
     )
     monkeypatch.setattr(
-        "utils.llm_calls.generate_smart_presentation.llmai.supports_thinking",
+        "utils.llm_reasoning.llmai.supports_thinking",
         lambda model, provider=None: True,
     )
 
@@ -184,12 +184,12 @@ def test_smart_reasoning_uses_low_effort_for_openai(monkeypatch):
     assert supports_thinking is True
     assert reasoning is not None
     assert reasoning.enabled is True
-    assert reasoning.effort == ReasoningEffortValue.LOW
+    assert reasoning.effort == ReasoningEffortValue.MEDIUM
 
 
 def test_smart_reasoning_respects_disable_thinking(monkeypatch):
     monkeypatch.setattr(
-        "utils.llm_calls.generate_smart_presentation.disable_thinking",
+        "utils.llm_reasoning.disable_thinking",
         lambda: True,
     )
 

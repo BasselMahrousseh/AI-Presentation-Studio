@@ -14,6 +14,34 @@ IMAGE_URL_PATTERN = re.compile(
     r"https?://[-\w./%~:!$&'()*+,;=]+?\.(?:jpe?g|png|webp)(?:\?[^\s\"\'\\]*)?",
     re.IGNORECASE | re.UNICODE,
 )
+EXPLICIT_SLIDE_MARKER_PATTERN = re.compile(
+    r"(?im)^\s*slide\s+(\d{1,3})\s*[-–—:.)]"
+)
+
+
+def detect_explicit_slide_count(content: Optional[str]) -> Optional[int]:
+    """Detect content that already declares its own slide boundaries via
+    repeated 'Slide N -' style headers - a common pattern when a user pastes
+    a pre-structured planning document rather than a loose topic brief.
+
+    Returns the number of distinct content slides declared, or None if the
+    content doesn't show this pattern confidently enough to override the
+    normal auto-detect slide count. Requires a clean ascending run starting
+    at 1 (e.g. 1, 2, 3, 4) so an incidental aside like "as shown in slide 5
+    of last quarter's deck" elsewhere in the text doesn't misfire this.
+    """
+    if not content:
+        return None
+
+    matches = EXPLICIT_SLIDE_MARKER_PATTERN.findall(content)
+    if len(matches) < 2:
+        return None
+
+    numbers = sorted({int(match) for match in matches})
+    if numbers != list(range(1, len(numbers) + 1)):
+        return None
+
+    return len(numbers)
 
 
 def get_presentation_title_from_presentation_outline(

@@ -1,6 +1,6 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Grip } from "lucide-react";
+import { Grip, Trash2 } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -22,6 +22,7 @@ interface OutlineItemProps {
   isActiveStreaming?: boolean;
   isStableStreaming?: boolean;
   onUpdate?: (newContent: string) => void;
+  onDelete?: () => void;
 }
 
 const outlineMarkdownClassName =
@@ -35,6 +36,7 @@ export function OutlineItem({
   isActiveStreaming = false,
   isStableStreaming = false,
   onUpdate,
+  onDelete,
 }: OutlineItemProps) {
   useEffect(() => {
     if (isStreaming) {
@@ -171,6 +173,18 @@ export function OutlineItem({
           : "border-[#e6e9ef] shadow-[0_3px_8px_rgba(16,39,80,0.04)]"
       } ${isDragging ? "opacity-50" : ""}`}
     >
+      {!isStreaming && onDelete && (
+        <button
+          type="button"
+          onClick={onDelete}
+          aria-label={`Delete slide ${index}`}
+          title="Delete slide"
+          className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full text-[#a0a8b8] opacity-0 transition-opacity duration-150 hover:bg-[#fff1f1] hover:text-[#e60000] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E60000]/25 group-hover:opacity-100 sm:right-4 sm:top-4"
+        >
+          <Trash2 className="h-4 w-4" aria-hidden="true" />
+        </button>
+      )}
+
       <div className="flex items-start gap-3 sm:gap-4">
         <div
           {...attributes}

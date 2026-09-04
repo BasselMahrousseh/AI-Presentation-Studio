@@ -10,7 +10,6 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Optional
 
-import llmai
 from fastapi import HTTPException
 from llmai import get_client
 from llmai.shared import (
@@ -28,8 +27,9 @@ from PIL import Image, ImageChops
 from services.export_task_service import EXPORT_TASK_SERVICE
 from templates.fonts_and_slides_preview import _build_slide_preview_html
 from utils.llm_client_error_handler import handle_llm_client_exceptions
-from utils.llm_config import disable_thinking, get_llm_config
-from utils.llm_provider import get_llm_provider, get_model
+from utils.llm_config import get_llm_config
+from utils.llm_provider import get_model
+from utils.llm_reasoning import get_reasoning_config
 from utils.llm_utils import (
     TextGenerationMetrics,
     build_text_generation_metrics,
@@ -319,6 +319,15 @@ Visual evidence and asset decisions:
 - Use numeric values supplied by the prompt or source context. You may use
   broadly established facts only when you can state them accurately; never
   invent precise values, projections, or citations to make a chart look richer.
+  If a slide or chart is requested with no real numbers supplied and no
+  broadly established facts apply, invent a small, clearly-labeled
+  illustrative dataset (e.g. a caption or note reading "Illustrative example"
+  or "Estimated for illustration") rather than declining the request or
+  building a slide about why the data is missing. Never attach a specific
+  named source, publisher, or citation to invented numbers - a labeled
+  illustrative estimate has no real source to cite. Every slide in the deck
+  must be a real, designed slide on the requested topic - never a
+  meta-commentary slide about data availability.
 - Example decision: a leadership training deck may use scenarios, process
   diagrams, quote callouts, and decision matrices without any charts. A
   data-driven deck about changing global temperatures should plot temperature or
@@ -1349,28 +1358,7 @@ async def _stream_deck_response(
 
 def get_smart_reasoning_config(model: str) -> tuple[ReasoningConfig | None, bool]:
     """Enable reasoning only when llmai knows the selected model supports it."""
-    if disable_thinking():
-        return None, False
-
-    provider = get_llm_provider().value
-    try:
-        supports_thinking = llmai.supports_thinking(model, provider=provider) is True
-    except Exception:
-        supports_thinking = False
-    if not supports_thinking:
-        return None, False
-
-    return (
-        ReasoningConfig(
-            enabled=True,
-            effort=(
-                ReasoningEffortValue.LOW
-                if provider in {"openai", "azure"}
-                else None
-            ),
-        ),
-        True,
-    )
+    return get_reasoning_config(model, default_effort=ReasoningEffortValue.MEDIUM)
 
 
 async def generate_smart_presentation(

@@ -18,9 +18,28 @@ def trim_text_to_word_limit(
     if max_words <= 0:
         return ""
 
-    matches = list(OUTLINE_WORD_PATTERN.finditer(text or ""))
+    text = text or ""
+    matches = list(OUTLINE_WORD_PATTERN.finditer(text))
     if len(matches) <= max_words:
         return text
+
+    # Prefer cutting after the last whole line that still fits within the
+    # word budget, so a markdown table row or list item is never left
+    # half-written - a naive word-count cutoff can land mid-table-cell, since
+    # "|" counts as its own word. Only falls back to a mid-line word cutoff
+    # when a single line by itself already exceeds the whole budget - there
+    # is nothing safe to back up to in that case.
+    word_count = 0
+    included_length = 0
+    for line in text.splitlines(keepends=True):
+        line_word_count = len(OUTLINE_WORD_PATTERN.findall(line))
+        if word_count + line_word_count > max_words:
+            break
+        word_count += line_word_count
+        included_length += len(line)
+
+    if included_length > 0:
+        return text[:included_length].rstrip()
 
     return text[: matches[max_words - 1].end()].rstrip()
 

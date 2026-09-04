@@ -25,6 +25,7 @@ from services.mem0_presentation_memory_service import (
 )
 from utils.llm_utils import message_content_to_text
 from utils.outline_utils import (
+    detect_explicit_slide_count,
     get_no_of_outlines_to_generate_for_n_slides,
     get_presentation_title_from_presentation_outline,
 )
@@ -130,6 +131,7 @@ async def stream_outlines(
 
         presentation_outlines_text = ""
 
+        has_explicit_slide_structure = False
         if presentation.n_slides > 0:
             n_slides_to_generate = get_no_of_outlines_to_generate_for_n_slides(
                 n_slides=presentation.n_slides,
@@ -137,7 +139,35 @@ async def stream_outlines(
                 title_slide=presentation.include_title_slide,
             )
         else:
-            n_slides_to_generate = None
+            detected_content_slides = detect_explicit_slide_count(
+                presentation.content
+            )
+            if detected_content_slides is not None:
+                has_explicit_slide_structure = True
+                # Content that already declares its own "Slide N -" sections
+                # gets exactly that many outline slides - no synthesized
+                # title item added on top. A dedicated title/cover slide is a
+                # template-level concern (e.g. the e& brand template already
+                # splices in its own fixed cover/thank-you slides outside the
+                # outline entirely), not something the outline itself should
+                # invent when the user has already laid out their own slides.
+                detected_total_slides = min(
+                    detected_content_slides, MAX_NUMBER_OF_SLIDES
+                )
+                n_slides_to_generate = get_no_of_outlines_to_generate_for_n_slides(
+                    n_slides=detected_total_slides,
+                    toc=presentation.include_table_of_contents,
+                    title_slide=presentation.include_title_slide,
+                )
+            else:
+                n_slides_to_generate = None
+
+        # Suppress the title-slide prompt directives for this generation only
+        # when explicit slide structure was detected - the presentation's own
+        # stored include_title_slide is left untouched for everything else.
+        effective_include_title_slide = (
+            presentation.include_title_slide and not has_explicit_slide_structure
+        )
 
         outline_messages = get_outline_messages(
             presentation.content,
@@ -147,8 +177,9 @@ async def stream_outlines(
             presentation.tone,
             presentation.verbosity,
             presentation.instructions,
-            presentation.include_title_slide,
+            effective_include_title_slide,
             presentation.include_table_of_contents,
+            has_explicit_slide_structure,
         )
         await MEM0_PRESENTATION_MEMORY_SERVICE.store_generation_context(
             presentation_id=presentation.id,
@@ -175,11 +206,12 @@ async def stream_outlines(
             presentation.tone,
             presentation.verbosity,
             presentation.instructions,
-            presentation.include_title_slide,
+            effective_include_title_slide,
             presentation.web_search,
             presentation.include_table_of_contents,
             emit_statuses=True,
             disconnect_checker=request.is_disconnected,
+            has_explicit_slide_structure=has_explicit_slide_structure,
         ):
             # Give control to the event loop
             await asyncio.sleep(0)
@@ -256,7 +288,17 @@ async def stream_outlines(
         )
 
         yield SSECompleteResponse(
-            key="presentation", value=presentation.model_dump(mode="json")
+            key="presentation",
+            value={
+                **presentation.model_dump(mode="json"),
+                # Ephemeral, not persisted - lets the outline-review page know
+                # not to ask for a synthesized title slide when it later
+                # kicks off Smart generation from this outline (a dedicated
+                # cover slide would either duplicate e&'s own fixed cover or,
+                # for plain Smart mode, force the user's real first section
+                # into a title-only slide).
+                "has_explicit_slide_structure": has_explicit_slide_structure,
+            },
         ).to_string()
 
     async def rollback_stream_session():

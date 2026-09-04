@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { notify } from "@/components/ui/sonner";
-import { setOutlines } from "@/store/slices/presentationGeneration";
+import {
+  setOutlines,
+  setOutlineHasExplicitStructure,
+} from "@/store/slices/presentationGeneration";
 import { jsonrepair } from "jsonrepair";
 import { RootState } from "@/store/store";
 import { getApiUrl } from "@/utils/api";
@@ -222,6 +225,11 @@ export const useOutlineStreaming = (
                 limitOutlines(data.presentation.outlines.slides);
               clearPendingOutlinePublish();
               dispatch(setOutlines(outlinesData));
+              dispatch(
+                setOutlineHasExplicitStructure(
+                  Boolean(data.presentation.has_explicit_slide_structure)
+                )
+              );
               setIsStreaming(false);
               setIsLoading(false);
               setActiveSlideIndex(null);

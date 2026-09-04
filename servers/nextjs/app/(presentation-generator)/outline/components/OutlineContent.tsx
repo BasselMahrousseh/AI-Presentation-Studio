@@ -33,6 +33,7 @@ interface OutlineContentProps {
   onDragEnd: (oldIndex: number, newIndex: number) => void;
   onAddSlide: () => void;
   onUpdateOutline?: (index: number, newContent: string) => void;
+  onDeleteSlide?: (index: number) => void;
 }
 
 const getOutlineContent = (outline: { content: string }) => outline.content;
@@ -47,6 +48,7 @@ const OutlineContent: React.FC<OutlineContentProps> = ({
   onDragEnd,
   onAddSlide,
   onUpdateOutline,
+  onDeleteSlide,
 }) => {
   const hasReachedSlideLimit =
     (outlines?.length ?? 0) >= MAX_NUMBER_OF_SLIDES;
@@ -148,6 +150,7 @@ const OutlineContent: React.FC<OutlineContentProps> = ({
                     onUpdate={(newContent) =>
                       onUpdateOutline?.(index + 1, newContent)
                     }
+                    onDelete={() => onDeleteSlide?.(index)}
                   />
                 ))}
               </SortableContext>

@@ -10,7 +10,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import EandLightOverlay from "@/app/components/EandLightOverlay";
 import { RootState, store } from "@/store/store";
-import { setOutlines, setPresentationId } from "@/store/slices/presentationGeneration";
+import {
+  setOutlines,
+  setPresentationId,
+  clearPendingSmartGeneration,
+} from "@/store/slices/presentationGeneration";
 import {
   limitOutlines,
   trimTextToWordLimit,
@@ -18,7 +22,7 @@ import {
 
 import Chat from "../../presentation/components/Chat";
 import { PresentationGenerationApi } from "../../services/api/presentation-generation";
-import { Sparkles, TableOfContents } from "lucide-react";
+import { Sparkles, TableOfContents, WandSparkles } from "lucide-react";
 import { useOutlineManagement } from "../hooks/useOutlineManagement";
 import { useOutlineStreaming } from "../hooks/useOutlineStreaming";
 import { usePresentationGeneration } from "../hooks/usePresentationGeneration";
@@ -76,9 +80,11 @@ const OutlinePage: React.FC = () => {
   const dispatch = useDispatch();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { presentation_id: storedPresentationId, outlines } = useSelector(
-    (state: RootState) => state.presentationGeneration
-  );
+  const {
+    presentation_id: storedPresentationId,
+    outlines,
+    pendingSmartTarget,
+  } = useSelector((state: RootState) => state.presentationGeneration);
   const queryPresentationId = searchParams.get("id")?.trim() || null;
   const suggestedTemplate = searchParams.get("template")?.trim() || null;
   const autoStart = searchParams.get("autostart") === "true";
@@ -99,7 +105,8 @@ const OutlinePage: React.FC = () => {
     presentation_id,
     !isTemplateStage && (hasSelectedTemplate || autoStart)
   );
-  const { handleDragEnd, handleAddSlide } = useOutlineManagement(outlines);
+  const { handleDragEnd, handleAddSlide, handleDeleteSlide } =
+    useOutlineManagement(outlines);
 
   // The standard (non-Smart) generation path needs a template even when the
   // autostart flow skips the template-picker stage, so resolve one silently
@@ -226,6 +233,10 @@ const OutlinePage: React.FC = () => {
   const handleSmartGeneration = useCallback(
     async (useEandTemplate: boolean) => {
       const approvedOutlines = store.getState().presentationGeneration.outlines;
+      const brandColors =
+        store.getState().presentationGeneration.pendingSmartBrandColors;
+      const outlineHasExplicitStructure =
+        store.getState().presentationGeneration.outlineHasExplicitStructure;
       if (!isOutlineReady || isStartingSmartDeck || approvedOutlines.length === 0) {
         return;
       }
@@ -246,13 +257,20 @@ const OutlinePage: React.FC = () => {
           // approved outline item.
           n_slides: useEandTemplate ? null : approvedOutlines.length,
           language: "English",
-          include_title_slide: true,
+          // The outline already declared its own slide boundaries (e.g. the
+          // user pasted "Slide 1 -", "Slide 2 -" content), so don't ask for a
+          // synthesized title slide on top - it would either duplicate e&'s
+          // own fixed cover or force a real content section into a
+          // title-only slide.
+          include_title_slide: !outlineHasExplicitStructure,
           include_table_of_contents: false,
           generation_mode: "smart",
           smart_template: useEandTemplate ? "eand" : undefined,
+          smart_brand_colors: useEandTemplate ? brandColors ?? undefined : undefined,
         });
 
         dispatch(setPresentationId(smartPresentation.id));
+        dispatch(clearPendingSmartGeneration());
         router.replace(
           `/presentation?id=${smartPresentation.id}&stream=true&type=smart`
         );
@@ -336,6 +354,7 @@ const OutlinePage: React.FC = () => {
                   statusMessage={streamState.statusMessage}
                   onDragEnd={handleDragEnd}
                   onAddSlide={handleAddSlide}
+                  onDeleteSlide={handleDeleteSlide}
                   onUpdateOutline={handleUpdateOutline}
                 />
               </div>
@@ -385,27 +404,49 @@ const OutlinePage: React.FC = () => {
           <div className="pointer-events-none fixed bottom-6 left-5 right-5 z-50 flex justify-center sm:left-10 sm:right-10 lg:left-0 lg:right-[369px]">
             <div className="pointer-events-auto">
               <div className="flex flex-col gap-2 sm:flex-row">
-                <Button
-                  disabled={
-                    !isOutlineReady ||
-                    !standardTemplateId ||
-                    standardLoadingState.isLoading
-                  }
-                  onClick={() => void generateStandardPresentation()}
-                  variant="outline"
-                  className="h-11 w-full rounded-lg border-[#D9E0EA] bg-white px-5 text-sm font-semibold text-[#172a5c] shadow-sm hover:bg-[#F3F6FA] sm:w-auto"
-                >
-                  <TableOfContents size={16} />
-                  Generate Standard
-                </Button>
-                <Button
-                  disabled={!isOutlineReady || isStartingSmartDeck}
-                  onClick={() => handleSmartGeneration(true)}
-                  className="h-11 w-full rounded-lg bg-[#E30613] px-5 text-sm font-semibold text-white shadow-[0_6px_16px_rgba(227,6,19,.22)] hover:bg-[#B50510] sm:w-auto"
-                >
-                  <Sparkles size={16} />
-                  Generate e&amp; presentation
-                </Button>
+                {pendingSmartTarget === "smart" ? (
+                  <Button
+                    disabled={!isOutlineReady || isStartingSmartDeck}
+                    onClick={() => handleSmartGeneration(false)}
+                    className="h-11 w-full rounded-lg bg-[#172a5c] px-5 text-sm font-semibold text-white shadow-sm hover:bg-[#0f1e45] sm:w-auto"
+                  >
+                    <WandSparkles size={16} />
+                    Generate Smart presentation
+                  </Button>
+                ) : pendingSmartTarget === "eand" ? (
+                  <Button
+                    disabled={!isOutlineReady || isStartingSmartDeck}
+                    onClick={() => handleSmartGeneration(true)}
+                    className="h-11 w-full rounded-lg bg-[#E30613] px-5 text-sm font-semibold text-white shadow-[0_6px_16px_rgba(227,6,19,.22)] hover:bg-[#B50510] sm:w-auto"
+                  >
+                    <Sparkles size={16} />
+                    Generate e&amp; presentation
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      disabled={
+                        !isOutlineReady ||
+                        !standardTemplateId ||
+                        standardLoadingState.isLoading
+                      }
+                      onClick={() => void generateStandardPresentation()}
+                      variant="outline"
+                      className="h-11 w-full rounded-lg border-[#D9E0EA] bg-white px-5 text-sm font-semibold text-[#172a5c] shadow-sm hover:bg-[#F3F6FA] sm:w-auto"
+                    >
+                      <TableOfContents size={16} />
+                      Generate Standard
+                    </Button>
+                    <Button
+                      disabled={!isOutlineReady || isStartingSmartDeck}
+                      onClick={() => handleSmartGeneration(true)}
+                      className="h-11 w-full rounded-lg bg-[#E30613] px-5 text-sm font-semibold text-white shadow-[0_6px_16px_rgba(227,6,19,.22)] hover:bg-[#B50510] sm:w-auto"
+                    >
+                      <Sparkles size={16} />
+                      Generate e&amp; presentation
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
           </div>

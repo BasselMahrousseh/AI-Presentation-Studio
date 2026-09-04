@@ -16,7 +16,7 @@ def get_presentation_outline_model_with_n_slides(n_slides: int):
                 f"Maximum {MAX_OUTLINE_CONTENT_WORDS} words."
             ),
             min_length=100,
-            max_length=1200,
+            max_length=2200,
         )
 
     class PresentationOutlineModelWithNSlides(PresentationOutlineModel):

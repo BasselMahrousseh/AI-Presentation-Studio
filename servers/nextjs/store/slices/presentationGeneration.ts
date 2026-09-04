@@ -52,6 +52,19 @@ interface PresentationGenerationState {
    * being produced. Null for streams that do not report it. */
   streamGeneratedSlides: number | null;
   streamStageMessage: string | null;
+  /** Set by /generation right before navigating to /outline, so the outline
+   * page knows which Smart-mode target the user picked and (for e&) any
+   * .pptx-extracted brand colors to carry into the eventual Smart generation
+   * call. Cleared once the outline page's handleSmartGeneration consumes it. */
+  pendingSmartTarget: "smart" | "eand" | null;
+  pendingSmartBrandColors: string[] | null;
+  /** Set once the outline stream's "complete" event reports it, so the
+   * outline page's handleSmartGeneration knows not to ask for a synthesized
+   * title slide when the content already declared its own "Slide N -"
+   * boundaries - a dedicated cover slide there would either duplicate e&'s
+   * own fixed cover or force a real content section into a title-only
+   * slide. Resets when a new presentation_id is set. */
+  outlineHasExplicitStructure: boolean;
 }
 
 const initialState: PresentationGenerationState = {
@@ -68,6 +81,9 @@ const initialState: PresentationGenerationState = {
   streamTotalSlides: null,
   streamGeneratedSlides: null,
   streamStageMessage: null,
+  pendingSmartTarget: null,
+  pendingSmartBrandColors: null,
+  outlineHasExplicitStructure: false,
 };
 
 const presentationGenerationSlice = createSlice({
@@ -88,9 +104,30 @@ const presentationGenerationSlice = createSlice({
     setPresentationId: (state, action: PayloadAction<string>) => {
       if (state.presentation_id !== action.payload) {
         state.chatHtmlSelection = null;
+        state.outlineHasExplicitStructure = false;
       }
       state.presentation_id = action.payload;
       state.error = null;
+    },
+    setOutlineHasExplicitStructure: (
+      state,
+      action: PayloadAction<boolean>
+    ) => {
+      state.outlineHasExplicitStructure = action.payload;
+    },
+    setPendingSmartGeneration: (
+      state,
+      action: PayloadAction<{
+        target: "smart" | "eand";
+        brandColors?: string[] | null;
+      }>
+    ) => {
+      state.pendingSmartTarget = action.payload.target;
+      state.pendingSmartBrandColors = action.payload.brandColors ?? null;
+    },
+    clearPendingSmartGeneration: (state) => {
+      state.pendingSmartTarget = null;
+      state.pendingSmartBrandColors = null;
     },
     // Slides rendered
     setSlidesRendered: (state, action: PayloadAction<boolean>) => {
@@ -576,6 +613,9 @@ export const {
   setLoading,
   setLayoutLoading,
   setPresentationId,
+  setPendingSmartGeneration,
+  clearPendingSmartGeneration,
+  setOutlineHasExplicitStructure,
   setSlidesRendered,
   setError,
   clearPresentationData,

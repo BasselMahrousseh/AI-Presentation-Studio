@@ -7,6 +7,8 @@ from llmai import get_client
 from llmai.shared import (
     JSONSchemaResponse,
     Message,
+    ReasoningConfig,
+    ReasoningEffortValue,
     ResponseStreamCompletionChunk,
     SystemMessage,
     UserMessage,
@@ -20,6 +22,7 @@ from utils.llm_calls.generate_web_search_query import generate_web_search_query
 from utils.llm_client_error_handler import handle_llm_client_exceptions
 from utils.llm_config import get_llm_config
 from utils.llm_provider import get_model
+from utils.llm_reasoning import get_reasoning_config
 from utils.llm_utils import (
     DisconnectChecker,
     get_generate_kwargs,
@@ -44,6 +47,14 @@ class OutlineGenerationStatus:
     message: str
 
 
+def get_outline_reasoning_config(model: str) -> tuple[ReasoningConfig | None, bool]:
+    """Outline drafting defaults to HIGH reasoning effort - unlike Smart deck
+    generation (LOW), outline quality is worth the extra latency since it's a
+    one-shot structural plan the user reviews before any slide content is
+    ever rendered."""
+    return get_reasoning_config(model, default_effort=ReasoningEffortValue.HIGH)
+
+
 def _web_search_provider_display_name(provider_name: str) -> str:
     return {
         "searxng": "SearXNG",
@@ -59,6 +70,7 @@ def get_system_prompt(
     verbosity: Optional[str] = None,
     include_title_slide: bool = True,
     include_table_of_contents: bool = False,
+    has_explicit_slide_structure: bool = False,
 ):
     verbosity_instruction = (
         "Slide content should be around 20 words but detailed enough to generate a good slide."
@@ -89,7 +101,29 @@ def get_system_prompt(
         # "   - Must have content either in multiple bullet points or table or both.\n"
         "   - Must be in Markdown format.\n"
         "   - Don't use **bold** and __italic__ text.\n"
-        "   - First slide title must be the same as the presentation title."
+        + (
+            "   - First slide title must be the same as the presentation title."
+            if include_title_slide
+            else "   - Do not add a separate title-only slide; the presentation "
+            "title is derived from the first slide's own heading."
+        )
+    )
+
+    explicit_structure_instruction = (
+        (
+            "The user's Content is already divided into explicitly numbered slide "
+            "sections (for example, lines beginning with 'Slide 1 -', 'Slide 2 -'). "
+            "Treat each of those labeled sections as exactly one output slide, in "
+            "the same order - this overrides the earlier instruction to split "
+            "overloaded topics across multiple slides. Do not merge two labeled "
+            "sections into one slide, and do not split one labeled section across "
+            "multiple slides. Condense each section to fit the word limit, keeping "
+            "its most decision-relevant facts, numbers, and data; if a section "
+            "still cannot fit, prioritize the information most useful to that "
+            "slide's stated purpose over exhaustive detail.\n"
+        )
+        if has_explicit_slide_structure
+        else ""
     )
 
     content_only_rules = (
@@ -134,6 +168,7 @@ def get_system_prompt(
         "If no tone is provided, use a clear and professional style. "
         "Ensure logical flow between slides and avoid repetition or generic filler content.\n"
         "Give each slide one clear purpose and split overloaded topics across multiple slides.\n"
+        f"{explicit_structure_instruction}"
         "Minimize repetitive phrasing and do not repeat the same facts across slides.\n"
         "Build a coherent narrative from the introduction through the conclusion.\n"
         "Vary audience-facing content structures where appropriate, using bullets, comparisons, chronological facts, tables, or metrics.\n"
@@ -145,8 +180,12 @@ def get_system_prompt(
         f"{slide_outline_structure}\n"
         f"{content_only_rules}"
         "Slide content must not contain any presentation branding/styling information.\n"
-        "Title slide must only contain title, presenter name, date and overview.\n"
-        "Do not include URLs, hyperlinks, citations, footnotes, references, or source lists in slide outlines.\n"
+        + (
+            "Title slide must only contain title, presenter name, date and overview.\n"
+            if include_title_slide
+            else ""
+        )
+        + "Do not include URLs, hyperlinks, citations, footnotes, references, or source lists in slide outlines.\n"
         "Make sure data is consistent across all slides.\n"
         "When a web search tool is available, use it for current, factual, or external information.\n"
         "When web search results are supplied in Context, use their factual content without mentioning sources.\n"
@@ -215,6 +254,7 @@ def get_messages(
     instructions: Optional[str] = None,
     include_title_slide: bool = True,
     include_table_of_contents: bool = False,
+    has_explicit_slide_structure: bool = False,
 ) -> list[Message]:
     return [
         SystemMessage(
@@ -222,6 +262,7 @@ def get_messages(
                 verbosity,
                 include_title_slide,
                 include_table_of_contents,
+                has_explicit_slide_structure,
             ),
         ),
         UserMessage(
@@ -252,8 +293,10 @@ async def generate_ppt_outline(
     include_table_of_contents: bool = False,
     emit_statuses: bool = False,
     disconnect_checker: Optional[DisconnectChecker] = None,
+    has_explicit_slide_structure: bool = False,
 ):
     model = get_model()
+    reasoning_config, _ = get_outline_reasoning_config(model)
     response_model = (
         get_presentation_outline_model_with_n_slides(n_slides)
         if n_slides is not None
@@ -364,6 +407,7 @@ async def generate_ppt_outline(
             disconnect_checker=disconnect_checker,
             **get_generate_kwargs(
                 model=model,
+                reasoning=reasoning_config,
                 messages=get_messages(
                     content,
                     n_slides,
@@ -374,6 +418,7 @@ async def generate_ppt_outline(
                     instructions,
                     include_title_slide,
                     include_table_of_contents,
+                    has_explicit_slide_structure,
                 ),
                 response_format=response_format,
                 tools=([WebSearchTool()] if use_search_tool else None),
