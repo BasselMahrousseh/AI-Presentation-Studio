@@ -65,3 +65,7 @@ $RECYCLE.BIN/
 # Chrome for Testing, downloaded via @puppeteer/browsers for the export bundle.
 # ~358MB of binaries; never commit these.
 chrome/
+
+# Claude-vs-app benchmark artifacts (generated .pptx files, renders, logs) —
+# large binary output, not source. See benchmark/scenarios.json for the setup.
+benchmark/

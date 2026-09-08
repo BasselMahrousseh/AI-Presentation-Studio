@@ -50,6 +50,12 @@ class FakeAsyncSession:
     async def scalars(self, *_args: Any, **_kwargs: Any):
         return []
 
+    async def __aenter__(self) -> "FakeAsyncSession":
+        return self
+
+    async def __aexit__(self, *_exc_info: Any) -> None:
+        return None
+
 
 @pytest.fixture
 def fake_async_session() -> FakeAsyncSession:

@@ -134,7 +134,7 @@ def test_render_html_to_image_sends_html_task_payload(monkeypatch, tmp_path):
     service = ExportTaskService(timeout_seconds=10)
     captured = {}
 
-    async def fake_run_task(task_payload, response_error_detail):
+    async def fake_run_task(task_payload, response_error_detail, **_kwargs):
         captured["task_payload"] = task_payload
         captured["response_error_detail"] = response_error_detail
         return {"file_path": str(output_path)}
@@ -160,7 +160,7 @@ def test_render_json_to_image_sends_json_task_payload(monkeypatch, tmp_path):
     service = ExportTaskService(timeout_seconds=10)
     captured = {}
 
-    async def fake_run_task(task_payload, response_error_detail):
+    async def fake_run_task(task_payload, response_error_detail, **_kwargs):
         captured["task_payload"] = task_payload
         captured["response_error_detail"] = response_error_detail
         return {"file_path": str(output_path)}
@@ -202,7 +202,7 @@ def test_render_json_to_image_embeds_protected_local_assets(monkeypatch, tmp_pat
     service = ExportTaskService(timeout_seconds=10)
     captured = {}
 
-    async def fake_run_task(task_payload, response_error_detail):
+    async def fake_run_task(task_payload, response_error_detail, **_kwargs):
         captured["task_payload"] = task_payload
         return {"file_path": str(output_path)}
 
@@ -238,7 +238,7 @@ def test_render_htmls_to_images_sends_batch_task_payload(monkeypatch, tmp_path):
     service = ExportTaskService(timeout_seconds=10)
     captured = {}
 
-    async def fake_run_task(task_payload, response_error_detail):
+    async def fake_run_task(task_payload, response_error_detail, **_kwargs):
         captured["task_payload"] = task_payload
         captured["response_error_detail"] = response_error_detail
         return {"file_paths": [str(path) for path in output_paths]}
@@ -266,7 +266,7 @@ def test_render_htmls_to_images_falls_back_for_older_runtime(tmp_path):
     service = ExportTaskService(timeout_seconds=10)
     rendered_htmls = []
 
-    async def fake_run_task(_task_payload, _response_error_detail):
+    async def fake_run_task(_task_payload, _response_error_detail, **_kwargs):
         raise HTTPException(status_code=500, detail="Export task failed: Invalid task type")
 
     async def fake_render_html_to_image(html, width, height):
@@ -294,7 +294,7 @@ def test_render_htmls_to_images_falls_back_when_batch_render_fails(tmp_path):
     service = ExportTaskService(timeout_seconds=10)
     rendered_htmls = []
 
-    async def fake_run_task(_task_payload, _response_error_detail):
+    async def fake_run_task(_task_payload, _response_error_detail, **_kwargs):
         raise HTTPException(
             status_code=500,
             detail=(

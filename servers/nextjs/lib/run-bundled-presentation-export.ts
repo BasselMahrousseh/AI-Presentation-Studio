@@ -5,9 +5,49 @@ import { spawn } from "child_process";
 import { randomUUID } from "crypto";
 import { sanitizeFilename } from "@/app/(presentation-generator)/utils/others";
 import {
+  AsyncSemaphore,
   BoundedTextBuffer,
   memorySnapshotMb,
 } from "@/lib/runtime-limits";
+
+const DEFAULT_EXPORT_BUNDLE_MAX_CONCURRENCY = 2;
+
+function envInt(
+  name: string,
+  defaultValue: number,
+  minimum: number,
+  maximum: number
+): number {
+  const raw = (process.env[name] ?? "").trim();
+  if (!raw) return defaultValue;
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    console.warn(
+      `[bundled-export] invalid ${name}=${JSON.stringify(raw)}, using default=${defaultValue}`
+    );
+    return defaultValue;
+  }
+  if (parsed < minimum || parsed > maximum) {
+    console.warn(
+      `[bundled-export] ${name}=${parsed} out of range [${minimum}, ${maximum}], using default=${defaultValue}`
+    );
+    return defaultValue;
+  }
+  return parsed;
+}
+
+// Caps how many `node <entrypoint>` children this Next.js process spawns at
+// once (each of which launches its own full Chromium - see the export
+// bundle's `--no-zygote` launch flag). Independent from, and does not
+// coordinate with, FastAPI's own EXPORT_TASK_MAX_CONCURRENCY cap on its
+// separate render runtime (see services/export_task_service.py) - the two
+// are different processes with no shared state, so the real process-wide
+// ceiling across both is their sum, not either one alone. See CLAUDE.md's
+// "No concurrency cap on Chromium spawns" entry for the full reasoning.
+const EXPORT_BUNDLE_RENDER_SLOTS = new AsyncSemaphore(
+  envInt("EXPORT_BUNDLE_MAX_CONCURRENCY", DEFAULT_EXPORT_BUNDLE_MAX_CONCURRENCY, 1, 32)
+);
 
 function getFastApiInternalBaseUrl(): string {
   const internal = process.env.FAST_API_INTERNAL_URL?.trim();
@@ -272,66 +312,79 @@ async function runBundledPresentationExportLocked(params: {
 
     const responsePath = exportTaskPath.replace(/\.json$/i, ".response.json");
 
+    // Caps how many of these Chromium-spawning children run at once (see
+    // EXPORT_BUNDLE_RENDER_SLOTS above) - acquired right before the spawn and
+    // released as soon as the child exits, so the slot is only ever held for
+    // the actual render, not for the response-file/chart-upgrade work after.
+    const queueWaitStartedAt = Date.now();
+    await EXPORT_BUNDLE_RENDER_SLOTS.acquire();
+    const queueWaitMs = Date.now() - queueWaitStartedAt;
+
     console.info("[bundled-export] start", {
       presentationId,
       format,
+      queueWaitMs,
       memory: memorySnapshotMb(),
     });
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(process.execPath, [entrypoint, exportTaskPath], {
-        cwd: appRoot,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          BUILT_PYTHON_MODULE_PATH: converter,
-        },
-      });
-      const stderr = new BoundedTextBuffer();
-      const stdout = new BoundedTextBuffer();
-      const onStderrData = (d: Buffer) => stderr.append(d);
-      const onStdoutData = (d: Buffer) => stdout.append(d);
-      let settled = false;
-      const cleanup = () => {
-        child.stderr?.removeListener("data", onStderrData);
-        child.stdout?.removeListener("data", onStdoutData);
-        child.removeListener("error", onError);
-        child.removeListener("close", onClose);
-      };
-      const finish = (callback: () => void) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        callback();
-      };
-      const onError = (error: Error) => finish(() => reject(error));
-      const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
-        console.info("[bundled-export] child exit", {
-          presentationId,
-          format,
-          pid: child.pid,
-          code,
-          signal,
-          memory: memorySnapshotMb(),
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(process.execPath, [entrypoint, exportTaskPath], {
+          cwd: appRoot,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            BUILT_PYTHON_MODULE_PATH: converter,
+          },
         });
-        if (code === 0) {
-          finish(resolve);
-        } else {
-          const errText = stderr.toString();
-          const outText = stdout.toString();
-          finish(() => {
-            reject(
-              new Error(
-                `Export process exited with code ${code ?? "unknown"}${signal ? ` signal ${signal}` : ""}${errText ? `. ${errText}` : ""}${outText ? ` stdout: ${outText}` : ""}`
-              )
-            );
+        const stderr = new BoundedTextBuffer();
+        const stdout = new BoundedTextBuffer();
+        const onStderrData = (d: Buffer) => stderr.append(d);
+        const onStdoutData = (d: Buffer) => stdout.append(d);
+        let settled = false;
+        const cleanup = () => {
+          child.stderr?.removeListener("data", onStderrData);
+          child.stdout?.removeListener("data", onStdoutData);
+          child.removeListener("error", onError);
+          child.removeListener("close", onClose);
+        };
+        const finish = (callback: () => void) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          callback();
+        };
+        const onError = (error: Error) => finish(() => reject(error));
+        const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+          console.info("[bundled-export] child exit", {
+            presentationId,
+            format,
+            pid: child.pid,
+            code,
+            signal,
+            memory: memorySnapshotMb(),
           });
-        }
-      };
-      child.stderr?.on("data", onStderrData);
-      child.stdout?.on("data", onStdoutData);
-      child.once("error", onError);
-      child.once("close", onClose);
-    });
+          if (code === 0) {
+            finish(resolve);
+          } else {
+            const errText = stderr.toString();
+            const outText = stdout.toString();
+            finish(() => {
+              reject(
+                new Error(
+                  `Export process exited with code ${code ?? "unknown"}${signal ? ` signal ${signal}` : ""}${errText ? `. ${errText}` : ""}${outText ? ` stdout: ${outText}` : ""}`
+                )
+              );
+            });
+          }
+        };
+        child.stderr?.on("data", onStderrData);
+        child.stdout?.on("data", onStdoutData);
+        child.once("error", onError);
+        child.once("close", onClose);
+      });
+    } finally {
+      EXPORT_BUNDLE_RENDER_SLOTS.release();
+    }
 
     const responseRaw = await fs.readFile(responsePath, "utf8");
     const responseData = JSON.parse(responseRaw) as { path?: string; url?: string };

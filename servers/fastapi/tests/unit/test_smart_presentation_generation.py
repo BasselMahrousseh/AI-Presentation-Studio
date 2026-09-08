@@ -40,20 +40,27 @@ def _smart_slide_html(title="Slide", slide_type="content", body="Content"):
 
 
 def test_smart_slide_stream_parser_emits_delimited_slides_incrementally():
+    # feed() is a generator (not a list-returning method) so that a later
+    # slide in the same chunk failing validation doesn't discard slides
+    # already parsed ahead of it in that same call - see
+    # SMART_MAX_CONSECUTIVE_STATIC_SLIDE_FAILURES. list(...) here just drains
+    # it for the assertions below.
     parser = SmartSlideStreamParser()
     second_slide = _smart_slide_html("Two")
 
-    assert parser.feed("<!-- PRESENTATION_TITLE: Deck --><!-- SLIDE_STA") == []
-    slides = parser.feed(
-        "RT -->"
-        + _smart_slide_html("One")
-        + "<!-- SLIDE_END --><!-- SLIDE_START -->"
-        + second_slide[:80]
+    assert list(parser.feed("<!-- PRESENTATION_TITLE: Deck --><!-- SLIDE_STA")) == []
+    slides = list(
+        parser.feed(
+            "RT -->"
+            + _smart_slide_html("One")
+            + "<!-- SLIDE_END --><!-- SLIDE_START -->"
+            + second_slide[:80]
+        )
     )
     assert [slide["title"] for slide in slides] == ["One"]
     assert slides[0]["speaker_note"] == ""
 
-    slides = parser.feed(second_slide[80:] + "<!-- SLIDE_END -->")
+    slides = list(parser.feed(second_slide[80:] + "<!-- SLIDE_END -->"))
     assert [slide["title"] for slide in slides] == ["Two"]
 
 
@@ -420,6 +427,42 @@ def test_smart_html_normalization_rejects_chart_scripts_with_network_access():
                     "new Chart(document.querySelector('#chart-a1b2c3'), "
                     "{type: 'bar', data: {labels: [], datasets: []}}); "
                     "})();</script>"
+                ),
+            )
+        )
+
+
+def test_smart_html_normalization_rejects_bare_datalabels_register_call():
+    with pytest.raises(HTTPException, match="datalabels.*predefined variable"):
+        normalize_smart_slide_html(
+            _smart_slide_html(
+                "Bad datalabels reference",
+                body=(
+                    '<canvas id="chart-a1b2c3" width="600" height="300">'
+                    "</canvas><script>(() => { const canvas = "
+                    "document.querySelector('#chart-a1b2c3'); "
+                    "Chart.register(datalabels); "
+                    "new Chart(canvas, {type: 'bar', data: {labels: ['A'], "
+                    "datasets: [{data: [1]}]}, options: {responsive: false, "
+                    "animation: false}}); })();</script>"
+                ),
+            )
+        )
+
+
+def test_smart_html_normalization_rejects_bare_datalabels_shorthand():
+    with pytest.raises(HTTPException, match="datalabels.*predefined variable"):
+        normalize_smart_slide_html(
+            _smart_slide_html(
+                "Bad datalabels shorthand",
+                body=(
+                    '<canvas id="chart-a1b2c3" width="600" height="300">'
+                    "</canvas><script>(() => { const canvas = "
+                    "document.querySelector('#chart-a1b2c3'); "
+                    "new Chart(canvas, {type: 'bar', data: {labels: ['A'], "
+                    "datasets: [{data: [1]}]}, options: {responsive: false, "
+                    "animation: false, plugins: { datalabels }}}); })();"
+                    "</script>"
                 ),
             )
         )
@@ -869,7 +912,7 @@ def _layout_probe_image(tmp_path, *, overflow=False, footer=False, name="probe.p
 
 
 def _patch_render(monkeypatch, image_path, counter):
-    async def fake_render(_html, _w, _h):
+    async def fake_render(_html, _w, _h, **_kwargs):
         counter["n"] += 1
         return SimpleNamespace(path=image_path)
 
@@ -955,12 +998,107 @@ def test_layout_check_accepts_a_clean_slide(monkeypatch, tmp_path):
     )
 
 
+# ---------------------------------------------------------------------------
+# Decorative layers hidden for the layout-check render only - a real bug
+# where the render-based pixel checker (_measure_smart_slide_layout) had no
+# concept of a decorative element, unlike the static class-analysis checker
+# (inspect_smart_slide_layout's _is_decorative), which already exempts
+# anything marked data-decorative="true"/aria-hidden="true" everywhere. A
+# model-drawn full-height decorative rail (encouraged by the e& brand
+# prompt) painted 90px into the reserved y=630-720 footer band exactly like
+# real content would, triggering an unnecessary whole-slide downscale to
+# "fix" a collision that was never real.
+# ---------------------------------------------------------------------------
+
+
+def _patch_render_capturing_html(monkeypatch, image_path):
+    captured = {}
+
+    async def fake_render(html, _w, _h, **_kwargs):
+        captured["html"] = html
+        return SimpleNamespace(path=image_path)
+
+    monkeypatch.setattr(
+        smart_generation.EXPORT_TASK_SERVICE, "render_html_to_image", fake_render
+    )
+    return captured
+
+
+def test_layout_check_hides_decorative_layers_for_the_measurement_render(
+    monkeypatch, tmp_path
+):
+    captured = _patch_render_capturing_html(
+        monkeypatch, _layout_probe_image(tmp_path)
+    )
+
+    asyncio.run(
+        smart_generation._check_smart_slide_layout(
+            _smart_slide_html(), check_eand_footer=True
+        )
+    )
+
+    assert (
+        '[data-decorative="true"], [aria-hidden="true"] '
+        "{ visibility: hidden !important; }" in captured["html"]
+    )
+    # `visibility`, never `display` - changing a layout-affecting property
+    # during a measurement render corrupts the measurement itself (see
+    # _slide_html_without_canvas_clip's own docstring: a known-clean slide
+    # once "measured" as ~390px over for exactly that reason).
+    assert "display: none" not in captured["html"]
+    assert "display:none" not in captured["html"]
+
+
+def test_layout_check_accepts_the_real_reported_full_height_rail_slide(
+    monkeypatch, tmp_path
+):
+    """The exact slide that motivated this fix (app_data/fastapi.db,
+    presentation 80c919a9a54f45c9af4a2d3040e185a6, slide index 1, reduced to
+    its pre-splice shape - the real footer furniture is never present at
+    check time, since apply_smart_brand_template runs after this check).
+    Before this fix, the render-based checker had no way to know the rail
+    was decorative and downscaled the whole slide to 630/720=0.8750 to
+    escape a collision that was never real. A real (unmocked) render would
+    now paint nothing below the fixed canvas for this slide since the rail
+    is hidden for the measurement - simulated here via a clean probe image,
+    matching what that real render would produce."""
+    counter = {"n": 0}
+    _patch_render(monkeypatch, _layout_probe_image(tmp_path), counter)
+    html = """
+<section class="relative h-[720px] w-[1280px] overflow-hidden bg-white">
+  <div class="absolute left-0 top-0 h-[720px] w-3 bg-[#E00600]" aria-hidden="true" data-decorative="true"></div>
+  <h1 class="relative ml-16 mt-12 text-[48px] font-bold">Popular LLMs: Capabilities, Cost, and Fit</h1>
+</section>
+"""
+
+    fit_scale = asyncio.run(
+        smart_generation._check_smart_slide_layout(html, check_eand_footer=True)
+    )
+
+    assert fit_scale is None
+
+
+def test_build_slide_preview_html_without_extra_css_is_unchanged():
+    """Every other caller of _build_slide_preview_html (font previews, PPTX
+    slide-to-image rendering) must be byte-for-byte unaffected by adding this
+    parameter - it defaults to empty."""
+    from templates.fonts_and_slides_preview import _build_slide_preview_html
+
+    without_param = _build_slide_preview_html(
+        "<div>content</div>", font_css="", width=100, height=100
+    )
+    with_empty_default = _build_slide_preview_html(
+        "<div>content</div>", font_css="", width=100, height=100, extra_css=""
+    )
+    assert without_param == with_empty_default
+
+
 def test_layout_check_fails_open_on_render_http_exception(monkeypatch):
     """Infra failures (render timeout/crash, which surface as HTTPException
     from EXPORT_TASK_SERVICE) must not be mistaken for layout failures - they
     would burn a retry attempt on something the model cannot correct."""
 
-    async def fake_render(_html, _w, _h):
+    async def fake_render(_html, _w, _h, **_kwargs):
         raise HTTPException(
             status_code=500, detail="Export task timed out after 300 seconds"
         )
@@ -980,7 +1118,7 @@ def test_layout_check_fails_open_on_generic_render_error(monkeypatch):
     """Non-HTTP infra errors (e.g. a crashed Puppeteer child) must also fail
     open rather than being reported as a layout problem."""
 
-    async def fake_render(_html, _w, _h):
+    async def fake_render(_html, _w, _h, **_kwargs):
         raise RuntimeError("puppeteer crashed")
 
     monkeypatch.setattr(
@@ -992,6 +1130,72 @@ def test_layout_check_fails_open_on_generic_render_error(monkeypatch):
             _smart_slide_html(), check_eand_footer=True
         )
     )
+
+
+def test_layout_check_fails_open_on_render_queue_saturation(monkeypatch, caplog):
+    """When the render runtime's own concurrency cap (ExportTaskService's
+    render-slot semaphore, see CLAUDE.md's "No concurrency cap on Chromium
+    spawns" fix) is saturated, this slide's check must still fail open like
+    any other infra failure - but logged as its own distinct WARNING, not
+    folded into the generic exception path, so a busy render queue never
+    looks identical to a genuinely broken render in the logs."""
+
+    async def fake_render(_html, _w, _h, **_kwargs):
+        raise smart_generation.ExportTaskSaturatedError(
+            "Export task queue saturated: no render slot became available "
+            "within 20.0s (max_concurrency=3, waited=20.0s)"
+        )
+
+    monkeypatch.setattr(
+        smart_generation.EXPORT_TASK_SERVICE, "render_html_to_image", fake_render
+    )
+
+    with caplog.at_level("WARNING"):
+        result = asyncio.run(
+            smart_generation._check_smart_slide_layout(
+                _smart_slide_html(), check_eand_footer=True
+            )
+        )
+
+    assert result is None
+    assert any(
+        "slide_layout_check_skipped_saturated" in record.message
+        for record in caplog.records
+    )
+    assert not any(
+        "slide_layout_check_failed" in record.message for record in caplog.records
+    )
+
+
+def test_layout_check_passes_a_bounded_queue_timeout_not_an_unbounded_wait(
+    monkeypatch,
+):
+    """The per-slide check must not be able to stall a slide's SSE stream
+    indefinitely behind other queued renders - it bounds its wait and skips
+    (see the saturation test above) rather than waiting forever."""
+    captured = {}
+
+    async def fake_render(_html, _w, _h, **kwargs):
+        captured["queue_timeout"] = kwargs.get("queue_timeout")
+        # Raise rather than returning a fake path: only the queue_timeout
+        # passed in matters here, and this hits the already-covered generic
+        # fail-open path so nothing further needs to run.
+        raise RuntimeError("stub render - not exercising measurement here")
+
+    monkeypatch.setattr(
+        smart_generation.EXPORT_TASK_SERVICE, "render_html_to_image", fake_render
+    )
+
+    asyncio.run(
+        smart_generation._check_smart_slide_layout(
+            _smart_slide_html(), check_eand_footer=False
+        )
+    )
+
+    assert captured["queue_timeout"] == pytest.approx(
+        smart_generation.SMART_LAYOUT_CHECK_QUEUE_TIMEOUT_SECONDS
+    )
+    assert captured["queue_timeout"] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1322,6 +1526,30 @@ def test_prompt_forbids_fixed_height_title_header_rows():
     assert "never give that row a fixed pixel height" in prompt
 
 
+def test_prompt_warns_against_decorative_layers_colliding_with_content():
+    """Real reported bug: a decorative top-right corner bracket (`absolute
+    right-0 top-0 h-44 w-44 border-b border-l`) occupied x=1104..1280,
+    y=0..176 while the content block's own header rule (`border-b-2`) landed
+    at x=64..1216, y~156-190px away - the two near-parallel accent-colored
+    lines overlapped and visually crossed, reading as a rendering defect."""
+    messages = get_smart_messages(
+        content="Build a marketing report",
+        n_slides=4,
+        language="English",
+        tone=None,
+        verbosity=None,
+        instructions=None,
+        include_title_slide=True,
+        include_table_of_contents=False,
+        source_context="",
+        community_design_context="",
+    )
+    prompt = str(messages[1].content)
+
+    assert "must not visually collide with the content block beside it" in prompt
+    assert "never let a decorative border line land within" in prompt
+
+
 # ---------------------------------------------------------------------------
 # Fit-scale wrapper geometry when the root <section> carries its own padding
 # - a real, previously-latent bug (documented in CLAUDE.md as unconfirmed
@@ -1400,3 +1628,408 @@ def test_scaled_wrapper_padding_extraction_does_not_false_positive_on_similar_cl
     assert "pl-4" in wrapper_open
     assert "pointer-events-none" not in wrapper_open
     assert "opacity-50" not in wrapper_open
+
+
+# ---------------------------------------------------------------------------
+# Fit-scale wrapper margin collapse - a real bug found while investigating a
+# reported "over-long red rail with an empty bottom half": a plain
+# `position:relative` div with a definite height does NOT establish a block
+# formatting context, so a first child's own top margin (e.g. `mt-12`)
+# collapsed straight through the wrapper's top edge instead of being
+# contained by it. Measured on the real reported slide in headless Chrome:
+# without `display:flow-root` the wrapper rendered at y=48..678 (shifted 48px
+# down from the intended 0..630), so the scaled-down rail's bottom still
+# landed 48px inside the very y=630-720 footer band the scale was computed
+# to escape. With `display:flow-root` it rendered at the intended y=0..630.
+# ---------------------------------------------------------------------------
+
+
+def test_scaled_wrapper_contains_child_margin_collapse():
+    html = _smart_slide_html(body='<div class="mt-12">Content</div>')
+
+    scaled = smart_generation._slide_html_scaled_to_fit(html, 0.875)
+
+    wrapper_open = scaled.split(">", 1)[1].split(">", 1)[0]
+    assert "display:flow-root" in wrapper_open
+
+
+# ---------------------------------------------------------------------------
+# The static-heuristic stall waiver (rung 1 of the escalation ladder).
+#
+# Root cause of a real production outage, documented in CLAUDE.md: the static
+# overflow heuristics (inspect_smart_slide_layout) ran *inside the streaming
+# parser*, upstream of the retry loop's try block - so the render-check
+# waiver above (SMART_MAX_CONSECUTIVE_SLIDE_FAILURES) could never reach a
+# slide the static check kept rejecting. Because the specific heuristic that
+# fired (_find_stacked_list_overflow_risks) was a pure item-count shape-match
+# with no height arithmetic, its complaint was frequently unfixable - the
+# model would regenerate the same reasonable layout and fail identically,
+# burning the entire retry budget on a deterministic dead end.
+#
+# These tests exercise the real static-check code path (never a
+# monkeypatched stand-in for it) so the fix is proven against the actual
+# heuristic, not an idealized version of it.
+# ---------------------------------------------------------------------------
+
+# ~112 characters / 15 words - long enough that 4 of them (448 chars, 60
+# words) clearly exceeds the capacity of a narrow 150px-wide, full-height
+# panel (empirically ~275 chars there), while staying far under the
+# slide-wide text-density caps (1700 chars / 190 words for a plain content
+# slide), so only the stacked-list heuristic is what trips.
+_STATIC_STALL_ITEM = (
+    "Revenue grew significantly across every regional business unit this "
+    "quarter, driven by strong enterprise demand."
+)
+
+
+def _static_heuristic_stalling_body() -> str:
+    items = "".join(f"<div>{_STATIC_STALL_ITEM}</div>" for _ in range(4))
+    return f'<div class="flex flex-col h-full w-[150px] gap-4">{items}</div>'
+
+
+def test_static_heuristic_stalling_fixture_actually_trips_the_heuristic():
+    """A guard against fixture rot: if this ever stops tripping the real
+    heuristic (e.g. because its calibration changes), every test below would
+    silently stop testing anything."""
+    html = _smart_slide_html(title="Stuck", body=_static_heuristic_stalling_body())
+    issues = smart_generation.inspect_smart_slide_layout(html)
+    assert any("height-matched panel" in issue for issue in issues)
+
+
+def _static_stalling_deck_stream(
+    n_slides, fail_at_index, monkeypatch, *, layout_check_result=None, render_calls=None
+):
+    """Like _stalling_deck_stream, but the stuck slide fails the *static*
+    heuristic via real code (SmartSlideStreamParser + the retry loop's own
+    inspect_smart_slide_layout call), not a monkeypatched stand-in for it.
+    _check_smart_slide_layout (the render check) is still stubbed, since
+    exercising the real Puppeteer-backed render is out of scope here -
+    layout_check_result controls what it returns/raises once rung 1 defers
+    to it (a plain (sync) callable returning either a fit_scale/None, or an
+    Exception instance to raise), and render_calls (if given) collects every
+    html it was called with, to prove whether and how often that happened."""
+
+    async def fake_layout_check(html, *, check_eand_footer=False):
+        if render_calls is not None:
+            render_calls.append(html)
+        result = layout_check_result(html) if callable(layout_check_result) else layout_check_result
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        prompt = str(messages[1].content)
+        remaining = int(re.search(r"Generate exactly (\d+)", prompt).group(1))
+        start = n_slides - remaining
+        response = "<!-- PRESENTATION_TITLE: Deck -->"
+        for offset in range(remaining):
+            index = start + offset
+            if index == fail_at_index:
+                slide_html = _smart_slide_html(
+                    title="BAD", body=_static_heuristic_stalling_body()
+                )
+            else:
+                slide_html = _smart_slide_html(title=f"Slide {index}")
+            response += (
+                "<!-- SLIDE_START -->" + slide_html + "<!-- SLIDE_END -->"
+            )
+        await on_chunk(response)
+        return response, SimpleNamespace(model=model, input_tokens=1, output_tokens=1)
+
+    monkeypatch.setattr(
+        smart_generation, "_check_smart_slide_layout", fake_layout_check
+    )
+    monkeypatch.setattr(smart_generation, "_stream_deck_response", fake_stream)
+    monkeypatch.setattr(smart_generation, "get_llm_config", lambda **_kwargs: {})
+    monkeypatch.setattr(smart_generation, "get_client", lambda **_kwargs: object())
+    monkeypatch.setattr(smart_generation, "get_model", lambda: "test-model")
+    monkeypatch.setattr(
+        smart_generation, "get_smart_reasoning_config", lambda model: (None, False)
+    )
+
+
+def test_generation_completes_when_a_slide_is_stuck_on_the_static_layout_heuristic(
+    monkeypatch, caplog
+):
+    """The test that fails without the fix: on current main this raises the
+    final 500 after all 8 attempts, because the static heuristic raises
+    upstream of the entire waiver mechanism and the model cannot fix an
+    unfixable complaint by rewriting the same reasonable layout."""
+    _static_stalling_deck_stream(
+        3, fail_at_index=1, monkeypatch=monkeypatch, layout_check_result=None
+    )
+
+    with caplog.at_level("INFO", logger=smart_generation.LOGGER.name):
+        result = _generate(3)
+
+    assert len(result["slides"]) == 3
+    assert result["slides"][1]["title"] == "BAD"
+    skip_events = [
+        r.getMessage()
+        for r in caplog.records
+        if "static_layout_heuristics_skipped" in r.getMessage()
+    ]
+    assert skip_events, "rung 1 must have actually fired for this to prove anything"
+    assert "slide=2" in skip_events[0]
+
+
+def test_static_stall_is_resolved_by_scaling_to_fit(monkeypatch):
+    """Once rung 1 defers to the render check, that check's own existing
+    scale-to-fit behaviour applies exactly as it would for any other slide -
+    the static waiver does not bypass it, it merely unblocks the path to it."""
+    _static_stalling_deck_stream(
+        3,
+        fail_at_index=1,
+        monkeypatch=monkeypatch,
+        layout_check_result=lambda html: 0.9 if "BAD" in html else None,
+    )
+
+    result = _generate(3)
+
+    assert len(result["slides"]) == 3
+    assert 'data-smart-fit-scale="0.9000"' in result["slides"][1]["html"]
+
+
+def test_static_waiver_does_not_disable_the_render_check(monkeypatch, caplog):
+    """Rung 1 is a routing decision, not a quality relaxation: skipping the
+    static heuristic must still hand the slide to the render check, which can
+    still reject it. Completion only happens once rung 2 also activates."""
+    render_calls: list[str] = []
+
+    def always_too_tall(html):
+        if "BAD" in html:
+            return HTTPException(status_code=400, detail="content is too tall")
+        return None
+
+    _static_stalling_deck_stream(
+        3,
+        fail_at_index=1,
+        monkeypatch=monkeypatch,
+        layout_check_result=always_too_tall,
+        render_calls=render_calls,
+    )
+
+    with caplog.at_level("INFO", logger=smart_generation.LOGGER.name):
+        result = _generate(3)
+
+    assert len(result["slides"]) == 3
+    assert result["slides"][1]["title"] == "BAD"
+    # The render check ran for the stuck slide exactly once: not during the
+    # first two attempts (the static heuristic raised before the render
+    # check was ever reached), and not once rung 2 also activated (the
+    # render check is skipped entirely then) - only during the one attempt
+    # where rung 1 alone was active.
+    bad_render_calls = [html for html in render_calls if "BAD" in html]
+    assert len(bad_render_calls) == 1
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("static_layout_heuristics_skipped" in m for m in messages)
+    assert any("render_layout_checks_waived" in m for m in messages)
+
+
+def test_static_heuristics_are_not_skipped_before_the_threshold(monkeypatch, caplog):
+    """The gate isn't "always skip" - it only engages after
+    SMART_MAX_CONSECUTIVE_STATIC_SLIDE_FAILURES genuine, real-code failures
+    at the same position."""
+    _static_stalling_deck_stream(
+        3, fail_at_index=1, monkeypatch=monkeypatch, layout_check_result=None
+    )
+
+    with caplog.at_level("INFO", logger=smart_generation.LOGGER.name):
+        result = _generate(3)
+
+    messages = [r.getMessage() for r in caplog.records]
+    skip_index = next(
+        i for i, m in enumerate(messages) if "static_layout_heuristics_skipped" in m
+    )
+    raw_failures_before_skip = [
+        m
+        for m in messages[:skip_index]
+        if "attempt_failed" in m and "overflow or overlap risks" in m
+    ]
+    assert (
+        len(raw_failures_before_skip)
+        >= smart_generation.SMART_MAX_CONSECUTIVE_STATIC_SLIDE_FAILURES
+    )
+    assert len(result["slides"]) == 3
+
+
+def test_static_heuristics_still_apply_to_slides_after_the_stalled_position(
+    monkeypatch, caplog
+):
+    """Rung 1 waives only the ONE position that has actually stalled (scoped
+    via index == len(accepted_slides), exactly like the render waiver) - a
+    later slide in the same attempt that independently trips the same
+    heuristic must still fail that attempt."""
+
+    async def clean_render_check(html, *, check_eand_footer=False):
+        return None
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        prompt = str(messages[1].content)
+        remaining = int(re.search(r"Generate exactly (\d+)", prompt).group(1))
+        start = 3 - remaining
+        response = "<!-- PRESENTATION_TITLE: Deck -->"
+        for offset in range(remaining):
+            index = start + offset
+            if index == 1:
+                slide_html = _smart_slide_html(
+                    title="BAD", body=_static_heuristic_stalling_body()
+                )
+            elif index == 2:
+                slide_html = _smart_slide_html(
+                    title="ALSO_BAD", body=_static_heuristic_stalling_body()
+                )
+            else:
+                slide_html = _smart_slide_html(title=f"Slide {index}")
+            response += (
+                "<!-- SLIDE_START -->" + slide_html + "<!-- SLIDE_END -->"
+            )
+        await on_chunk(response)
+        return response, SimpleNamespace(model=model, input_tokens=1, output_tokens=1)
+
+    monkeypatch.setattr(
+        smart_generation, "_check_smart_slide_layout", clean_render_check
+    )
+    monkeypatch.setattr(smart_generation, "_stream_deck_response", fake_stream)
+    monkeypatch.setattr(smart_generation, "get_llm_config", lambda **_kwargs: {})
+    monkeypatch.setattr(smart_generation, "get_client", lambda **_kwargs: object())
+    monkeypatch.setattr(smart_generation, "get_model", lambda: "test-model")
+    monkeypatch.setattr(
+        smart_generation, "get_smart_reasoning_config", lambda model: (None, False)
+    )
+
+    with caplog.at_level("INFO", logger=smart_generation.LOGGER.name):
+        result = _generate(3)
+
+    records = [r.getMessage() for r in caplog.records]
+    skip_slide2 = next(
+        i
+        for i, m in enumerate(records)
+        if "static_layout_heuristics_skipped" in m and "slide=2" in m
+    )
+    following_failures = [m for m in records[skip_slide2:] if "attempt_failed" in m]
+    assert following_failures, "the attempt must still fail after the position-1 waiver"
+    assert "died_at_slide=3" in following_failures[0]
+    assert "overflow or overlap risks" in following_failures[0]
+
+    assert len(result["slides"]) == 3
+    assert result["slides"][1]["title"] == "BAD"
+    assert result["slides"][2]["title"] == "ALSO_BAD"
+
+
+def test_normalize_smart_slide_html_still_rejects_layout_heuristics_by_default():
+    """The AI-chat slide-save path (services/chat/memory_layer.py) calls
+    normalize_smart_slide_html directly and relies on it raising for this
+    exact case, with no waiver of any kind - skip_layout_heuristics must
+    default to False."""
+    html = _smart_slide_html(title="Stuck", body=_static_heuristic_stalling_body())
+    with pytest.raises(HTTPException, match="overflow or overlap risks"):
+        normalize_smart_slide_html(html)
+
+
+def test_skip_layout_heuristics_flag_suppresses_only_the_calibrated_heuristics():
+    html = _smart_slide_html(title="Stuck", body=_static_heuristic_stalling_body())
+    normalized = normalize_smart_slide_html(html, skip_layout_heuristics=True)
+    assert "Stuck" in normalized
+
+
+@pytest.mark.parametrize(
+    "body, match",
+    (
+        ('<div class="h-[200px] overflow-y-auto">Long copy</div>', "scrolling or text clipping"),
+        (
+            '<canvas id="chart-a1b2c3" width="600" height="300"></canvas>',
+            "missing its inline Chart.js",
+        ),
+    ),
+)
+def test_skip_layout_heuristics_flag_keeps_hard_validity_checks(body, match):
+    """skip_layout_heuristics=True must only ever suppress the calibrated-
+    proxy inspect_smart_slide_layout check inside
+    _validate_smart_slide_layout_safety - never the hard validity checks
+    (scrolling/clipping utilities, missing chart initializers), which are
+    correctness checks, not quality heuristics, and are never waived."""
+    with pytest.raises(HTTPException, match=match):
+        normalize_smart_slide_html(
+            _smart_slide_html("Still invalid", body=body),
+            skip_layout_heuristics=True,
+        )
+
+
+def test_skip_layout_heuristics_flag_keeps_the_text_density_cap():
+    dense_copy = " ".join(["overflowing"] * 221)
+    with pytest.raises(HTTPException, match="too text-dense"):
+        normalize_smart_slide_html(
+            _smart_slide_html("Dense layout", body=f"<p>{dense_copy}</p>"),
+            skip_layout_heuristics=True,
+        )
+
+
+def test_skip_layout_heuristics_flag_keeps_the_canvas_class_check():
+    invalid_canvas_html = (
+        '<section data-slide-type="content" data-slide-title="Bad canvas" '
+        'class="relative w-[1280px] overflow-hidden">Body</section>'
+    )
+    with pytest.raises(HTTPException, match="invalid canvas"):
+        normalize_smart_slide_html(invalid_canvas_html, skip_layout_heuristics=True)
+
+
+def test_stream_parser_runs_layout_heuristics_by_default():
+    parser = SmartSlideStreamParser()
+    chunk = (
+        "<!-- PRESENTATION_TITLE: Deck -->"
+        "<!-- SLIDE_START -->"
+        + _smart_slide_html(title="Stuck", body=_static_heuristic_stalling_body())
+        + "<!-- SLIDE_END -->"
+    )
+    with pytest.raises(HTTPException, match="overflow or overlap risks"):
+        list(parser.feed(chunk))
+
+
+def test_stream_parser_skips_layout_heuristics_when_constructed_to():
+    parser = SmartSlideStreamParser(skip_layout_heuristics=True)
+    chunk = (
+        "<!-- PRESENTATION_TITLE: Deck -->"
+        "<!-- SLIDE_START -->"
+        + _smart_slide_html(title="Stuck", body=_static_heuristic_stalling_body())
+        + "<!-- SLIDE_END -->"
+    )
+    slides = list(parser.feed(chunk))
+    assert [slide["title"] for slide in slides] == ["Stuck"]
+
+
+def test_final_parse_honours_the_static_waiver_at_one_index():
+    """parse_smart_presentation_html re-parses the raw response after the
+    stream drains - without skip_layout_heuristics_at_index this would
+    silently re-reject the very slide the streaming loop just waived,
+    undoing rung 1 on the same attempt."""
+    stuck_html = _smart_slide_html(
+        title="Stuck", body=_static_heuristic_stalling_body()
+    )
+    clean_html = _smart_slide_html(title="Clean")
+    response = (
+        "<!-- PRESENTATION_TITLE: Deck -->"
+        "<!-- SLIDE_START -->" + stuck_html + "<!-- SLIDE_END -->"
+        "<!-- SLIDE_START -->" + clean_html + "<!-- SLIDE_END -->"
+    )
+    common = dict(
+        expected_slide_count=2,
+        include_title_slide=False,
+        include_table_of_contents=False,
+    )
+
+    with pytest.raises(HTTPException, match="overflow or overlap risks"):
+        parse_smart_presentation_html(response, **common)
+
+    # Waived at the wrong index (1, "Clean") - the actually-stuck slide at
+    # index 0 still raises.
+    with pytest.raises(HTTPException, match="overflow or overlap risks"):
+        parse_smart_presentation_html(
+            response, **common, skip_layout_heuristics_at_index=1
+        )
+
+    _, slides = parse_smart_presentation_html(
+        response, **common, skip_layout_heuristics_at_index=0
+    )
+    assert [slide["title"] for slide in slides] == ["Stuck", "Clean"]

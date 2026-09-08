@@ -601,6 +601,7 @@ def _build_slide_preview_html(
     width: int = PREVIEW_WIDTH,
     height: int = PREVIEW_HEIGHT,
     background: str = "#ffffff",
+    extra_css: str = "",
 ) -> str:
     fastapi_base = absolute_fastapi_asset_url("/").rstrip("/") + "/"
     tailwind_browser_url = absolute_fastapi_asset_url(
@@ -670,6 +671,8 @@ def _build_slide_preview_html(
     }}
 
     {font_css or ""}
+
+    {extra_css or ""}
   </style>
 </head>
 <body>

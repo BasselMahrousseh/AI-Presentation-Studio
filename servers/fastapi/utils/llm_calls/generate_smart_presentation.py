@@ -24,7 +24,7 @@ from llmai.shared import (
 )
 from PIL import Image, ImageChops
 
-from services.export_task_service import EXPORT_TASK_SERVICE
+from services.export_task_service import EXPORT_TASK_SERVICE, ExportTaskSaturatedError
 from templates.fonts_and_slides_preview import _build_slide_preview_html
 from utils.llm_client_error_handler import handle_llm_client_exceptions
 from utils.llm_config import get_llm_config
@@ -62,6 +62,23 @@ SMART_GENERATION_MAX_ATTEMPTS = 8
 # check steps aside and lets generation move on. Hard validity checks (malformed
 # HTML, missing chart initializer, wrong slide type/count) are never waived.
 SMART_MAX_CONSECUTIVE_SLIDE_FAILURES = 3
+
+# First rung of the same escalation ladder, one step earlier and strictly
+# below SMART_MAX_CONSECUTIVE_SLIDE_FAILURES - if the two were ever equal the
+# ladder would collapse back into a single rung. Unlike the render waiver
+# above, skipping the static layout heuristics (inspect_smart_slide_layout)
+# is not a quality relaxation at all: it is a routing decision. Those
+# heuristics are a cheap, no-render class-shape proxy that can be flat-out
+# wrong (e.g. flagging a benign 4-item side rail with no regard for how much
+# text it actually holds - see smart_slide_layout.py), and a slide that keeps
+# failing one can be a false positive the model has no way to "fix" by
+# rewriting - it just regenerates the same reasonable layout and fails again,
+# burning the whole retry budget on a dead end. Skipping it does not ship the
+# slide unchecked: it defers to _check_smart_slide_layout, which renders the
+# slide for real, measures its actual height, and can either scale it to fit
+# or reject it with a concrete number. Nothing here is shipped unmeasured
+# until SMART_MAX_CONSECUTIVE_SLIDE_FAILURES is also reached.
+SMART_MAX_CONSECUTIVE_STATIC_SLIDE_FAILURES = 2
 
 # A slide whose content is slightly taller than the canvas is scaled down to
 # fit rather than rejected: the render that already measures the overflow also
@@ -150,6 +167,53 @@ _SMART_OVERFLOW_SENTINEL_HEX = "#ff00ff"
 _SMART_OVERFLOW_SENTINEL_RGB = (255, 0, 255)
 _SMART_OVERFLOW_PIXEL_TOLERANCE = 12
 _SMART_OVERFLOW_MIN_VIOLATION_PIXELS = 150
+
+# _measure_smart_slide_layout is a pixel diff on a screenshot - it has no
+# concept of a "decorative" element, unlike inspect_smart_slide_layout's
+# static class analysis, which already exempts anything marked
+# data-decorative="true"/aria-hidden="true" (_is_decorative in
+# smart_slide_layout.py) at every one of its own check sites. That asymmetry
+# is a real bug, not just an inconsistency: the e& brand direction explicitly
+# encourages a full-height decorative side rail
+# (smart_brand_templates.py's CONTENT DESIGN DIRECTION), and a model-drawn
+# rail spanning the full 720px canvas paints 90px into the reserved
+# y=630-720 footer band exactly like real content would, triggering an
+# unnecessary whole-slide downscale to "fix" a collision that was never
+# real - the rail runs *under* the opaque footer bar, not through it. Hiding
+# decorative layers for this render only (never in the real slide HTML) is
+# what makes the pixel checker agree with the static one. `visibility`, not
+# `display`, is deliberate - _slide_html_without_canvas_clip's own docstring
+# records that changing a layout-affecting property during a measurement
+# render corrupts the measurement itself (a known-clean slide once
+# "measured" as ~390px over for exactly that reason); visibility:hidden
+# keeps every box's size and position and only removes what is painted,
+# which is the only thing this measurement cares about. aria-hidden is
+# matched alongside data-decorative because _is_decorative treats the two as
+# equivalent, and the whole point of this rule is to stop the two checkers
+# from disagreeing. This can only ever *reveal* more of what's underneath a
+# decorative layer, never hide a real content intrusion, so it cannot mask a
+# genuine footer/overflow violation - the one hazard (a decorative layer
+# supplying the slide's only background) does not occur in this app's own
+# generated slides today (every stored slide's root <section> carries its
+# own bg-* class) and is deliberately not coded around, to avoid
+# reintroducing the same kind of class-parsing special-casing this constant
+# exists to remove.
+_SMART_LAYOUT_MEASUREMENT_EXTRA_CSS = (
+    '[data-decorative="true"], [aria-hidden="true"] '
+    "{ visibility: hidden !important; }"
+)
+
+# This render is a best-effort quality gate, not a correctness gate (see
+# SMART_MAX_CONSECUTIVE_SLIDE_FAILURES above) - the render runtime now caps
+# how many Chromium instances can run at once (ExportTaskService's own
+# EXPORT_TASK_MAX_CONCURRENCY), so under real concurrent load (several
+# generations at once, or a template-creation request's own fan-out) this
+# check can end up queued behind other work. Waiting indefinitely there would
+# stall this slide's SSE stream for as long as the queue takes; bounding the
+# wait and then skipping the check (same fail-open path as a genuine render
+# failure, but logged distinctly - see _check_smart_slide_layout) keeps a
+# saturated render runtime from turning into a stalled generation.
+SMART_LAYOUT_CHECK_QUEUE_TIMEOUT_SECONDS = 20.0
 
 SMART_DECK_SYSTEM_PROMPT = (
     "You are an expert presentation designer and frontend engineer. Return the "
@@ -279,6 +343,18 @@ Overflow prevention is a hard requirement:
   layouts. Absolute/fixed positioning is for non-content decoration only; mark
   those layers `aria-hidden="true"` and `data-decorative="true"`. Never use
   negative margins or translations to make meaningful items collide.
+- A decorative absolute layer (a corner bracket, edge tick mark, or accent
+  line) must not visually collide with the content block beside it. Keep it
+  either fully outside the content's own box, or behind it as a flat
+  background tint - never straddling its edge. A corner decoration anchored
+  to the canvas edge with `right-0`/`top-0` and a fixed size (e.g. `h-44
+  w-44`) occupies a real rectangle (that example: the top-right 176x176px
+  corner); if the content block below it is not indented clear of that
+  rectangle, its own header rule will run directly through the decoration's
+  border. In particular, never let a decorative border line land within
+  20-30px of, or cross, a rule the content itself draws (a header
+  `border-b`, a card edge, a divider) - two near-parallel accent-colored
+  lines a few pixels apart read as a rendering defect, not as design.
 - Never place `overflow-hidden` on a descendant that contains text. Keep all
   meaningful content fully inside the safe area by reducing density and reflowing
   the layout, not by clipping it.
@@ -337,8 +413,20 @@ Visual evidence and asset decisions:
 """
 
 CHART_JS_INSTRUCTIONS = """
-- Use Chart.js for every quantitative chart. Assume `Chart` and the `datalabels`
-  plugin are already available; do not add CDN scripts or custom plugins.
+- Use Chart.js for every quantitative chart. `Chart` is a real global
+  constructor that is already loaded - call `new Chart(...)` directly, with
+  no CDN scripts or custom plugins.
+- The datalabels plugin is ALSO already registered globally - never call
+  `Chart.register(...)` for it, and never declare or import it. Unlike
+  `Chart`, `datalabels` is NOT a variable and never exists as one anywhere -
+  the word `datalabels` may only ever appear as a literal object key with its
+  own value, e.g. `options.plugins.datalabels: { anchor: 'end', align: 'end' }`
+  or a per-dataset override like `datasets: [{ ..., datalabels: {...} }]`.
+  Writing `Chart.register(datalabels)`, the object-shorthand `{ datalabels }`,
+  or any other bare reference to `datalabels` throws
+  `ReferenceError: datalabels is not defined` the instant the script runs -
+  this aborts the whole chart initialization, leaving the canvas permanently
+  blank with no visible error anywhere in the deck itself.
 - Give each chart canvas a unique random id using `chart-` followed by six
   lowercase hexadecimal characters, and fixed width and height. Reference
   exactly one canvas by id with `document.querySelector('#chart-f81a12')`; do
@@ -490,6 +578,13 @@ _CHART_CANVAS = re.compile(
     re.IGNORECASE,
 )
 _CHART_INITIALIZER = re.compile(r"\bnew\s+(?:window\.)?Chart\s*\(")
+# `datalabels` is only ever a legitimate config object key
+# (`datalabels: {...}`) or a property access (`dataset.datalabels`) - any
+# other occurrence is the model treating it as if it were a predefined
+# variable, which throws ReferenceError at chart-init time and leaves the
+# canvas blank. See CHART_JS_INSTRUCTIONS above for the instruction this
+# guards against a model not following.
+_INVALID_DATALABELS_REFERENCE = re.compile(r"(?<!\.)\bdatalabels\b(?!\s*:)")
 _SECTION_OPEN = re.compile(r"^\s*<section\b([^>]*)>", re.IGNORECASE)
 _SECTION_CLOSE = re.compile(r"</section>\s*$", re.IGNORECASE)
 _HEADING = re.compile(r"<h[1-3]\b[^>]*>(.*?)</h[1-3]\s*>", re.IGNORECASE | re.DOTALL)
@@ -799,8 +894,28 @@ def _validate_chart_initializers(html: str) -> None:
             ),
         )
 
+    if any(_INVALID_DATALABELS_REFERENCE.search(script) for script in chart_scripts):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The Smart slide's chart script references `datalabels` as if "
+                "it were a predefined variable (e.g. `Chart.register(datalabels)` "
+                "or the object-shorthand `{ datalabels }`). The datalabels "
+                "plugin is already registered automatically - never call "
+                "Chart.register for it, and never reference `datalabels` as a "
+                "bare identifier. `datalabels` may only appear as a literal "
+                "object key with its own value, e.g. "
+                "`options.plugins.datalabels: { anchor: 'end', align: 'end' }`. "
+                "Referencing it any other way throws "
+                "`ReferenceError: datalabels is not defined` and leaves the "
+                "chart canvas permanently blank."
+            ),
+        )
 
-def normalize_smart_slide_html(value: Any) -> str:
+
+def normalize_smart_slide_html(
+    value: Any, *, skip_layout_heuristics: bool = False
+) -> str:
     html = str(value or "").strip()
     html = _FENCE_PATTERN.sub("", html).strip()
     html = _UNSAFE_DOCUMENT_TAGS.sub("", html)
@@ -817,12 +932,45 @@ def normalize_smart_slide_html(value: Any) -> str:
             status_code=400,
             detail="The model returned a Smart slide with an invalid canvas",
         )
-    _validate_smart_slide_layout_safety(html)
+    _validate_smart_slide_layout_safety(
+        html, skip_layout_heuristics=skip_layout_heuristics
+    )
     return html
 
 
-def _validate_smart_slide_layout_safety(html: str) -> None:
-    """Reject overflow-prone Smart HTML so generation can retry before saving."""
+def _smart_layout_issue_detail(issues: Sequence[str]) -> str:
+    return "The Smart slide has overflow or overlap risks: " + " ".join(issues)
+
+
+def _raise_for_smart_slide_layout_heuristics(
+    html: str, *, check_eand_footer: bool = False
+) -> None:
+    """The calibrated-proxy quality gate (inspect_smart_slide_layout), kept as
+    its own function so the retry loop can call it directly at a known slide
+    index instead of only through _validate_smart_slide_layout_safety - see
+    SMART_MAX_CONSECUTIVE_STATIC_SLIDE_FAILURES for why that matters.
+
+    check_eand_footer defaults to False (matching every caller that isn't the
+    e& retry loop below) because the furniture-collision rects it enables are
+    only meaningful for the e& brand template."""
+    layout_issues = inspect_smart_slide_layout(
+        html, check_eand_footer=check_eand_footer
+    )
+    if layout_issues:
+        raise HTTPException(
+            status_code=400, detail=_smart_layout_issue_detail(layout_issues)
+        )
+
+
+def _validate_smart_slide_layout_safety(
+    html: str, *, skip_layout_heuristics: bool = False
+) -> None:
+    """Reject overflow-prone Smart HTML so generation can retry before saving.
+
+    skip_layout_heuristics only ever suppresses the calibrated-proxy class of
+    check below (inspect_smart_slide_layout) - never the hard validity checks
+    in this function (scrolling/clipping utilities, text-density caps), which
+    are correctness checks, not quality heuristics, and are never waived."""
     class_values = re.findall(
         r"\bclass\s*=\s*(?:\"([^\"]*)\"|'([^']*)')", html, re.IGNORECASE
     )
@@ -877,15 +1025,8 @@ def _validate_smart_slide_layout_safety(html: str) -> None:
             ),
         )
 
-    layout_issues = inspect_smart_slide_layout(html)
-    if layout_issues:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "The Smart slide has overflow or overlap risks: "
-                + " ".join(layout_issues)
-            ),
-        )
+    if not skip_layout_heuristics:
+        _raise_for_smart_slide_layout_heuristics(html)
 
 
 def _diff_band_against(
@@ -1027,6 +1168,19 @@ def _slide_html_scaled_to_fit(html: str, scale: float) -> str:
     it would have for the section) keeps the wrapper's own *outer* box at
     the section's true 1280x720 while its *content* box correctly shrinks by
     the same padding, matching what an unscaled render would have painted.
+
+    The wrapper also sets `display:flow-root`, for a sibling reason: a plain
+    `position:relative` div with a definite height does NOT establish a block
+    formatting context, so a first child's own top margin (e.g. `mt-12`)
+    collapses straight through the wrapper's top edge instead of being
+    contained by it - shifting the wrapper's own painted content down by that
+    margin without changing its reported box. A real slide hit this: its
+    scaled-down rail was measured to fit exactly at the reserved y=630 line,
+    but margin collapse shifted everything down 48px, landing the rail's
+    bottom at y=678 - still inside the band the scale was computed to escape.
+    `flow-root` contains child margins the same way `overflow-hidden` would,
+    without clipping anything, and composes cleanly with the transform/
+    position:relative already in use.
     """
     root_match = _SECTION_OPEN.match(html)
     if root_match is None:
@@ -1061,6 +1215,7 @@ def _slide_html_scaled_to_fit(html: str, scale: float) -> str:
     wrapper_class = f' class="{" ".join(padding_classes)}"' if padding_classes else ""
     wrapper_style = (
         "position:relative;"
+        "display:flow-root;"
         f"width:{SMART_OVERFLOW_SAFE_AREA_WIDTH}px;"
         f"height:{SMART_SLIDE_CANVAS_HEIGHT}px;"
         f"transform:scale({scale:.4f});"
@@ -1088,20 +1243,35 @@ async def _check_smart_slide_layout(
         width=SMART_OVERFLOW_SAFE_AREA_WIDTH,
         height=SMART_OVERFLOW_MEASURE_HEIGHT,
         background=_SMART_OVERFLOW_SENTINEL_HEX,
+        extra_css=_SMART_LAYOUT_MEASUREMENT_EXTRA_CSS,
     )
     image_path: str | None = None
     measurement: tuple[int, int, int, int] | None = None
     try:
         result = await EXPORT_TASK_SERVICE.render_html_to_image(
-            preview_html, SMART_OVERFLOW_SAFE_AREA_WIDTH, SMART_OVERFLOW_MEASURE_HEIGHT
+            preview_html,
+            SMART_OVERFLOW_SAFE_AREA_WIDTH,
+            SMART_OVERFLOW_MEASURE_HEIGHT,
+            queue_timeout=SMART_LAYOUT_CHECK_QUEUE_TIMEOUT_SECONDS,
         )
         image_path = result.path
         measurement = await asyncio.to_thread(
             _measure_smart_slide_layout, image_path, measure_footer=check_eand_footer
         )
+    except ExportTaskSaturatedError as exc:
+        # Distinct from the generic fail-open path below: this slide's own
+        # HTML was never even rendered, so nothing about it is suspect - the
+        # render runtime is simply busy with other slides/requests right now.
+        # Logged as its own WARNING (not LOGGER.exception, which would bury it
+        # among genuine render failures) so a saturated queue is visible in
+        # its own right rather than looking identical to a broken render.
+        LOGGER.warning(
+            "[smart-generation] slide_layout_check_skipped_saturated: %s", exc
+        )
+        return
     except Exception:
-        # Fail open on any render/infra failure, HTTPException included - see
-        # the note on the standalone checks below for why that matters.
+        # Fail open on any other render/infra failure, HTTPException included
+        # - see the note on the standalone checks below for why that matters.
         LOGGER.exception(
             "[smart-generation] slide_layout_check_failed; skipping check"
         )
@@ -1169,8 +1339,12 @@ async def _check_smart_slide_layout(
     return None
 
 
-def _slide_from_html(value: Any, index: int) -> dict[str, str]:
-    html = normalize_smart_slide_html(value)
+def _slide_from_html(
+    value: Any, index: int, *, skip_layout_heuristics: bool = False
+) -> dict[str, str]:
+    html = normalize_smart_slide_html(
+        value, skip_layout_heuristics=skip_layout_heuristics
+    )
     attributes = _SECTION_OPEN.match(html).group(1)  # type: ignore[union-attr]
     title = _attribute(attributes, "data-slide-title").strip()
     if not title:
@@ -1221,24 +1395,47 @@ def _validate_slide_position(
 
 
 class SmartSlideStreamParser:
-    """Extract completed cloud-style Smart slide blocks from streamed text."""
+    """Extract completed cloud-style Smart slide blocks from streamed text.
 
-    def __init__(self) -> None:
+    skip_layout_heuristics disables the calibrated-proxy overflow heuristics
+    (inspect_smart_slide_layout) for every slide this parser produces - the
+    hard validity checks (canvas classes, chart initializers, text density,
+    scroll/clip utilities) still apply unconditionally. The retry loop in
+    generate_smart_presentation always constructs this parser with it True
+    and instead runs the heuristics itself, at a known slide index, so it can
+    selectively waive them for one stalled position - see
+    SMART_MAX_CONSECUTIVE_STATIC_SLIDE_FAILURES. Every other caller (the
+    legacy/default path implied by leaving this False) keeps today's
+    behavior unchanged.
+    """
+
+    def __init__(self, *, skip_layout_heuristics: bool = False) -> None:
         self.buffer = ""
         self.parsed_through = 0
         self.slide_count = 0
+        self._skip_layout_heuristics = skip_layout_heuristics
 
-    def feed(self, chunk: str) -> list[dict[str, str]]:
+    def feed(self, chunk: str):
+        """Yield each completed slide as it is parsed, not after the whole
+        chunk is drained. A generator (rather than building and returning a
+        list) matters here: if a later block in the same chunk fails
+        validation, blocks already parsed ahead of it must still be handed to
+        the caller - a plain list built up front would discard them, and
+        would also misattribute which slide position actually stalled (see
+        the retry loop's consecutive-stall tracking)."""
         self.buffer += chunk
-        slides: list[dict[str, str]] = []
         while True:
             match = SMART_SLIDE_BLOCK_RE.search(self.buffer, self.parsed_through)
             if match is None:
                 break
             self.parsed_through = match.end()
-            slides.append(_slide_from_html(match.group(1).strip(), self.slide_count))
+            slide = _slide_from_html(
+                match.group(1).strip(),
+                self.slide_count,
+                skip_layout_heuristics=self._skip_layout_heuristics,
+            )
             self.slide_count += 1
-        return slides
+            yield slide
 
 
 def parse_smart_presentation_html(
@@ -1248,6 +1445,7 @@ def parse_smart_presentation_html(
     include_title_slide: bool,
     include_table_of_contents: bool,
     start_index: int = 0,
+    skip_layout_heuristics_at_index: int | None = None,
 ) -> tuple[str, list[dict[str, str]]]:
     candidate = _FENCE_PATTERN.sub("", response).strip()
     title_match = SMART_DECK_TITLE_RE.search(candidate)
@@ -1263,7 +1461,21 @@ def parse_smart_presentation_html(
             status_code=400,
             detail=f"The model returned {len(blocks)} slides instead of {expected_slide_count}",
         )
-    slides = [_slide_from_html(block, start_index + index) for index, block in enumerate(blocks)]
+    # skip_layout_heuristics_at_index mirrors, for this final re-parse of the
+    # whole raw response, the same single-position waiver the streaming loop
+    # already applied while consuming the response chunk by chunk. Without
+    # this, a slide the stream deliberately waived would be re-rejected here
+    # moments later, on the very same attempt, undoing the waiver entirely.
+    slides = [
+        _slide_from_html(
+            block,
+            start_index + index,
+            skip_layout_heuristics=(
+                start_index + index == skip_layout_heuristics_at_index
+            ),
+        )
+        for index, block in enumerate(blocks)
+    ]
     for index, slide in enumerate(slides, start=start_index):
         _validate_slide_position(
             slide,
@@ -1399,16 +1611,33 @@ async def generate_smart_presentation(
 
     for _attempt in range(SMART_GENERATION_MAX_ATTEMPTS):
         waive_render_checks = consecutive_stalls >= SMART_MAX_CONSECUTIVE_SLIDE_FAILURES
+        # Rung 1 of the ladder - see SMART_MAX_CONSECUTIVE_STATIC_SLIDE_FAILURES.
+        # Deliberately not gated on "not waive_render_checks": once rung 2 is
+        # reached the render check itself is skipped, so whether rung 1 is
+        # also (still) true no longer changes anything either way.
+        waive_static_checks = (
+            consecutive_stalls >= SMART_MAX_CONSECUTIVE_STATIC_SLIDE_FAILURES
+        )
+        if waive_render_checks:
+            stall_note = (
+                f" (slide {len(accepted_slides) + 1} has failed "
+                f"{consecutive_stalls}x in a row - waiving both the static "
+                "layout heuristics and the render-based layout checks for it "
+                "so generation can continue)"
+            )
+        elif waive_static_checks:
+            stall_note = (
+                f" (slide {len(accepted_slides) + 1} has failed "
+                f"{consecutive_stalls}x in a row - skipping the static layout "
+                "heuristics for it so the render-based check can measure its "
+                "real height instead)"
+            )
+        else:
+            stall_note = ""
         LOGGER.info(
             "[smart-generation] attempt=%s/%s accepted_slides=%s%s",
             _attempt + 1, SMART_GENERATION_MAX_ATTEMPTS, len(accepted_slides),
-            (
-                f" (slide {len(accepted_slides) + 1} has failed "
-                f"{consecutive_stalls}x in a row - waiving render-based layout "
-                "checks for it so generation can continue)"
-                if waive_render_checks
-                else ""
-            ),
+            stall_note,
         )
         messages = get_smart_messages(
             content=content,
@@ -1435,7 +1664,10 @@ async def generate_smart_presentation(
         # logs matter most. Set LOG_LEVEL=DEBUG to get it back.
         LOGGER.debug("[smart-generation] prompt messages=%s", messages)
 
-        parser = SmartSlideStreamParser()
+        # The parser never runs the static heuristics itself (skip_layout_heuristics
+        # is always True here) - the loop below runs them explicitly, at a known
+        # slide index, so it can selectively waive them via waive_static_checks.
+        parser = SmartSlideStreamParser(skip_layout_heuristics=True)
         attempt_slides: list[dict[str, str]] = []
         streamed_response = ""
         streamed_thinking = ""
@@ -1474,6 +1706,14 @@ async def generate_smart_presentation(
                             include_title_slide=include_title_slide,
                             include_table_of_contents=include_table_of_contents,
                         )
+                        # The parser itself never runs the static heuristics
+                        # (skip_layout_heuristics=True above) - run them here
+                        # explicitly so a probe-mode "valid" count means what it
+                        # says, matching what the non-probe path below checks.
+                        _raise_for_smart_slide_layout_heuristics(
+                            slide["html"],
+                            check_eand_footer=smart_template == EAND_SMART_TEMPLATE_ID,
+                        )
                         await _check_smart_slide_layout(
                             slide["html"],
                             check_eand_footer=smart_template == EAND_SMART_TEMPLATE_ID,
@@ -1489,6 +1729,7 @@ async def generate_smart_presentation(
                         status_code=400,
                         detail="The model generated too many Smart slides",
                     )
+                is_stalled_position = index == len(accepted_slides)
                 try:
                     _validate_slide_position(
                         slide,
@@ -1496,12 +1737,42 @@ async def generate_smart_presentation(
                         include_title_slide=include_title_slide,
                         include_table_of_contents=include_table_of_contents,
                     )
+                    # The parser itself never runs the static heuristics - run
+                    # them here, at this known index, so they can be waived for
+                    # only the one slide position that has already stalled the
+                    # deck repeatedly. See SMART_MAX_CONSECUTIVE_STATIC_SLIDE_FAILURES:
+                    # skipping this is a routing decision, not a quality
+                    # relaxation - the slide still goes to the render check
+                    # below, which measures its real height. Scoped to that
+                    # position, not the whole attempt, so later slides in the
+                    # same response are still fully checked.
+                    static_issues = inspect_smart_slide_layout(
+                        slide["html"],
+                        check_eand_footer=smart_template == EAND_SMART_TEMPLATE_ID,
+                    )
+                    if static_issues:
+                        if waive_static_checks and is_stalled_position:
+                            LOGGER.warning(
+                                "[smart-generation] static_layout_heuristics_skipped "
+                                "slide=%s after %s consecutive failures at this "
+                                "position - deferring to the render-based check, "
+                                "which measures real height and can scale to fit "
+                                "instead - issues=%s",
+                                index + 1,
+                                consecutive_stalls,
+                                " ".join(static_issues),
+                            )
+                        else:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=_smart_layout_issue_detail(static_issues),
+                            )
                     # Waived only for the one slide position that has already
                     # stalled the deck repeatedly - see
                     # SMART_MAX_CONSECUTIVE_SLIDE_FAILURES. Scoped to that
                     # position, not the whole attempt, so later slides in the
                     # same response are still fully checked.
-                    if not (waive_render_checks and index == len(accepted_slides)):
+                    if not (waive_render_checks and is_stalled_position):
                         fit_scale = await _check_smart_slide_layout(
                             slide["html"],
                             check_eand_footer=smart_template == EAND_SMART_TEMPLATE_ID,
@@ -1519,11 +1790,12 @@ async def generate_smart_presentation(
                     probe["failed_index"] = index
                     probe["failed_error"] = slide_error
                     continue
-                if waive_render_checks and index == len(accepted_slides):
+                if waive_render_checks and is_stalled_position:
                     LOGGER.warning(
-                        "[smart-generation] accepting slide=%s without render-based "
-                        "layout checks after %s consecutive failures at this position "
-                        "- it may overflow, which is preferable to failing the deck",
+                        "[smart-generation] render_layout_checks_waived "
+                        "accepting slide=%s without render-based layout checks "
+                        "after %s consecutive failures at this position - it may "
+                        "overflow, which is preferable to failing the deck",
                         index + 1,
                         consecutive_stalls,
                     )
@@ -1623,6 +1895,14 @@ async def generate_smart_presentation(
                 include_title_slide=include_title_slide,
                 include_table_of_contents=include_table_of_contents,
                 start_index=len(accepted_slides),
+                # Mirror the same single-position static-heuristic waiver the
+                # stream already applied above - otherwise this re-parse of
+                # the raw response would re-reject the very slide that was
+                # just waived, undoing rung 1 of the ladder on this same
+                # attempt.
+                skip_layout_heuristics_at_index=(
+                    len(accepted_slides) if waive_static_checks else None
+                ),
             )
             if len(parsed_slides) != len(attempt_slides):
                 raise HTTPException(

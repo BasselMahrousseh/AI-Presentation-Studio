@@ -1,4 +1,41 @@
-@tailwind base;
+/*
+ * This app runs two Tailwind major versions at once: v3 compiles this file
+ * at build time, while Smart-mode/TemplateV2 slide content is styled at
+ * runtime by the v4 browser JIT (lib/tailwind-browser.ts), which is what
+ * actually renders slide HTML injected into the live DOM (SmartHtmlEditor,
+ * the /pdf-maker export page, and the Linux in-page slide renderer).
+ *
+ * v3's `@tailwind base` expands to plain, UNLAYERED CSS - including
+ * preflight's `*,::before,::after{border-color:#e5e7eb}` - while v4 emits
+ * everything (its own preflight AND its utilities) inside real CSS cascade
+ * layers. Per the cascade, an unlayered declaration beats every layered one
+ * regardless of specificity, so v3's blanket grey preflight border-color was
+ * silently overriding every v4 border-color/border-width utility a Smart
+ * slide used that isn't also emitted by v3 (i.e. any class that doesn't
+ * happen to appear in this app's own .tsx source, which v3's JIT scans) -
+ * an explicit `border-[#E00600]` rendered grey, and a class like
+ * `border-l-4` that appears in zero app source files rendered at zero
+ * width, i.e. completely invisible, in the main editor canvas and in every
+ * exported file. The isolated sidebar thumbnail iframe never loads this
+ * file at all, which is why it always rendered correctly and nothing else
+ * did - this was the actual cause of that visible split.
+ *
+ * Fix: put v3's preflight in its own low-priority layer, declared before the
+ * v4 runtime loads (layer order is fixed by first encounter in document
+ * order, and v4 appends its own `@layer theme, base, components, utilities;`
+ * later via document.head). `tw3-base` sits below v4's `base` (so v4's own,
+ * much more aggressive preflight - `*{margin:0;padding:0;border:0 solid}` -
+ * still loses to this app's real chrome) but below v4's `utilities` too (so
+ * a v4 border utility on a Smart slide finally wins). v3's own utility
+ * classes (`.border-b`, etc.) are emitted unlayered by `@tailwind
+ * components`/`@tailwind utilities` below, unaffected by this - they keep
+ * beating everything, exactly as before, which is why the app's own chrome
+ * is unaffected by this change.
+ */
+@layer theme, base, tw3-base, components, utilities;
+@layer tw3-base {
+  @tailwind base;
+}
 @tailwind components;
 @tailwind utilities;
 

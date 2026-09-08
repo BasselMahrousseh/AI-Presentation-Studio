@@ -7,6 +7,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from typing import Any, Literal, Mapping
 from urllib.parse import unquote, urlparse
 
@@ -30,6 +32,59 @@ LOGGER = logging.getLogger(__name__)
 
 EXPORT_DIRECTORY_MODE = 0o755
 EXPORT_FILE_MODE = 0o644
+
+_DEFAULT_EXPORT_TASK_MAX_CONCURRENCY = 3
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read a clamped int env var, falling back to `default` on any bad value.
+
+    Mirrors `services/liteparse_service.py`'s `_env_int` helper (not imported
+    directly - that one is private to its own module and this file has no
+    other dependency on liteparse beyond the small logging helpers above).
+    """
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+
+    try:
+        parsed = int(raw)
+    except Exception:
+        LOGGER.warning("Invalid %s=%r, using default=%s", name, raw, default)
+        return default
+
+    if parsed < minimum or parsed > maximum:
+        LOGGER.warning(
+            "%s=%s out of range [%s, %s], using default=%s",
+            name,
+            parsed,
+            minimum,
+            maximum,
+            default,
+        )
+        return default
+
+    return parsed
+
+
+def _export_task_max_concurrency() -> int:
+    return _env_int(
+        "EXPORT_TASK_MAX_CONCURRENCY",
+        _DEFAULT_EXPORT_TASK_MAX_CONCURRENCY,
+        minimum=1,
+        maximum=64,
+    )
+
+
+class ExportTaskSaturatedError(Exception):
+    """Raised when `queue_timeout` elapses before a render slot frees up.
+
+    Distinct from HTTPException on purpose: callers that treat this as a
+    best-effort check (see `render_html_to_image`'s `queue_timeout` param)
+    need to tell "the render runtime is overloaded" apart from "the render
+    itself failed" in their own logs - conflating the two is exactly what let
+    the missing concurrency cap go unnoticed for so long (see CLAUDE.md).
+    """
 
 
 def _localize_json_image_assets(
@@ -147,12 +202,69 @@ class ExtractSchemaDocument(BaseModel):
 
 
 class ExportTaskService:
-    def __init__(self, timeout_seconds: int = 300):
+    def __init__(self, timeout_seconds: int = 300, max_concurrency: int | None = None):
         self.timeout_seconds = timeout_seconds
         self.node_binary = os.getenv("LITEPARSE_NODE_BINARY", "node")
         self.export_dir = self._resolve_export_dir()
         self.entrypoint_path = self._resolve_entrypoint_path(self.export_dir)
         self.converter_path = self._resolve_converter_path(self.export_dir)
+
+        # Caps how many `node <entrypoint>` children (each of which launches
+        # its own full Chromium, see the export bundle's `--no-zygote`
+        # launch flag) can be in flight at once. A `threading.BoundedSemaphore`
+        # rather than an `asyncio.Semaphore` on purpose: `templates/v2/tools.py`'s
+        # `PreviewSlideTool.render` is synchronous and calls this service via
+        # `asyncio.run(...)` from inside a `ThreadPoolExecutor` (up to
+        # `MAX_PARALLEL_SLIDE_LAYOUTS`=10 workers at once), which gives each
+        # worker its own event loop - an `asyncio.Semaphore` is only ever
+        # meaningful within a single event loop, so it would cap nothing
+        # there. `threading.BoundedSemaphore` is the one primitive that is
+        # correct across both plain async callers and that thread pool.
+        self._max_concurrency = (
+            max_concurrency
+            if max_concurrency is not None
+            else _export_task_max_concurrency()
+        )
+        self._render_slots = threading.BoundedSemaphore(self._max_concurrency)
+        self._in_flight_lock = threading.Lock()
+        self._in_flight = 0
+
+    async def _acquire_render_slot(
+        self, queue_timeout: float | None
+    ) -> tuple[float, int]:
+        """Block (off the event loop) until a render slot is free.
+
+        Returns `(seconds_waited, in_flight_after_acquire)` for logging. Tries
+        a non-blocking acquire first so the common, uncontended case never
+        pays a thread hop at all.
+        """
+        started_at = time.monotonic()
+        acquired = self._render_slots.acquire(blocking=False)
+        if not acquired:
+            if queue_timeout is not None:
+                acquired = await asyncio.to_thread(
+                    self._render_slots.acquire, True, queue_timeout
+                )
+                if not acquired:
+                    waited = time.monotonic() - started_at
+                    raise ExportTaskSaturatedError(
+                        "Export task queue saturated: no render slot became "
+                        f"available within {queue_timeout}s "
+                        f"(max_concurrency={self._max_concurrency}, "
+                        f"waited={waited:.1f}s)"
+                    )
+            else:
+                await asyncio.to_thread(self._render_slots.acquire)
+
+        with self._in_flight_lock:
+            self._in_flight += 1
+            in_flight = self._in_flight
+        return time.monotonic() - started_at, in_flight
+
+    def _release_render_slot(self) -> None:
+        with self._in_flight_lock:
+            self._in_flight = max(0, self._in_flight - 1)
+        self._render_slots.release()
 
     @staticmethod
     def _resolve_export_dir() -> str:
@@ -364,10 +476,42 @@ class ExportTaskService:
         response_path = os.path.join(temp_dir, "export_task.response.json")
         return temp_dir, task_path, response_path
 
-    async def _run_task(self, task_payload: dict, response_error_detail: str) -> dict:
-        return await self._run_task_locked(task_payload, response_error_detail)
+    async def _run_task(
+        self,
+        task_payload: dict,
+        response_error_detail: str,
+        *,
+        queue_timeout: float | None = None,
+    ) -> dict:
+        """Take a render slot, run the task, and always give the slot back.
 
-    async def _run_task_locked(self, task_payload: dict, response_error_detail: str) -> dict:
+        `queue_timeout` is only meaningful when the render runtime is already
+        saturated (`max_concurrency` slots all in use): `None` (the default)
+        waits as long as it takes, which is right for a caller the user is
+        directly waiting on (an export, a template conversion). A caller that
+        would rather skip the check than stall - see
+        `render_html_to_image`'s own `queue_timeout` - should pass a bound
+        and handle `ExportTaskSaturatedError`.
+        """
+        queue_wait_seconds, in_flight = await self._acquire_render_slot(queue_timeout)
+        try:
+            return await self._run_task_locked(
+                task_payload,
+                response_error_detail,
+                queue_wait_seconds=queue_wait_seconds,
+                in_flight=in_flight,
+            )
+        finally:
+            self._release_render_slot()
+
+    async def _run_task_locked(
+        self,
+        task_payload: dict,
+        response_error_detail: str,
+        *,
+        queue_wait_seconds: float = 0.0,
+        in_flight: int = 1,
+    ) -> dict:
         self._ensure_runtime_ready()
         temp_dir, task_path, response_path = self._create_task_paths()
 
@@ -379,6 +523,9 @@ class ExportTaskService:
                 LOGGER,
                 "export_task.spawn",
                 task_type=task_payload.get("type"),
+                max_concurrency=self._max_concurrency,
+                in_flight=in_flight,
+                queue_wait_seconds=round(queue_wait_seconds, 3),
             )
             result = await self._run_bounded_child(
                 [self.node_binary, self.entrypoint_path, task_path],
@@ -562,6 +709,8 @@ class ExportTaskService:
         html: str,
         width: int,
         height: int,
+        *,
+        queue_timeout: float | None = None,
     ) -> HtmlToImageTaskResult:
         if width <= 0 or height <= 0:
             raise HTTPException(
@@ -577,6 +726,7 @@ class ExportTaskService:
                 "height": height,
             },
             "HTML-to-image export task did not produce a response file",
+            queue_timeout=queue_timeout,
         )
 
         output_path = self._resolve_output_path(response_data)

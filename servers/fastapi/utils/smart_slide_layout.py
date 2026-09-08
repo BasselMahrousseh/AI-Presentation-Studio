@@ -322,13 +322,22 @@ def _estimated_column_width(column_count: int) -> float:
     )
 
 
-def _estimated_card_text_capacity(height_px: float, column_count: int) -> float:
-    width_scale = _estimated_column_width(column_count) / _CARD_WIDTH_CALIBRATION_PX
+def _estimated_text_capacity(height_px: float, width_px: float) -> float:
+    """The width-taking core of the calibrated card-capacity model - see
+    _CARD_WIDTH_CALIBRATION_PX for the two measured reference points this is
+    fit to. Shared by _estimated_card_text_capacity (a card's width comes
+    from its column count) and _find_stacked_list_overflow_risks below (a
+    stacked panel's width is read directly off its own resolved size)."""
+    width_scale = width_px / _CARD_WIDTH_CALIBRATION_PX
     return max(
         (_CARD_HEIGHT_CHARS_PER_PIXEL * height_px - _CARD_HEIGHT_OVERHEAD_CHARS)
         * width_scale,
         0.0,
     )
+
+
+def _estimated_card_text_capacity(height_px: float, column_count: int) -> float:
+    return _estimated_text_capacity(height_px, _estimated_column_width(column_count))
 
 
 def _find_fixed_height_card_text_overflow_risks(root: _LayoutNode) -> list[str]:
@@ -370,6 +379,19 @@ def _find_fixed_height_card_text_overflow_risks(root: _LayoutNode) -> list[str]:
 
 _MIN_STACKED_LIST_ITEMS = 4
 _MIN_ITEM_TEXT_CHARACTERS = 20
+# Fallback capacity for a stacked panel whose height is imposed by `h-full`/
+# `self-stretch` (or otherwise not resolvable to a pixel number via
+# _node_size), so the calibrated per-pixel capacity model
+# (_estimated_text_capacity) has nothing to compute from. Calibrated against
+# this app's own database of already-shipped slides, not guessed: sampled
+# every height-matched panel that ever shipped with 3 stacked items (the most
+# _MIN_STACKED_LIST_ITEMS allows through without a text check at all) - 27
+# panels, up to 1104 combined characters, median 693. 1200 leaves roughly 9%
+# headroom above that known-good ceiling, and is coherent with the slide-wide
+# cap in generate_smart_presentation.py (SMART_TEXT_MAX_VISIBLE_CHARACTERS =
+# 1700) - a single panel holding 1200 characters is already most of what an
+# entire text slide is allowed to hold.
+_MIN_STACKED_LIST_TEXT_CHARACTERS = 1200
 
 
 def _has_fixed_or_matched_height(node: _LayoutNode) -> bool:
@@ -427,12 +449,22 @@ def _stacked_items(container: _LayoutNode) -> list[_LayoutNode]:
 
 
 def _find_stacked_list_overflow_risks(root: _LayoutNode) -> list[str]:
-    """Flag a height-matched panel (e.g. a full-height dark side rail) that
-    stacks four or more text-heavy items in normal flow. Unlike a
-    shrink-to-fit grid row colliding with a sibling below, a plain vertical
-    stack has no sibling to collide with — it just grows past its own
-    imposed height and gets clipped by the canvas's own `overflow-hidden`,
-    which is why the checks above never catch it."""
+    """Flag a height-matched panel (e.g. a full-height dark side rail) whose
+    stacked items' own combined text is clearly more than the panel can hold.
+    Unlike a shrink-to-fit grid row colliding with a sibling below, a plain
+    vertical stack has no sibling to collide with — it just grows past its
+    own imposed height and gets clipped by the canvas's own `overflow-hidden`,
+    which is why the checks above never catch it.
+
+    Item *count* alone is not a reliable signal for this: this app's own
+    database of already-shipped, never-flagged slides shows accepted 3-item
+    panels holding over 1100 characters, while a short 4-item panel holding
+    under 100 characters is nowhere near overflowing. So `_MIN_STACKED_LIST_ITEMS`
+    is kept only as a cheap precondition — a 2-3 item stack essentially never
+    overflows a height-matched panel in practice — and text volume is what
+    actually decides it, checked against the panel's own resolved size where
+    one is known (the same calibrated per-pixel model heuristic C uses for
+    cards) and against a flat calibrated threshold otherwise."""
     issues: list[str] = []
     for container in _walk(root):
         if _is_decorative(container) or not _is_flex_column(container):
@@ -442,15 +474,26 @@ def _find_stacked_list_overflow_risks(root: _LayoutNode) -> list[str]:
         items = _stacked_items(container)
         if len(items) < _MIN_STACKED_LIST_ITEMS:
             continue
+        text_length = sum(len(_visible_text(item)) for item in items)
+        width, height = _node_size(container)
+        if width is not None and height is not None:
+            capacity = _estimated_text_capacity(height, width)
+        else:
+            # h-full/self-stretch with no pixel number available anywhere in
+            # the ancestor chain (e.g. self-stretch, which _node_size cannot
+            # resolve at all) - fall back to the flat calibrated threshold.
+            capacity = _MIN_STACKED_LIST_TEXT_CHARACTERS
+        if text_length <= capacity:
+            continue
         issues.append(
             f"A height-matched panel (`h-full` or a fixed height) stacks "
-            f"{len(items)} text-heavy items in normal flow with nothing to "
-            "shrink them. A vertical stack like this has no sibling to "
-            "collide with, so it overflows silently — it grows past its own "
-            "height and gets clipped by the canvas's `overflow-hidden`. "
-            "Reduce the item count, shorten each item to roughly one line, "
-            "or drop the fixed/`h-full` height so the panel sizes to its "
-            "real content instead."
+            f"{len(items)} text-heavy items ({text_length} combined "
+            "characters) in normal flow with nothing to shrink them. A "
+            "vertical stack like this has no sibling to collide with, so it "
+            "overflows silently — it grows past its own height and gets "
+            "clipped by the canvas's `overflow-hidden`. Reduce the item "
+            "count, shorten the items, or drop the fixed/`h-full` height so "
+            "the panel sizes to its real content instead."
         )
     return issues
 
@@ -545,7 +588,61 @@ def _rectangles_overlap(
     return overlap_width > 4 and overlap_height > 4
 
 
-def inspect_smart_slide_layout(html: str) -> list[str]:
+# The e& brand template's own footer furniture (logo, "Confidential" label)
+# is spliced onto a content slide's HTML by apply_smart_brand_template,
+# which runs in the generation loop AFTER this static check and AFTER the
+# render-based _check_smart_slide_layout - so at check time this furniture
+# is never present in the HTML being inspected. These rectangles mirror
+# smart_brand_templates.py's own literal coordinates as fixed constants,
+# not something parsed from the slide's HTML. The footer bar image itself
+# (eand-footer-bar.png) is deliberately NOT included here: it is fully
+# opaque (verified against the real asset) and painted above all slide
+# content at z-50, so anything a model draws underneath it is completely
+# hidden and cannot visually clash. The logo and "Confidential" label are
+# not full coverage over their own bounding boxes (the logo PNG is only
+# ~36% opaque pixels; "Confidential" is a short text label on a transparent
+# background), so a decorative layer drawn there would show through once
+# the real footer shell lands on top of it.
+_EAND_FOOTER_LOGO_RECT = (32.6, 662.9, 37.7, 35.0)
+_EAND_FOOTER_CONFIDENTIAL_RECT = (602.5, 699.2, 74.9, 20.8)
+_EAND_FOOTER_FURNITURE_RECTS = (
+    _EAND_FOOTER_LOGO_RECT,
+    _EAND_FOOTER_CONFIDENTIAL_RECT,
+)
+
+
+def _find_eand_footer_furniture_collisions(root: _LayoutNode) -> list[str]:
+    """e&-only: flag a decorative, absolutely-positioned layer whose own box
+    overlaps where the real (non-fully-opaque) footer logo/"Confidential"
+    label will land once apply_smart_brand_template splices them on after
+    this check runs. Restricted to root's direct children, since
+    _positioned_rect resolves a node's geometry against its parent's box,
+    and only a decorative layer parented directly to the root <section>
+    shares the slide's own 1280x720 coordinate space - which is exactly
+    where a full-slide decorative rail or band would be authored."""
+    issues: list[str] = []
+    for child in root.children:
+        if not _is_decorative(child) or not _is_positioned(child):
+            continue
+        rect = _positioned_rect(child)
+        if rect is None:
+            continue
+        if any(
+            _rectangles_overlap(rect, furniture_rect)
+            for furniture_rect in _EAND_FOOTER_FURNITURE_RECTS
+        ):
+            issues.append(
+                "A decorative layer overlaps where the e& brand template's "
+                "own logo or 'Confidential' label will be placed; that "
+                "furniture is not fully opaque there and the collision will "
+                "be visible once it is added after generation."
+            )
+    return issues
+
+
+def inspect_smart_slide_layout(
+    html: str, *, check_eand_footer: bool = False
+) -> list[str]:
     """Return deterministic risks that commonly produce clipped/overlapping slides."""
     parser = _LayoutParser()
     parser.feed(html)
@@ -553,6 +650,8 @@ def inspect_smart_slide_layout(html: str) -> list[str]:
         return []
     root = parser.roots[0]
     issues: list[str] = []
+    if check_eand_footer:
+        issues.extend(_find_eand_footer_furniture_collisions(root))
     positioned_by_parent: dict[int, list[tuple[_LayoutNode, tuple[float, float, float, float]]]] = {}
 
     for node in _walk(root):

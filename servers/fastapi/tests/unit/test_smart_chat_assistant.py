@@ -274,3 +274,43 @@ def test_smart_chat_save_rejects_overlapping_positioned_content():
     assert result["saved"] is False
     assert "sibling content boxes overlap" in result["validation_errors"][0]
     assert session.commit_count == 0
+
+
+def test_smart_chat_save_rejects_stacked_panel_overflow():
+    """This save path shares normalize_smart_slide_html with generation, but
+    generation's static-heuristic stall waiver (see
+    SMART_MAX_CONSECUTIVE_STATIC_SLIDE_FAILURES in generate_smart_presentation.py)
+    only exists inside the retry loop - a manual chat edit gets no waiver of
+    any kind, by design (skip_layout_heuristics defaults to False). Pins that
+    default: the calibrated-proxy overflow heuristic (now volume-gated
+    instead of a raw item-count ban) still applies here."""
+    presentation_id = uuid.uuid4()
+    presentation = _smart_presentation(presentation_id)
+    session = _SmartSession(presentation, [])
+    memory = PresentationChatMemoryLayer(
+        session,
+        presentation_id,
+        presentation_type="smart",
+    )
+    long_item = (
+        "Revenue grew significantly across every regional business unit "
+        "this quarter, driven by strong enterprise demand."
+    )
+    items = "".join(f"<div>{long_item}</div>" for _ in range(4))
+    stacked_panel_html = (
+        '<section class="relative h-[720px] w-[1280px] overflow-hidden">'
+        f'<div class="flex flex-col h-full w-[150px] gap-4">{items}</div>'
+        "</section>"
+    )
+
+    result = asyncio.run(
+        memory.save_html_slide(
+            html=stacked_panel_html,
+            index=0,
+            replace_old_slide_at_index=False,
+        )
+    )
+
+    assert result["saved"] is False
+    assert "overflow or overlap risks" in result["validation_errors"][0]
+    assert session.commit_count == 0

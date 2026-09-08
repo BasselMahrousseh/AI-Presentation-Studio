@@ -831,16 +831,17 @@ def test_stream_presentation_uses_template_schema_for_content_generation():
         }
 
     async def consume_stream():
-        response = await presentation_endpoint.stream_presentation(
-            id=presentation_id,
-            sql_session=session,
-        )
+        response = await presentation_endpoint.stream_presentation(id=presentation_id)
         chunks = []
         async for chunk in response.body_iterator:
             chunks.append(chunk)
         return chunks
 
     with patch.object(
+        presentation_endpoint,
+        "async_session_maker",
+        lambda: session,
+    ), patch.object(
         presentation_endpoint,
         "get_slide_content_from_type_and_outline",
         new=fake_slide_content,

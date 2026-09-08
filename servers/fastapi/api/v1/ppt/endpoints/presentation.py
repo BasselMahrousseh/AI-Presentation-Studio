@@ -1714,7 +1714,6 @@ async def prepare_presentation(
 
 async def _stream_smart_presentation(
     presentation: PresentationModel,
-    sql_session: AsyncSession,
 ) -> StreamingResponse:
     presentation_id = presentation.id
     logger.info(
@@ -1724,13 +1723,19 @@ async def _stream_smart_presentation(
     )
 
     async def inner():
-        existing_slides = list(
-            await sql_session.scalars(
-                select(SlideModel)
-                .where(SlideModel.presentation == presentation_id)
-                .order_by(SlideModel.index)
+        # Scoped to just this query: a Smart generation runs for
+        # minutes (LLM calls, Puppeteer layout checks), and holding one
+        # DB session/connection open for that whole span would exhaust
+        # the connection pool under concurrent generations on
+        # Postgres/MySQL. See CLAUDE.md's DB-transaction-lifetime note.
+        async with async_session_maker() as sql_session:
+            existing_slides = list(
+                await sql_session.scalars(
+                    select(SlideModel)
+                    .where(SlideModel.presentation == presentation_id)
+                    .order_by(SlideModel.index)
+                )
             )
-        )
         if existing_slides:
             logger.info("[smart-workflow] smart_stream_reusing_existing presentation_id=%s slides=%s", presentation_id, len(existing_slides))
             for slide in existing_slides:
@@ -2056,15 +2061,19 @@ async def _stream_smart_presentation(
                 ),
             ).to_string()
 
-        await sql_session.execute(
-            delete(SlideModel).where(
-                SlideModel.presentation == presentation_id,
-                SlideModel.owner_id == get_current_owner_id(),
+        # Opened fresh here, right before the actual write - the LLM
+        # generation above never touches the DB, so there is nothing to
+        # hold a connection open for until this point.
+        async with async_session_maker() as sql_session:
+            await sql_session.execute(
+                delete(SlideModel).where(
+                    SlideModel.presentation == presentation_id,
+                    SlideModel.owner_id == get_current_owner_id(),
+                )
             )
-        )
-        sql_session.add(presentation)
-        sql_session.add_all(slides)
-        await sql_session.commit()
+            sql_session.add(presentation)
+            sql_session.add_all(slides)
+            await sql_session.commit()
         logger.info("[smart-workflow] smart_persisted presentation_id=%s slides=%s", presentation_id, len(slides))
 
         response = PresentationWithSlides(
@@ -2076,30 +2085,35 @@ async def _stream_smart_presentation(
             value=response.model_dump(mode="json"),
         ).to_string()
 
-    async def rollback_stream_session():
-        await sql_session.rollback()
-
     return StreamingResponse(
         safe_sse_stream(
             inner(),
             logger=logger,
             error_detail="Failed to generate the Smart presentation. Please try again.",
-            on_error=rollback_stream_session,
         ),
         media_type="text/event-stream",
     )
 
 
 @PRESENTATION_ROUTER.get("/stream/{id}", response_model=PresentationWithSlides)
-async def stream_presentation(
-    id: uuid.UUID, sql_session: AsyncSession = Depends(get_async_session)
-):
-    presentation = await sql_session.get(PresentationModel, id)
+async def stream_presentation(id: uuid.UUID):
+    # This request can run for several minutes (Smart mode especially:
+    # per-slide LLM calls plus Puppeteer layout-check renders). Fetching
+    # `presentation` through a dependency-injected session that FastAPI
+    # only closes once the whole StreamingResponse finishes would hold a
+    # pooled DB connection checked out for that entire span, even though
+    # actual DB reads/writes only happen at the very start and very end.
+    # On Postgres/MySQL (bounded connection pool, unlike SQLite) enough
+    # concurrent generations would exhaust the pool and start timing out
+    # unrelated requests. Instead, each unit of DB work below opens and
+    # closes its own short-lived session.
+    async with async_session_maker() as sql_session:
+        presentation = await sql_session.get(PresentationModel, id)
     if not presentation:
         raise HTTPException(status_code=404, detail="Presentation not found")
     logger.info("[smart-workflow] stream_requested presentation_id=%s mode=%s stored_slides=%s", id, presentation.generation_mode, presentation.n_slides)
     if presentation.generation_mode == "smart":
-        return await _stream_smart_presentation(presentation, sql_session)
+        return await _stream_smart_presentation(presentation)
     if not presentation.structure:
         raise HTTPException(
             status_code=400,
@@ -2310,19 +2324,24 @@ async def stream_presentation(
         for slide in slides:
             slide.ui = _apply_template_content_to_ui(slide.ui, slide.content)
 
-        # Moved this here to make sure new slides are generated before deleting the old ones
-        await sql_session.execute(
-            delete(SlideModel).where(
-                SlideModel.presentation == id,
-                SlideModel.owner_id == get_current_owner_id(),
+        # Opened fresh here, right before the actual writes - everything
+        # above (outline-to-content LLM calls, parallel image generation)
+        # never touches the DB, so there's nothing to hold a connection
+        # open for until this point.
+        async with async_session_maker() as sql_session:
+            # Moved this here to make sure new slides are generated before deleting the old ones
+            await sql_session.execute(
+                delete(SlideModel).where(
+                    SlideModel.presentation == id,
+                    SlideModel.owner_id == get_current_owner_id(),
+                )
             )
-        )
-        await sql_session.commit()
+            await sql_session.commit()
 
-        sql_session.add(presentation)
-        sql_session.add_all(slides)
-        sql_session.add_all(generated_assets)
-        await sql_session.commit()
+            sql_session.add(presentation)
+            sql_session.add_all(slides)
+            sql_session.add_all(generated_assets)
+            await sql_session.commit()
 
         response = PresentationWithSlides(
             **_presentation_response_data(presentation),
@@ -2334,15 +2353,11 @@ async def stream_presentation(
             value=response.model_dump(mode="json"),
         ).to_string()
 
-    async def rollback_stream_session():
-        await sql_session.rollback()
-
     return StreamingResponse(
         safe_sse_stream(
             inner(),
             logger=logger,
             error_detail="Failed to generate presentation slides. Please try again.",
-            on_error=rollback_stream_session,
         ),
         media_type="text/event-stream",
     )
