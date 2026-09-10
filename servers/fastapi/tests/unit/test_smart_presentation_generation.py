@@ -1550,6 +1550,33 @@ def test_prompt_warns_against_decorative_layers_colliding_with_content():
     assert "never let a decorative border line land within" in prompt
 
 
+def test_prompt_requires_bordered_corner_cell_in_grid_comparison_matrix():
+    """Real reported bug: a div-grid comparison matrix (`grid grid-cols-[0.85fr_1.2fr_1.2fr]`,
+    a colored header row plus a bordered row-label column) left its own
+    top-left corner cell as a bare `<div class="bg-white p-4"></div>` with no
+    border or fill, while every other cell in the grid carried
+    `border-b border-l border-black/15` to draw the table's own grid lines.
+    The corner rendered as a visible blank gap in the live app itself (before
+    export ever ran), confirming this is a content-generation gap, not an
+    export bug - this grid-of-divs pattern is not a real `<table>` element."""
+    messages = get_smart_messages(
+        content="Build a marketing report",
+        n_slides=4,
+        language="English",
+        tone=None,
+        verbosity=None,
+        instructions=None,
+        include_title_slide=True,
+        include_table_of_contents=False,
+        source_context="",
+        community_design_context="",
+    )
+    prompt = str(messages[1].content)
+
+    assert "top-left corner cell" in prompt
+    assert "renders as a visible blank gap" in prompt
+
+
 # ---------------------------------------------------------------------------
 # Fit-scale wrapper geometry when the root <section> carries its own padding
 # - a real, previously-latent bug (documented in CLAUDE.md as unconfirmed

@@ -266,6 +266,15 @@ Overflow prevention is a hard requirement:
   Cards containing text should use content-driven height (`h-auto`) unless a
   fixed height is essential. When fixed height is essential, reduce copy,
   padding, gaps, font size, and line height until the full text fits.
+- A comparison matrix built as a CSS grid of `<div>`s (colored column-header
+  cells across the top, a bordered row-label column down the left side, e.g.
+  `grid grid-cols-[0.85fr_1.2fr_1.2fr]`) needs its own top-left corner cell —
+  the cell above the row labels and beside the first colored column header —
+  given the same border or fill treatment as its neighbors, even though it
+  holds no text. Every other cell in that grid carries a border to draw the
+  table's own grid lines; a bare corner `<div>` with no border and no fill
+  (e.g. just `bg-white p-4`) breaks that line and renders as a visible blank gap
+  in an otherwise fully gridded layout, not a clean empty header cell.
 - A header row is a fine place for a badge, stat callout, or other small
   decorative accent next to the heading — decoration there is not the risk;
   a fixed pixel height is.

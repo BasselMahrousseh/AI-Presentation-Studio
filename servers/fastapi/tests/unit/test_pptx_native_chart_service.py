@@ -68,23 +68,12 @@ def test_hex_from_css_color(value, expected):
 
 # ---------------------------------------------------------------------------
 # Geometry matching
+#
+# _iou itself is now tested directly in test_pptx_native_export_shared.py
+# (it moved to the shared module and is no longer imported here, since
+# nothing in this file calls it directly - only _best_overlap_match does,
+# internally within the shared module).
 # ---------------------------------------------------------------------------
-
-
-def test_iou_exact_overlap_is_one():
-    rect = (0, 0, 100, 100)
-    assert svc._iou(rect, rect) == pytest.approx(1.0)
-
-
-def test_iou_no_overlap_is_zero():
-    assert svc._iou((0, 0, 10, 10), (100, 100, 10, 10)) == 0.0
-
-
-def test_iou_partial_overlap():
-    a = (0, 0, 100, 100)
-    b = (50, 0, 100, 100)
-    # intersection 50x100=5000, union 100*100*2-5000=15000
-    assert svc._iou(a, b) == pytest.approx(5000 / 15000)
 
 
 class _FakeShape:

@@ -23,6 +23,7 @@ import { normalizeBackendAssetUrls } from "@/utils/api";
 import { ensureTailwindBrowserScript } from "@/lib/tailwind-browser";
 import { useSmartChartInjection } from "@/app/(presentation-generator)/components/useSmartChartInjection";
 import { captureAllChartsOnPage } from "@/lib/chart-export-capture";
+import { captureAllTablesOnPage } from "@/lib/table-export-capture";
 import {
   applyArbitraryGridStyles,
   applyArbitraryTextStyles,
@@ -104,6 +105,7 @@ type PresentationPageProps = {
   presentation_id: string;
   exportCookie?: string;
   chartCaptureToken?: string;
+  tableCaptureToken?: string;
 };
 
 const SmartHtmlPdfSlide = ({
@@ -169,6 +171,7 @@ const PresentationPage = ({
   presentation_id,
   exportCookie,
   chartCaptureToken,
+  tableCaptureToken,
 }: PresentationPageProps) => {
   const pathname = usePathname();
   const [contentLoading, setContentLoading] = useState(true);
@@ -298,6 +301,18 @@ const PresentationPage = ({
       reportUrl: "/api/export-chart-capture",
     });
   }, [isLoading, chartCaptureToken, presentation_id]);
+
+  const tableCaptureRanRef = useRef(false);
+  useEffect(() => {
+    if (isLoading || !tableCaptureToken || tableCaptureRanRef.current) return;
+    tableCaptureRanRef.current = true;
+
+    void captureAllTablesOnPage({
+      token: tableCaptureToken,
+      presentationId: presentation_id,
+      reportUrl: "/api/export-table-capture",
+    });
+  }, [isLoading, tableCaptureToken, presentation_id]);
 
   return (
     <div className="m-0 flex flex-col overflow-visible p-0">

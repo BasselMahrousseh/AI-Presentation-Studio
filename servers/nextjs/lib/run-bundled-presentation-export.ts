@@ -98,6 +98,50 @@ async function requestNativeChartUpgrade(params: {
   }
 }
 
+/**
+ * Runs the post-export native-table upgrade pass (swaps flattened table
+ * images for real, editable PPTX tables) for a deck this function just
+ * exported. Same best-effort/awaited-before-return contract as
+ * requestNativeChartUpgrade. Must be called strictly after that chart
+ * upgrade has already completed and saved - see the table-export plan's
+ * Design Decision 3 for why sequential ordering (not a shared claimed-shape
+ * set) is what keeps the two passes from double-claiming the same picture
+ * on a slide that carries both a table and a chart.
+ */
+async function requestNativeTableUpgrade(params: {
+  token: string;
+  presentationId: string;
+  pptxPath: string;
+  cookieHeader?: string;
+}): Promise<void> {
+  try {
+    const response = await fetch(
+      `${getFastApiInternalBaseUrl()}/api/v1/ppt/presentation/export/upgrade-tables`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(params.cookieHeader ? { Cookie: params.cookieHeader } : {}),
+        },
+        body: JSON.stringify({
+          token: params.token,
+          presentation_id: params.presentationId,
+          pptx_path: params.pptxPath,
+        }),
+      }
+    );
+    if (!response.ok) {
+      console.error(
+        "[bundled-export] table upgrade request failed",
+        response.status,
+        await response.text().catch(() => "")
+      );
+    }
+  } catch (error) {
+    console.error("[bundled-export] table upgrade request failed", error);
+  }
+}
+
 /** Repo `presentation-export/` at app root (`/app/presentation-export` in Docker). */
 export function getExportPackageRoot(): string {
   return (
@@ -287,6 +331,10 @@ async function runBundledPresentationExportLocked(params: {
   if (chartCaptureToken) {
     q.set("chartCaptureToken", chartCaptureToken);
   }
+  const tableCaptureToken = format === "pptx" ? randomUUID() : undefined;
+  if (tableCaptureToken) {
+    q.set("tableCaptureToken", tableCaptureToken);
+  }
   const basePptUrl = `${nextjsUrl}/pdf-maker?${q.toString()}`;
   const pptUrl = cookieHeader?.trim()
     ? `${basePptUrl}#exportCookie=${encodeURIComponent(cookieHeader)}`
@@ -399,6 +447,17 @@ async function runBundledPresentationExportLocked(params: {
     if (chartCaptureToken) {
       await requestNativeChartUpgrade({
         token: chartCaptureToken,
+        presentationId,
+        pptxPath: outPath,
+        cookieHeader,
+      });
+    }
+
+    // Must run strictly after the chart upgrade above completes - see
+    // requestNativeTableUpgrade's docstring.
+    if (tableCaptureToken) {
+      await requestNativeTableUpgrade({
+        token: tableCaptureToken,
         presentationId,
         pptxPath: outPath,
         cookieHeader,

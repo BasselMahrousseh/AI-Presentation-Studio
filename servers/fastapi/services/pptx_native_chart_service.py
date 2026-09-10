@@ -9,30 +9,24 @@ from pptx.dml.color import RGBColor
 from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.oxml.ns import qn
-from pptx.util import Length, Pt
-from sqlmodel import select
 
-from models.sql.slide import SlideModel
 from services import chart_capture_store
-from services.database import async_session_maker
+from services.pptx_native_export_shared import (
+    _DESIGN_HEIGHT_PX,
+    _DESIGN_WIDTH_PX,
+    _IOU_AMBIGUITY_MARGIN,
+    _IOU_MIN,
+    _alpha_from_css_color,
+    _best_overlap_match,
+    _expected_slide_count,
+    _group_by_slide_order,
+    _hex_from_css_color,
+    _pt_from_css_px,
+    _rect_to_emu,
+    _shape_rect,
+)
 
 LOGGER = logging.getLogger(__name__)
-
-# The frontend capture reports chart geometry in the same 1280x720 logical
-# canvas space every slide is designed and exported in (verified against a
-# real pptx_model.json debug artifact: picture shape positions sit inside
-# 0-1280 / 0-720 with no extra scale factor).
-_DESIGN_WIDTH_PX = 1280
-_DESIGN_HEIGHT_PX = 720
-
-# A correct geometric match should be near-perfect (no scale correction is
-# needed, see above), so a borderline score more likely means a bug (stale
-# capture, wrong slide, cropped element) than a legitimate close call -> fail
-# closed rather than tune a permissive threshold.
-_IOU_MIN = 0.90
-_IOU_AMBIGUITY_MARGIN = 0.05
-
-Rect = tuple[int, int, int, int]  # left, top, width, height, all in EMU
 
 # Chart kinds with no faithful native PPTX equivalent (polar_area, scatter,
 # bubble) are intentionally absent here -> _resolve_xl_chart_type returns
@@ -120,16 +114,6 @@ _XL_LEGEND_POSITION_BY_NAME: dict[str, XL_LEGEND_POSITION] = {
     "right": XL_LEGEND_POSITION.RIGHT,
 }
 
-# The capture reports font sizes in CSS px within the same 1280x720 logical
-# canvas the geometry above is measured in. That canvas is exported at
-# 1280px = 13.333in (960pt), so 1 CSS px = 0.75pt exactly - and since every
-# captured size is multiplied by a clean 0.75, the conversion is lossless in
-# the centipoint units python-pptx's Font.size setter stores (e.g. 14px ->
-# 10.5pt -> sz="1050").
-_PT_PER_CSS_PX = 0.75
-_MIN_FONT_PX = 1.0
-_MAX_FONT_PX = 200.0
-
 
 def _resolve_xl_chart_type(kind: Any, has_markers: bool) -> Optional[XL_CHART_TYPE]:
     if kind in _FIXED_XL_CHART_TYPE_BY_KIND:
@@ -139,119 +123,6 @@ def _resolve_xl_chart_type(kind: Any, has_markers: bool) -> Optional[XL_CHART_TY
     if kind == "radar":
         return XL_CHART_TYPE.RADAR_MARKERS if has_markers else XL_CHART_TYPE.RADAR
     return None
-
-
-def _hex_from_css_color(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if text.startswith("#"):
-        hex_part = text[1:]
-        if len(hex_part) == 3:
-            hex_part = "".join(ch * 2 for ch in hex_part)
-        if len(hex_part) == 6 and all(
-            ch in "0123456789abcdefABCDEF" for ch in hex_part
-        ):
-            return hex_part.upper()
-        return None
-    if text.startswith("rgb"):
-        try:
-            inner = text[text.index("(") + 1 : text.index(")")]
-            parts = [p.strip() for p in inner.split(",")]
-            r, g, b = (int(float(p)) for p in parts[:3])
-        except (ValueError, IndexError):
-            return None
-        if all(0 <= c <= 255 for c in (r, g, b)):
-            return f"{r:02X}{g:02X}{b:02X}"
-        return None
-    return None
-
-
-def _alpha_from_css_color(value: Any) -> Optional[float]:
-    """The 4th component of an `rgba(r, g, b, a)` string, or None for
-    anything else (opaque `rgb()`/`#hex`, malformed input, or a=1). Kept
-    deliberately separate from _hex_from_css_color rather than changing that
-    function's return shape - several call sites (and its own pinned tests)
-    depend on its existing "6-hex-or-None" contract. 8-digit #RRGGBBAA is not
-    handled here because _hex_from_css_color already rejects any hex string
-    that isn't 3 or 6 characters, so such a color never reaches a fill site
-    to begin with; the two would need to change together if that ever does."""
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text.startswith("rgb"):
-        return None
-    try:
-        inner = text[text.index("(") + 1 : text.index(")")]
-        parts = [p.strip() for p in inner.split(",")]
-        alpha = float(parts[3])
-    except (ValueError, IndexError):
-        return None
-    if not (0.0 <= alpha < 1.0):
-        # >=1.0 is opaque - nothing to inject; out-of-range is malformed, and
-        # failing to today's opaque behavior beats emitting an invalid
-        # ST_PositivePercentage into the file.
-        return None
-    return alpha
-
-
-def _pt_from_css_px(value: Any) -> Optional[Length]:
-    """Convert a captured CSS-px font size to a python-pptx `Length` in
-    points, or None if the value is absent/invalid. Never raises - a garbage
-    captured size (out of range, non-numeric, NaN/inf) must fall back to
-    PowerPoint's own default rather than corrupt or crash the export."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    if value != value or value in (float("inf"), float("-inf")):  # NaN/inf
-        return None
-    if not (_MIN_FONT_PX <= value <= _MAX_FONT_PX):
-        return None
-    return Pt(value * _PT_PER_CSS_PX)
-
-
-def _rect_to_emu(rect: dict, emu_per_px_x: float, emu_per_px_y: float) -> Rect:
-    left = int(round(float(rect.get("left", 0)) * emu_per_px_x))
-    top = int(round(float(rect.get("top", 0)) * emu_per_px_y))
-    width = int(round(float(rect.get("width", 0)) * emu_per_px_x))
-    height = int(round(float(rect.get("height", 0)) * emu_per_px_y))
-    return left, top, width, height
-
-
-def _shape_rect(shape) -> Rect:
-    return shape.left, shape.top, shape.width, shape.height
-
-
-def _iou(a: Rect, b: Rect) -> float:
-    ax0, ay0, aw, ah = a
-    bx0, by0, bw, bh = b
-    if aw <= 0 or ah <= 0 or bw <= 0 or bh <= 0:
-        return 0.0
-    ax1, ay1 = ax0 + aw, ay0 + ah
-    bx1, by1 = bx0 + bw, by0 + bh
-    inter_w = max(0, min(ax1, bx1) - max(ax0, bx0))
-    inter_h = max(0, min(ay1, by1) - max(ay0, by0))
-    inter = inter_w * inter_h
-    if inter <= 0:
-        return 0.0
-    union = aw * ah + bw * bh - inter
-    if union <= 0:
-        return 0.0
-    return inter / union
-
-
-def _best_overlap_match(
-    target_rect: Rect, picture_shapes: list
-) -> tuple[Optional[Any], float, float]:
-    scored = sorted(
-        ((_iou(target_rect, _shape_rect(shape)), shape) for shape in picture_shapes),
-        key=lambda pair: pair[0],
-        reverse=True,
-    )
-    if not scored:
-        return None, 0.0, 0.0
-    best_score, best_shape = scored[0]
-    second_score = scored[1][0] if len(scored) > 1 else 0.0
-    return best_shape, best_score, second_score
 
 
 def _build_chart_data(captured_chart: dict) -> Optional[CategoryChartData]:
@@ -695,26 +566,6 @@ def _try_upgrade_one_chart(
         best_score,
     )
     return upgraded
-
-
-def _group_by_slide_order(charts: list) -> dict[int, list[dict]]:
-    grouped: dict[int, list[dict]] = {}
-    for chart in charts:
-        if not isinstance(chart, dict):
-            continue
-        index = chart.get("slideOrderIndex")
-        if not isinstance(index, int) or isinstance(index, bool):
-            continue
-        grouped.setdefault(index, []).append(chart)
-    return grouped
-
-
-async def _expected_slide_count(presentation_id: uuid.UUID) -> int:
-    async with async_session_maker() as session:
-        result = await session.execute(
-            select(SlideModel.id).where(SlideModel.presentation == presentation_id)
-        )
-        return len(result.all())
 
 
 async def upgrade_flattened_charts_to_native(

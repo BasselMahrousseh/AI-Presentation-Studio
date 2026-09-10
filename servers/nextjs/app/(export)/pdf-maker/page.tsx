@@ -11,6 +11,7 @@ const page = () => {
     const queryId = params.get("id");
     const exportCookie = params.get("exportCookie") ?? undefined;
     const chartCaptureToken = params.get("chartCaptureToken") ?? undefined;
+    const tableCaptureToken = params.get("tableCaptureToken") ?? undefined;
     if (!queryId) {
         return (
             <div className="flex flex-col items-center justify-center h-screen">
@@ -25,6 +26,7 @@ const page = () => {
             presentation_id={queryId}
             exportCookie={exportCookie}
             chartCaptureToken={chartCaptureToken}
+            tableCaptureToken={tableCaptureToken}
         />
     );
 };

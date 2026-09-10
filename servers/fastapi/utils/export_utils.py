@@ -10,6 +10,7 @@ from models.presentation_and_path import PresentationAndPath
 from utils.filename_utils import safe_export_basename
 from services.export_task_service import EXPORT_TASK_SERVICE
 from services.pptx_native_chart_service import upgrade_flattened_charts_to_native
+from services.pptx_native_table_service import upgrade_flattened_tables_to_native
 from utils.runtime_limits import log_memory
 
 
@@ -29,6 +30,7 @@ def _build_presentation_export_url(
     presentation_id: uuid.UUID,
     cookie_header: str | None = None,
     chart_capture_token: str | None = None,
+    table_capture_token: str | None = None,
 ) -> tuple[str, str | None]:
     params = {"id": str(presentation_id)}
     fastapi_url = _get_next_public_fastapi_url()
@@ -36,6 +38,8 @@ def _build_presentation_export_url(
         params["fastapiUrl"] = fastapi_url
     if chart_capture_token:
         params["chartCaptureToken"] = chart_capture_token
+    if table_capture_token:
+        params["tableCaptureToken"] = table_capture_token
     export_url = f"{_get_next_public_url().rstrip('/')}/pdf-maker?{urlencode(params)}"
     if cookie_header:
         export_url = f"{export_url}#{urlencode({'exportCookie': cookie_header})}"
@@ -58,8 +62,9 @@ async def export_presentation(
         export_as=export_as,
     )
     chart_capture_token = str(uuid.uuid4()) if export_as == "pptx" else None
+    table_capture_token = str(uuid.uuid4()) if export_as == "pptx" else None
     export_url, fastapi_url = _build_presentation_export_url(
-        presentation_id, cookie_header, chart_capture_token
+        presentation_id, cookie_header, chart_capture_token, table_capture_token
     )
     name = (title or "").strip() or str(uuid.uuid4())
     export_result = await EXPORT_TASK_SERVICE.export_from_url(
@@ -78,6 +83,21 @@ async def export_presentation(
         except Exception:
             LOGGER.exception(
                 "presentation.export.native_chart_upgrade_failed",
+            )
+
+    # Must run strictly after the chart upgrade above completes and saves:
+    # a picture a chart upgrade already swapped out is no longer
+    # MSO_SHAPE_TYPE.PICTURE, so it's naturally excluded from this pass's own
+    # candidate pool with no shared state needed between the two passes (see
+    # the table-export plan's Design Decision 3).
+    if export_as == "pptx" and table_capture_token:
+        try:
+            await upgrade_flattened_tables_to_native(
+                export_result.path, table_capture_token, presentation_id
+            )
+        except Exception:
+            LOGGER.exception(
+                "presentation.export.native_table_upgrade_failed",
             )
 
     log_memory(

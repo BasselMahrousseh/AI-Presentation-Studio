@@ -45,6 +45,14 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
         # capture 401s whenever auth is enabled, and every chart in every
         # PPTX export silently stays a flattened image with no visible error.
         "/api/v1/ppt/presentation/export/chart-capture",
+        # Same rationale, same mechanism, as the chart-capture exemption just
+        # above - a fully separate table-capture pipeline (see CLAUDE.md's
+        # table-export backlog item and pptx_native_table_service.py) fired
+        # via navigator.sendBeacon for the same networkidle0 reason, safe for
+        # the same "server-minted uuid4, sanitized against path traversal"
+        # reason (table_capture_store._capture_path). /upgrade-tables stays
+        # authenticated, same as /upgrade-charts.
+        "/api/v1/ppt/presentation/export/table-capture",
     }
     _PUBLIC_AUTH_PREFIXES: tuple[str, ...] = ()
     _PUBLIC_APP_DATA_PREFIXES = (
