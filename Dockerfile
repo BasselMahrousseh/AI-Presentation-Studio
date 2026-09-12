@@ -61,7 +61,7 @@ RUN mkdir -p /app/document-extraction-liteparse \
     && npm init -y \
     && npm install @llamaindex/liteparse@1.5.2 --omit=dev
 
-COPY electron/resources/document-extraction/liteparse_runner.mjs /app/document-extraction-liteparse/liteparse_runner.mjs
+COPY resources/document-extraction/liteparse_runner.mjs /app/document-extraction-liteparse/liteparse_runner.mjs
 COPY scripts/sync-presentation-export.cjs /app/scripts/sync-presentation-export.cjs
 # Bundled export still loads @img/sharp-* native addons from node_modules (not inlined).
 RUN rm -rf /app/presentation-export \
