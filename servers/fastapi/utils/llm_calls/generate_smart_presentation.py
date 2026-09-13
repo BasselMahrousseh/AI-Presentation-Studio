@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Optional
@@ -60,7 +61,8 @@ SMART_GENERATION_MAX_ATTEMPTS = 8
 # not correctness gates: a slide that overflows somewhat is far better for the
 # user than no deck, so past this many consecutive failures at one position the
 # check steps aside and lets generation move on. Hard validity checks (malformed
-# HTML, missing chart initializer, wrong slide type/count) are never waived.
+# HTML, missing chart initializer, invalid chart script JavaScript, wrong slide
+# type/count) are never waived.
 SMART_MAX_CONSECUTIVE_SLIDE_FAILURES = 3
 
 # First rung of the same escalation ladder, one step earlier and strictly
@@ -79,6 +81,12 @@ SMART_MAX_CONSECUTIVE_SLIDE_FAILURES = 3
 # or reject it with a concrete number. Nothing here is shipped unmeasured
 # until SMART_MAX_CONSECUTIVE_SLIDE_FAILURES is also reached.
 SMART_MAX_CONSECUTIVE_STATIC_SLIDE_FAILURES = 2
+
+# Wall-clock budget for one `node --check` syntax-validation subprocess call
+# (see _find_chart_script_syntax_error). Real runs take ~20-50ms; this is a
+# generous ceiling to guard against a hung/misbehaving Node install, not a
+# tuned performance knob.
+_CHART_SCRIPT_SYNTAX_CHECK_TIMEOUT_SECONDS = 5
 
 # A slide whose content is slightly taller than the canvas is scaled down to
 # fit rather than rejected: the render that already measures the overflow also
@@ -163,6 +171,16 @@ _EAND_FOOTER_MIN_VIOLATION_PIXELS = 150
 SMART_OVERFLOW_SAFE_AREA_WIDTH = 1280
 SMART_OVERFLOW_MEASURE_HEIGHT = 1440
 SMART_SLIDE_CANVAS_HEIGHT = 720
+# Widened render viewport for the horizontal counterpart of the vertical
+# overflow check above (see _measure_smart_slide_layout): the slide's own
+# <section> stays exactly 1280px wide (only its overflow-hidden is lifted,
+# never its w-[1280px]), so it renders flush against the left edge of this
+# wider viewport with no centering to correct for; anything painted at
+# x>=1280 is genuine content spilling past the canvas's right edge - e.g. a
+# <table> without `table-layout:fixed` whose columns compute wider than the
+# 1280px canvas, invisible in the authored HTML and only real once a browser
+# actually lays it out.
+SMART_OVERFLOW_MEASURE_WIDTH = 2560
 _SMART_OVERFLOW_SENTINEL_HEX = "#ff00ff"
 _SMART_OVERFLOW_SENTINEL_RGB = (255, 0, 255)
 _SMART_OVERFLOW_PIXEL_TOLERANCE = 12
@@ -275,6 +293,18 @@ Overflow prevention is a hard requirement:
   table's own grid lines; a bare corner `<div>` with no border and no fill
   (e.g. just `bg-white p-4`) breaks that line and renders as a visible blank gap
   in an otherwise fully gridded layout, not a clean empty header cell.
+- A real `<table>` element (rather than a CSS grid of `<div>`s) must always
+  carry `table-layout: fixed` plus an explicit `width` (e.g. `w-full` on a
+  parent whose own width is bounded, or `w-[1200px]` on the table itself).
+  Without `table-layout: fixed`, a browser sizes each column by its own
+  content's natural width, not by the space actually available — a 5-6
+  column comparison table (e.g. model names across the top, longer
+  capability descriptions down the left column) can compute a total width
+  wider than the 1280px canvas even though nothing about the surrounding
+  layout looks wrong, and that overflow is invisible in the authored HTML
+  itself since it only appears once a real browser lays the table out. Keep
+  cell text short enough to fit its column at that fixed width rather than
+  relying on the browser to find room for it.
 - A header row is a fine place for a badge, stat callout, or other small
   decorative accent next to the heading — decoration there is not the risk;
   a fixed pixel height is.
@@ -879,6 +909,52 @@ def _sanitize_script(match: re.Match[str]) -> str:
     return match.group(0)
 
 
+def _find_chart_script_syntax_error(script: str) -> str | None:
+    """Run a chart-initializer script through Node's own parser and return a
+    short description of its syntax error, or None if it parses cleanly.
+
+    `node --check` only parses the script, never executes it, so it's safe
+    even though the script references DOM globals (canvas/document/Chart)
+    that don't exist in this process. This exists because a Smart chart
+    script that is merely syntactically broken (e.g. one closing brace short
+    in a deeply nested options literal) throws immediately client-side and
+    leaves its canvas permanently blank - it does not self-heal on reload,
+    and nothing else in the validation pipeline checks script parseability
+    (smart_slide_layout.py's heuristics check Tailwind-class overflow risk;
+    the Puppeteer render check verifies visual layout, not script syntax).
+
+    Fails open (returns None, i.e. "no error found") on any infra problem -
+    Node missing from PATH, a timeout, an unexpected crash - rather than
+    rejecting an otherwise-fine slide because this environment can't run the
+    check. Node is a hard dependency of this app's own Docker images
+    already (the Puppeteer/export pipeline needs it), so this should only
+    ever fire for a bare local dev run or an unusual CI runner; mirrors the
+    same infra-vs-validation-failure distinction _check_smart_slide_layout
+    already makes for its own render-based checks."""
+    try:
+        result = subprocess.run(
+            ["node", "--check", "-"],
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=_CHART_SCRIPT_SYNTAX_CHECK_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        LOGGER.exception(
+            "[smart-generation] chart_script_syntax_check_unavailable; "
+            "skipping check"
+        )
+        return None
+    if result.returncode == 0:
+        return None
+    message = (result.stderr or result.stdout or "").strip()
+    # Keep only Node's own "SyntaxError: ..." line when present - the rest is
+    # a stack trace pointing at internal module-loader frames that mean
+    # nothing to the model being asked to fix its own output.
+    match = re.search(r"^SyntaxError:.*$", message, re.MULTILINE)
+    return match.group(0) if match else (message or "Node reported a syntax error")
+
+
 def _validate_chart_initializers(html: str) -> None:
     chart_canvas_ids = [match.group(2) for match in _CHART_CANVAS.finditer(html)]
     if not chart_canvas_ids:
@@ -902,6 +978,19 @@ def _validate_chart_initializers(html: str) -> None:
                 "initialization script: " + ", ".join(missing_initializers)
             ),
         )
+
+    for script in chart_scripts:
+        syntax_error = _find_chart_script_syntax_error(script)
+        if syntax_error is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The Smart slide's chart initialization script is not "
+                    "valid JavaScript and will throw immediately, leaving "
+                    "its chart canvas permanently blank (this does not "
+                    f"self-heal on reload): {syntax_error}"
+                ),
+            )
 
     if any(_INVALID_DATALABELS_REFERENCE.search(script) for script in chart_scripts):
         raise HTTPException(
@@ -1039,41 +1128,90 @@ def _validate_smart_slide_layout_safety(
 
 
 def _diff_band_against(
-    band: "Image.Image", background_rgb: tuple[int, int, int], tolerance: int
+    band: "Image.Image",
+    background_rgb: tuple[int, int, int],
+    tolerance: int,
+    *,
+    horizontal: bool = False,
 ) -> tuple[int, int]:
     """Count pixels in `band` that differ from a known flat background, and
-    report how far down the band the deepest such pixel sits. Shared by both
-    layout checks so they can run off a single render."""
+    report how far the deepest such pixel sits from the band's own top-left
+    origin. Shared by every layout check so they can run off a single render.
+
+    `horizontal=False` (the default, used for a band cropped off the
+    canvas's *bottom* edge) reports how far *down* the band the deepest
+    violating pixel sits (`bbox[3]`). `horizontal=True` (used for a band
+    cropped off the canvas's *right* edge) reports how far *right* it sits
+    instead (`bbox[2]`) - the two are otherwise identical, just reading the
+    bounding box's far edge along a different axis."""
     background = Image.new("RGB", band.size, background_rgb)
     diff = ImageChops.difference(band, background).convert("L")
     thresholded = diff.point(lambda value: 255 if value > tolerance else 0)
     bbox = thresholded.getbbox()
-    return thresholded.histogram()[255], (bbox[3] if bbox else 0)
+    if not bbox:
+        return thresholded.histogram()[255], 0
+    return thresholded.histogram()[255], (bbox[2] if horizontal else bbox[3])
 
 
 def _measure_smart_slide_layout(
     image_path: str, *, measure_footer: bool
-) -> tuple[int, int, int, int]:
-    """Measure both layout violations from ONE render: content spilling past
-    the 720px canvas, and (e& only) content intruding into the reserved
-    y=630-720 footer band.
+) -> tuple[int, int, int, int, int, int]:
+    """Measure every layout violation from ONE render: content spilling past
+    the 720px canvas (vertically or horizontally), and (e& only) content
+    intruding into the reserved y=630-720 footer band.
 
-    These used to be two separate `render_html_to_image` calls - i.e. two full
-    cold Chromium launches per slide - even though both just measure the same
-    rendered page. Profiling a real e& generation put render checks at ~13-15%
-    of total wall time, with e& paying that twice over, so they now share one
-    render. The bands read against different backgrounds on purpose: past y=720
-    is outside the slide's own box, so it shows the sentinel page colour, while
-    y=630-720 is still inside the (white) slide, so it reads against white -
-    exactly the comparison the standalone footer check made before.
+    The vertical and footer checks used to be two separate
+    `render_html_to_image` calls - i.e. two full cold Chromium launches per
+    slide - even though both just measure the same rendered page. Profiling a
+    real e& generation put render checks at ~13-15% of total wall time, with
+    e& paying that twice over, so they now share one render, and the
+    horizontal check added alongside them reuses that same render rather
+    than spawning a third. The bands read against different backgrounds on
+    purpose: past y=720 (and past x=1280) is outside the slide's own box, so
+    it shows the sentinel page colour, while y=630-720 is still inside the
+    (white) slide, so it reads against white - exactly the comparison the
+    standalone footer check made before.
     """
     with Image.open(image_path) as image:
         rgb_image = image.convert("RGB")
         width, height = rgb_image.size
-        overflow_band = rgb_image.crop((0, SMART_SLIDE_CANVAS_HEIGHT, width, height))
+        # The render viewport is now wider than the 1280px canvas (see
+        # SMART_OVERFLOW_MEASURE_WIDTH's own comment) so the new right-edge
+        # band has somewhere to spill into - but that means `width` here is
+        # NOT the canvas width any more. Every band that isn't specifically
+        # measuring the region past x=1280 must stay bounded at
+        # SMART_OVERFLOW_SAFE_AREA_WIDTH, or it silently sweeps in the outer
+        # viewport's own sentinel-colored background past the section's
+        # right edge. This bit the footer band for real: cropping it to the
+        # full (now-widened) `width` made every single e& slide register a
+        # full-depth footer violation, because x=1280..width there is
+        # legitimately magenta sentinel background, not white slide
+        # background - `_EAND_FOOTER_BACKGROUND_RGB` (white) never matched
+        # it, so footer_depth_px pinned at its maximum on every slide and
+        # forced a needless 0.8750 downscale on 100% of e& generations after
+        # this viewport was widened. Caught by direct comparison against the
+        # same app's own generation logs from before the width was widened,
+        # where the identical e& template never triggered this at all.
+        overflow_band = rgb_image.crop(
+            (0, SMART_SLIDE_CANVAS_HEIGHT, SMART_OVERFLOW_SAFE_AREA_WIDTH, height)
+        )
+        # The slide's own <section> keeps its w-[1280px] class even with
+        # overflow-hidden lifted (see SMART_OVERFLOW_MEASURE_WIDTH's own
+        # comment), so it renders flush against this wider viewport's left
+        # edge with nothing to re-anchor - a band cropped at x=1280 measures
+        # real rightward spill the same way the band above measures real
+        # downward spill.
+        right_overflow_band = rgb_image.crop(
+            (SMART_OVERFLOW_SAFE_AREA_WIDTH, 0, width, height)
+        )
         footer_band = (
             rgb_image.crop(
-                (0, EAND_FOOTER_RESERVED_TOP_Y, width, SMART_SLIDE_CANVAS_HEIGHT)
+                (
+                    0,
+                    EAND_FOOTER_RESERVED_TOP_Y,
+                    SMART_OVERFLOW_SAFE_AREA_WIDTH,
+                    SMART_SLIDE_CANVAS_HEIGHT,
+                )
             )
             if measure_footer
             else None
@@ -1082,13 +1220,26 @@ def _measure_smart_slide_layout(
     overflow_pixels, overshoot_px = _diff_band_against(
         overflow_band, _SMART_OVERFLOW_SENTINEL_RGB, _SMART_OVERFLOW_PIXEL_TOLERANCE
     )
+    right_overflow_pixels, right_overshoot_px = _diff_band_against(
+        right_overflow_band,
+        _SMART_OVERFLOW_SENTINEL_RGB,
+        _SMART_OVERFLOW_PIXEL_TOLERANCE,
+        horizontal=True,
+    )
     footer_pixels = 0
     footer_depth_px = 0
     if footer_band is not None:
         footer_pixels, footer_depth_px = _diff_band_against(
             footer_band, _EAND_FOOTER_BACKGROUND_RGB, _EAND_FOOTER_PIXEL_TOLERANCE
         )
-    return overflow_pixels, overshoot_px, footer_pixels, footer_depth_px
+    return (
+        overflow_pixels,
+        overshoot_px,
+        right_overflow_pixels,
+        right_overshoot_px,
+        footer_pixels,
+        footer_depth_px,
+    )
 
 
 def _slide_html_without_canvas_clip(html: str) -> str:
@@ -1249,17 +1400,17 @@ async def _check_smart_slide_layout(
     preview_html = _build_slide_preview_html(
         _slide_html_without_canvas_clip(html),
         font_css="",
-        width=SMART_OVERFLOW_SAFE_AREA_WIDTH,
+        width=SMART_OVERFLOW_MEASURE_WIDTH,
         height=SMART_OVERFLOW_MEASURE_HEIGHT,
         background=_SMART_OVERFLOW_SENTINEL_HEX,
         extra_css=_SMART_LAYOUT_MEASUREMENT_EXTRA_CSS,
     )
     image_path: str | None = None
-    measurement: tuple[int, int, int, int] | None = None
+    measurement: tuple[int, int, int, int, int, int] | None = None
     try:
         result = await EXPORT_TASK_SERVICE.render_html_to_image(
             preview_html,
-            SMART_OVERFLOW_SAFE_AREA_WIDTH,
+            SMART_OVERFLOW_MEASURE_WIDTH,
             SMART_OVERFLOW_MEASURE_HEIGHT,
             queue_timeout=SMART_LAYOUT_CHECK_QUEUE_TIMEOUT_SECONDS,
         )
@@ -1292,17 +1443,29 @@ async def _check_smart_slide_layout(
             except OSError:
                 pass
 
-    overflow_pixels, overshoot_px, footer_pixels, footer_depth_px = measurement
+    (
+        overflow_pixels,
+        overshoot_px,
+        right_overflow_pixels,
+        right_overshoot_px,
+        footer_pixels,
+        footer_depth_px,
+    ) = measurement
 
     # Work out the single scale that satisfies every violated constraint. Each
-    # one is "the deepest painted row must sit at or above <limit>", and the
-    # render already told us where that row is, so the needed scale is exact
-    # rather than a guess: a row at H maps to H*scale under a top-anchored
-    # transform, so scale = limit / H.
+    # one is "the deepest painted row/column must sit at or above <limit>",
+    # and the render already told us where that row/column is, so the needed
+    # scale is exact rather than a guess: a row at H maps to H*scale under a
+    # top-anchored transform (a column at W likewise maps to W*scale, since
+    # the wrapper's transform:scale() applies uniformly to both axes - see
+    # _slide_html_scaled_to_fit), so scale = limit / measured.
     required_scales: list[float] = []
     if overflow_pixels > _SMART_OVERFLOW_MIN_VIOLATION_PIXELS:
         deepest_row = SMART_SLIDE_CANVAS_HEIGHT + overshoot_px
         required_scales.append(SMART_SLIDE_CANVAS_HEIGHT / deepest_row)
+    if right_overflow_pixels > _SMART_OVERFLOW_MIN_VIOLATION_PIXELS:
+        deepest_col = SMART_OVERFLOW_SAFE_AREA_WIDTH + right_overshoot_px
+        required_scales.append(SMART_OVERFLOW_SAFE_AREA_WIDTH / deepest_col)
     if check_eand_footer and footer_pixels > _EAND_FOOTER_MIN_VIOLATION_PIXELS:
         # e& is the tighter constraint: content must clear the reserved footer
         # band, not merely stay inside the canvas.
@@ -1313,9 +1476,11 @@ async def _check_smart_slide_layout(
         if fit_scale >= SMART_MIN_FIT_SCALE:
             LOGGER.info(
                 "[smart-generation] scaling slide to fit scale=%.4f "
-                "(overshoot=%spx footer_depth=%spx) instead of rejecting it",
+                "(overshoot=%spx right_overshoot=%spx footer_depth=%spx) "
+                "instead of rejecting it",
                 fit_scale,
                 overshoot_px,
+                right_overshoot_px,
                 footer_depth_px,
             )
             return fit_scale
@@ -1332,6 +1497,23 @@ async def _check_smart_slide_layout(
                 "rows/cards, or redistribute it across more slides so "
                 f"everything fits within the 1280x{SMART_SLIDE_CANVAS_HEIGHT} "
                 "canvas."
+            ),
+        )
+    if right_overflow_pixels > _SMART_OVERFLOW_MIN_VIOLATION_PIXELS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The Smart slide's own content is approximately "
+                f"{right_overshoot_px}px wider than the fixed "
+                f"{SMART_OVERFLOW_SAFE_AREA_WIDTH}px canvas allows, and would "
+                "bleed past the slide's right edge instead of being contained "
+                "by it. This is a common failure mode for a <table> without "
+                "`table-layout: fixed` and an explicit width, whose columns a "
+                "browser can size wider than the space actually available. "
+                "Add `table-layout: fixed` plus an explicit width to any "
+                "table, shorten cell text, or reduce the number of columns so "
+                f"everything fits within the {SMART_OVERFLOW_SAFE_AREA_WIDTH}x"
+                f"{SMART_SLIDE_CANVAS_HEIGHT} canvas."
             ),
         )
     if check_eand_footer and footer_pixels > _EAND_FOOTER_MIN_VIOLATION_PIXELS:

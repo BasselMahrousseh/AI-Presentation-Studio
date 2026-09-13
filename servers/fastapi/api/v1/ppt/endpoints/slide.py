@@ -14,12 +14,17 @@ from services.mem0_presentation_memory_service import (
 from utils.asset_directory_utils import get_images_directory
 from utils.llm_calls.edit_slide import get_edited_slide_content
 from utils.llm_calls.edit_slide_html import get_edited_slide_html
+from utils.llm_calls.generate_smart_presentation import (
+    _check_smart_slide_layout,
+    _slide_html_scaled_to_fit,
+)
 from utils.llm_calls.select_slide_type_on_edit import get_slide_layout_from_prompt
 from utils.presentation_layout_resolver import (
     is_template_layout_payload as _is_template_layout_payload,
     resolve_presentation_layout_model,
 )
 from utils.process_slides import process_old_and_new_slides_and_fetch_assets
+from utils.smart_brand_templates import EAND_SMART_TEMPLATE_ID
 
 
 SLIDE_ROUTER = APIRouter(prefix="/slide", tags=["Slide"])
@@ -143,6 +148,21 @@ async def edit_slide_html(
         html_to_edit,
         memory_context,
     )
+
+    # Full-deck generation runs every edited slide through this same
+    # render-based layout check (see generate_smart_presentation.py's
+    # _check_smart_slide_layout); a single-slide edit used to skip it
+    # entirely, so an edit could silently reintroduce a canvas/footer
+    # overflow the initial generation had already avoided (e.g. content
+    # sliding down into the reserved e& footer band and visibly touching the
+    # fixed logo). Mirror the same "scale slightly-too-large content to fit,
+    # else reject" behavior here rather than saving unchecked.
+    fit_scale = await _check_smart_slide_layout(
+        edited_slide_html,
+        check_eand_footer=presentation.smart_template == EAND_SMART_TEMPLATE_ID,
+    )
+    if fit_scale is not None:
+        edited_slide_html = _slide_html_scaled_to_fit(edited_slide_html, fit_scale)
 
     # Always assign a new unique id to the slide
     # This is to ensure that the nextjs can track slide updates

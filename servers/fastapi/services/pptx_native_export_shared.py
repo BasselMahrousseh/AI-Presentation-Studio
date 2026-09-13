@@ -224,6 +224,51 @@ def _shape_rect(shape) -> Rect:
     return shape.left, shape.top, shape.width, shape.height
 
 
+def _clamp_rect_to_slide(
+    rect: Rect, slide_width_emu: int, slide_height_emu: int
+) -> Rect:
+    """Shrink `rect` (left, top, width, height, all EMU) so it never extends
+    past the slide's own right/bottom edge, without moving its top-left
+    anchor.
+
+    Both native-table and native-chart placement inherit their final
+    left/top/width/height from a flattened picture the closed-source export
+    converter already produced (see `_replace_picture_with_native_table`/
+    `_replace_picture_with_native_chart`), and that picture's own box is
+    never itself validated against the slide canvas anywhere in this
+    pipeline - a table wider than its intended column (e.g. a browser's
+    automatic, non-`table-layout:fixed` sizing of a wide multi-column
+    comparison table) can produce a picture, and therefore a native shape,
+    that genuinely extends past x=1280/y=720. This is a last-resort backstop
+    for exactly that case: it only ever shrinks an already-too-large box down
+    to the canvas edge, so a shape that was already correctly sized is
+    returned completely unchanged. Anchored at the existing top-left rather
+    than rescaled proportionally, matching how a native table/chart's
+    content is captured (top-left-anchored rows/columns), not centered."""
+    left, top, width, height = rect
+    max_width = max(slide_width_emu - left, 0)
+    max_height = max(slide_height_emu - top, 0)
+    return left, top, min(width, max_width), min(height, max_height)
+
+
+def _slide_dimensions_emu(slide) -> tuple[int, int]:
+    """Return the real (slide_width, slide_height) in EMU for the
+    Presentation a given Slide belongs to.
+
+    Deliberately navigated from the slide itself (`slide.part.package
+    .presentation_part.presentation`) rather than taking `emu_per_px_x/y` as
+    a proxy for slide size (`_DESIGN_WIDTH_PX * emu_per_px_x`): several
+    existing callers pass those scale factors as their unscaled 1.0 default
+    when they don't otherwise need them, while still placing shapes at real,
+    fully-scaled EMU coordinates - multiplying a real coordinate against a
+    1.0 default would produce a nonsensical (tiny) "slide size" and clamp
+    away content that was never actually off-canvas. Reading the dimensions
+    straight from the presentation is correct regardless of what scale
+    factor any particular caller happens to have on hand."""
+    presentation = slide.part.package.presentation_part.presentation
+    return presentation.slide_width, presentation.slide_height
+
+
 def _iou(a: Rect, b: Rect) -> float:
     ax0, ay0, aw, ah = a
     bx0, by0, bw, bh = b

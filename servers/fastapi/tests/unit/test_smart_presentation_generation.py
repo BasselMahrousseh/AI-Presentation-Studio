@@ -1,5 +1,6 @@
 import asyncio
 import re
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -427,6 +428,77 @@ def test_smart_html_normalization_rejects_chart_scripts_with_network_access():
                     "new Chart(document.querySelector('#chart-a1b2c3'), "
                     "{type: 'bar', data: {labels: [], datasets: []}}); "
                     "})();</script>"
+                ),
+            )
+        )
+
+
+_requires_node = pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason=(
+        "node --check is the real mechanism under test here - both app "
+        "Dockerfiles install Node for the existing Puppeteer/export "
+        "pipeline, but this suite's own CI job doesn't explicitly set it "
+        "up, so skip rather than fail if a runner genuinely lacks it."
+    ),
+)
+
+# A real chart config literal with exactly one closing brace missing inside
+# a nested options.plugins.datalabels block - the same defect shape found in
+# the actually-reported broken slide ("Weighted Capability View").
+_BRACE_SHORT_CHART_SCRIPT = (
+    "new Chart(canvas, {type: 'bar', data: {}, options: {scales: "
+    "{x: {grid: {display: false}}}, plugins: {datalabels: "
+    "{anchor: 'end', align: 'end'}}});"
+)
+
+
+@_requires_node
+def test_find_chart_script_syntax_error_detects_unbalanced_braces():
+    error = smart_generation._find_chart_script_syntax_error(
+        _BRACE_SHORT_CHART_SCRIPT
+    )
+
+    assert error is not None
+    assert "SyntaxError" in error
+
+
+@_requires_node
+def test_find_chart_script_syntax_error_accepts_modern_syntax():
+    script = (
+        "new Chart(canvas, {type: 'bar', data: {}, options: {plugins: "
+        "{tooltip: {callbacks: {label: (ctx) => "
+        "`${ctx.label}: ${ctx?.raw ?? 0}%`}}}}});"
+    )
+
+    assert smart_generation._find_chart_script_syntax_error(script) is None
+
+
+def test_find_chart_script_syntax_error_fails_open_on_infra_failure(monkeypatch):
+    def fake_run(*_args, **_kwargs):
+        raise FileNotFoundError("node not found")
+
+    monkeypatch.setattr(smart_generation.subprocess, "run", fake_run)
+
+    assert (
+        smart_generation._find_chart_script_syntax_error(
+            _BRACE_SHORT_CHART_SCRIPT
+        )
+        is None
+    )
+
+
+@_requires_node
+def test_smart_html_normalization_rejects_syntactically_invalid_chart_script():
+    with pytest.raises(HTTPException, match="not valid JavaScript"):
+        normalize_smart_slide_html(
+            _smart_slide_html(
+                "Weighted Capability View",
+                body=(
+                    '<canvas id="chart-a1b2c3" width="600" height="300">'
+                    "</canvas><script>(() => { const canvas = "
+                    "document.querySelector('#chart-a1b2c3'); "
+                    f"{_BRACE_SHORT_CHART_SCRIPT} }})();</script>"
                 ),
             )
         )
@@ -909,6 +981,47 @@ def _layout_probe_image(tmp_path, *, overflow=False, footer=False, name="probe.p
     path = tmp_path / name
     image.save(path)
     return str(path)
+
+
+def _widened_viewport_probe_image(tmp_path, *, name="wide_probe.png"):
+    """A render stand-in at the real (widened) viewport size used for the
+    horizontal-overflow check: a clean e& slide (white 0-720, no violations)
+    on the left SMART_OVERFLOW_SAFE_AREA_WIDTH px, with the extra viewport
+    width past that filled with the sentinel page colour - exactly what a
+    real render looks like once the section renders flush-left in the wider
+    box. Reproduces a real regression: cropping the footer/overflow bands to
+    the full (now-wider) image width instead of stopping at
+    SMART_OVERFLOW_SAFE_AREA_WIDTH swept this legitimately-sentinel-colored
+    strip into the footer comparison and made every clean e& slide register
+    a full-depth false-positive footer violation."""
+    width = smart_generation.SMART_OVERFLOW_MEASURE_WIDTH
+    height = smart_generation.SMART_OVERFLOW_MEASURE_HEIGHT
+    canvas_w = smart_generation.SMART_OVERFLOW_SAFE_AREA_WIDTH
+    canvas_h = smart_generation.SMART_SLIDE_CANVAS_HEIGHT
+    image = Image.new("RGB", (width, height), smart_generation._SMART_OVERFLOW_SENTINEL_RGB)
+    for x in range(canvas_w):
+        for y in range(canvas_h):
+            image.putpixel((x, y), smart_generation._EAND_FOOTER_BACKGROUND_RGB)
+    path = tmp_path / name
+    image.save(path)
+    return str(path)
+
+
+def test_layout_check_footer_band_ignores_the_widened_viewports_own_sentinel_strip(
+    monkeypatch, tmp_path
+):
+    counter = {"n": 0}
+    _patch_render(
+        monkeypatch, _widened_viewport_probe_image(tmp_path), counter
+    )
+
+    fit_scale = asyncio.run(
+        smart_generation._check_smart_slide_layout(
+            _smart_slide_html(), check_eand_footer=True
+        )
+    )
+
+    assert fit_scale is None
 
 
 def _patch_render(monkeypatch, image_path, counter):

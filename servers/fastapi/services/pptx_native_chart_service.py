@@ -18,12 +18,14 @@ from services.pptx_native_export_shared import (
     _IOU_MIN,
     _alpha_from_css_color,
     _best_overlap_match,
+    _clamp_rect_to_slide,
     _expected_slide_count,
     _group_by_slide_order,
     _hex_from_css_color,
     _pt_from_css_px,
     _rect_to_emu,
     _shape_rect,
+    _slide_dimensions_emu,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -453,6 +455,20 @@ def _replace_picture_with_native_chart(
         picture_element = picture_shape._element
         original_index = list(sp_tree).index(picture_element)
         left, top, width, height = _shape_rect(picture_shape)
+        # Same backstop as the native-table pipeline (see
+        # _clamp_rect_to_slide's docstring): the flattened picture's own box
+        # is never validated against the slide canvas anywhere upstream, so
+        # clamp before building the native shape rather than trust it.
+        left, top, width, height = _clamp_rect_to_slide(
+            (left, top, width, height), *_slide_dimensions_emu(slide)
+        )
+        if width <= 0 or height <= 0:
+            LOGGER.info(
+                "pptx_native_chart_service: skip kind=%s (picture box entirely "
+                "off-canvas after clamping)",
+                kind,
+            )
+            return False
 
         # The picture must come out of the tree before add_chart() can be
         # called (python-pptx has no "build a chart, then swap it in" API),

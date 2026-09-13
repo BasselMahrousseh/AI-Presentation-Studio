@@ -18,12 +18,14 @@ from services.pptx_native_export_shared import (
     _IOU_MIN,
     _alpha_from_css_color,
     _best_overlap_match,
+    _clamp_rect_to_slide,
     _expected_slide_count,
     _group_by_slide_order,
     _hex_from_css_color,
     _pt_from_css_px,
     _rect_to_emu,
     _shape_rect,
+    _slide_dimensions_emu,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -421,6 +423,23 @@ def _replace_picture_with_native_table(
         picture_element = picture_shape._element
         original_index = list(sp_tree).index(picture_element)
         left, top, width, height = _shape_rect(picture_shape)
+        # The flattened picture this table is replacing was produced by the
+        # closed-source export converter's own table-flattening pass, whose
+        # own box is never validated against the slide canvas anywhere
+        # upstream (see _clamp_rect_to_slide's docstring) - a wide,
+        # non-`table-layout:fixed` table can genuinely bleed past the slide
+        # edge. Clamp before building the native shape so a bleeding table
+        # can never carry through unchanged.
+        slide_width_emu, slide_height_emu = _slide_dimensions_emu(slide)
+        left, top, width, height = _clamp_rect_to_slide(
+            (left, top, width, height), slide_width_emu, slide_height_emu
+        )
+        if width <= 0 or height <= 0:
+            LOGGER.info(
+                "pptx_native_table_service: skip table (picture box entirely "
+                "off-canvas after clamping)"
+            )
+            return False
         row_count, col_count = captured_table["rowCount"], captured_table["colCount"]
 
         # The picture must come out of the tree before add_table() can be
