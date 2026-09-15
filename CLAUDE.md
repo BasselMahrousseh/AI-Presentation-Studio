@@ -144,6 +144,91 @@ second request was clean). The restored file is currently **untracked on disk, n
 here so it isn't mistaken for stale scratch output and accidentally discarded; whether to commit it is a
 call for whoever owns `restructured-v3-branch`, not made unilaterally here.
 
+## Fixed and verified — `has_explicit_slide_structure` idempotency bug in `stream_outlines()` (previously: root-caused but unresolved)
+
+~~**Superseded — the entry originally here described this as unexplained "intermittent
+nondeterminism," root cause unknown, with a speculative DB-session-staleness theory.** That
+diagnosis was wrong. This was root-caused in a follow-up pass (same sibling-repo investigation,
+`GenAI-Workspace-Dev/CLAUDE.md`'s rule-4 entry) and is not random at all — every call is individually
+deterministic; what varied was how many times the SAME presentation's stream endpoint got called.~~
+
+**Full write-up, exact repro steps, and a suggested fix direction**:
+[`BUG_REPORT_has_explicit_slide_structure_idempotency.md`](BUG_REPORT_has_explicit_slide_structure_idempotency.md)
+(repo root, untracked — same status as the restored `TemplateV2LayoutPreview.tsx` file elsewhere in
+this doc: not committed by this session, intentionally left for whoever owns this codebase to review
+and commit).
+
+**One-line root cause**: `outlines.py`'s `stream_outlines()` gates `detect_explicit_slide_count()`
+behind `if presentation.n_slides > 0: ... else: <run detection>` — but the SAME function backfills
+`presentation.n_slides` from `0` to the real slide count as its own last step on success. So the
+**first** call to `GET /outlines/stream/{id}` for a presentation correctly detects structure; **every
+call after that**, for the same `id`, silently takes the other branch and never calls the detector at
+all, returning `has_explicit_slide_structure: false` regardless of the content. Confirmed by
+reproducing on demand: create → stream once (`true`, `n_slides` backfilled to the real count) →
+stream the identical `id` again with zero changes (`false`).
+
+**Why this isn't just a test-harness artifact**: `app/(presentation-generator)/outline/hooks/
+useOutlineStreaming.ts` has its own automatic `MAX_STREAM_RETRIES = 3` reconnect-on-`onerror` logic
+against the exact same `/outlines/stream/{presentationId}` URL — a real, shipped mechanism, not
+something a caller has to do anything unusual to trigger. Whether the *first*, dropped attempt's
+server-side generation reliably aborts before reaching the `n_slides` commit (via
+`disconnect_checker`) was not confirmed either way in this pass — if it doesn't, every retry a real
+user's browser performs on a dropped connection inherits the degraded path with no error shown
+anywhere. See the linked report's "Open question" section.
+
+**Impact**: not specific to any one caller — every consumer of the explicit-structure path (a fresh
+`/upload`, a chat-originated paste, a chat-originated "turn this into a deck") is exposed the moment
+its outline page's SSE connection drops even once during generation. ~~Not fixed here — this came
+from a sibling repo's feature-verification session, not a planned pass on this codebase; flagged
+with a full report for whoever picks it up next.~~
+
+**Fixed and verified in a later session.** Root cause was exactly as diagnosed above — the fix
+persists `has_explicit_slide_structure` itself on a new nullable `PresentationModel` column
+(`Optional[bool]`, `None` = "detection hasn't run yet for this presentation"), decoupling the
+decision from `n_slides` entirely: `stream_outlines()` now reuses the persisted value on any call
+after the first instead of re-deriving it from `n_slides > 0`, which is exactly what let the
+backfill silently flip the decision. First-call behavior (an explicit user-provided `n_slides` at
+creation still wins over content detection) is unchanged.
+
+**The disconnect-abort open question above is resolved — it was never actually a live risk.**
+Traced the code: `disconnect_checker` polls `request.is_disconnected()` every 100ms even while
+blocked on the LLM call, and raises `asyncio.CancelledError` the instant a disconnect is detected,
+which unwinds straight past the entire `n_slides`/commit block. A genuine client disconnect during
+generation reliably prevents the poisoning write. `useOutlineStreaming.ts`'s 3-retry logic is still
+a real, easy way to *hit* the bug (any second call to an already-streamed `id` triggers it, retry
+or not) — it just isn't amplified by wasted-generation-work the way the original open question
+worried it might be.
+
+**A migration-boundary gap was found and closed before this shipped, not left as a footnote.**
+Adding the column alone would have left every *pre-existing* row at `NULL`, and the fixed code's
+"not yet determined" branch would still read that row's already-`n_slides`-polluted state — silently
+reproducing this exact bug for every presentation that existed before the migration ran, the moment
+it was streamed again. Closed with a backfill baked into the same migration
+(`alembic/versions/8aa26640d3e8_add_has_explicit_slide_structure_to_presentations.py`), deriving the
+real value from each row's stored `content` via a frozen, deliberately-not-imported copy of the
+detection regex (migrations shouldn't depend on app code that can change later) rather than from
+`n_slides`. Idempotent by construction (`WHERE has_explicit_slide_structure IS NULL`).
+
+**A second, structurally similar `n_slides == 0`-as-"first call" instance exists** in
+`presentation.py`'s `_stream_smart_presentation()` (Smart-mode generation stream) — mostly already
+guarded by its own `is_resuming_generation` check, narrower reproduction window, different
+consequence (skips an LLM auto-slide-count call, not a client-visible flag). Deliberately left
+unfixed here per an explicit scoping decision — flagged for a separate follow-up, not silently
+absorbed into this change.
+
+**Verified**: `tests/integration/test_outlines_endpoint.py` (new) includes a repro-first regression
+test that failed at exactly the documented `true → false` symptom on the unfixed code before the fix
+landed, then passed 4 consecutive calls after; full backend suite (1166 tests) green, including
+`tests/unit/test_migrations.py` (the first backfill draft broke 5 of these — legacy-schema upgrade
+tests run the full migration chain against synthetic tables missing a `content` column — fixed by
+guarding the backfill on that column's existence, mirroring `REVISION_SMART_MODE_BACKFILL`'s own
+defensive pattern). Live, against the real running dev container: all pre-existing rows' backfilled
+values matched a fresh `detect_explicit_slide_count()` call with zero mismatches, a second backfill
+pass touched zero rows (idempotent), a fresh explicit-structure presentation returned `true` on 4/4
+real HTTP calls, and — the specific proof the migration-boundary gap is actually closed on real
+data, not just in tests — a presentation that existed *before this fix* returned `true` on 3/3 real
+calls after the migration's backfill ran.
+
 ## Codebase audit (this session) — what's fixed, what's deferred, and why
 
 A full-codebase review (two parallel Explore-agent passes over `servers/fastapi` and `servers/nextjs`, plus direct verification against the code and the live SQLite DB) found a cluster of real bugs, several of them silent. Four were fixed and verified live this session; the rest are deferred with reasons, not dropped. Full detailed writeup of every finding — including ones not listed below — sits in the plan file `abstract-tickling-teapot.md` if it's still around; this section is the durable record.

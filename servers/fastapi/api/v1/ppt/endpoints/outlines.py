@@ -3,6 +3,7 @@ import json
 import logging
 import traceback
 import uuid
+from typing import Optional
 import dirtyjson
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -40,6 +41,39 @@ from utils.web_search import get_selected_web_search_provider, get_web_search_ro
 
 OUTLINES_ROUTER = APIRouter(prefix="/outlines", tags=["Outlines"])
 LOGGER = logging.getLogger(__name__)
+
+
+def _get_n_slides_to_generate_from_detected_structure(
+    presentation: PresentationModel,
+) -> Optional[int]:
+    """Recompute how many outline slides an explicit "Slide N:"-structured
+    presentation's content calls for, or None if the content doesn't show
+    that pattern.
+
+    Safe to call on every request for the same presentation: content is set
+    once at creation and never mutated afterwards by this endpoint or by
+    PUT /outlines/{id}, and detect_explicit_slide_count() is a pure, cheap
+    regex scan with no I/O - so this is deliberately recomputed fresh on
+    every call rather than persisted, unlike has_explicit_slide_structure
+    itself (see the branch logic in stream_outlines() below).
+    """
+    detected_content_slides = detect_explicit_slide_count(presentation.content)
+    if detected_content_slides is None:
+        return None
+
+    # Content that already declares its own "Slide N -" sections gets
+    # exactly that many outline slides - no synthesized title item added
+    # on top. A dedicated title/cover slide is a template-level concern
+    # (e.g. the e& brand template already splices in its own fixed
+    # cover/thank-you slides outside the outline entirely), not something
+    # the outline itself should invent when the user has already laid out
+    # their own slides.
+    detected_total_slides = min(detected_content_slides, MAX_NUMBER_OF_SLIDES)
+    return get_no_of_outlines_to_generate_for_n_slides(
+        n_slides=detected_total_slides,
+        toc=presentation.include_table_of_contents,
+        title_slide=presentation.include_title_slide,
+    )
 
 
 @OUTLINES_ROUTER.get("/{id}", response_model=PresentationOutlineModel)
@@ -131,36 +165,50 @@ async def stream_outlines(
 
         presentation_outlines_text = ""
 
-        has_explicit_slide_structure = False
-        if presentation.n_slides > 0:
+        if presentation.has_explicit_slide_structure is not None:
+            # Detection already ran and was persisted on an earlier call to
+            # this endpoint for this presentation (a frontend reconnect
+            # retry, a manual page reload, etc.) - reuse that decision
+            # verbatim instead of re-deriving it from presentation.n_slides,
+            # which this same endpoint's own success path backfills from 0
+            # to the real generated slide count below. Re-deriving from
+            # n_slides here would silently flip this decision on every call
+            # after the first (see BUG_REPORT_has_explicit_slide_structure_
+            # idempotency.md). n_slides_to_generate itself is still
+            # recomputed fresh on every call, since it's per-call LLM-prompt
+            # input, not persisted state.
+            has_explicit_slide_structure = presentation.has_explicit_slide_structure
+            if has_explicit_slide_structure:
+                n_slides_to_generate = (
+                    _get_n_slides_to_generate_from_detected_structure(presentation)
+                )
+            elif presentation.n_slides > 0:
+                n_slides_to_generate = get_no_of_outlines_to_generate_for_n_slides(
+                    n_slides=presentation.n_slides,
+                    toc=presentation.include_table_of_contents,
+                    title_slide=presentation.include_title_slide,
+                )
+            else:
+                n_slides_to_generate = None
+        elif presentation.n_slides > 0:
+            # First call for this presentation. An explicit user-provided
+            # slide count at creation time wins over content-based structure
+            # detection - existing, deliberate product behavior, unchanged
+            # by this fix.
+            has_explicit_slide_structure = False
             n_slides_to_generate = get_no_of_outlines_to_generate_for_n_slides(
                 n_slides=presentation.n_slides,
                 toc=presentation.include_table_of_contents,
                 title_slide=presentation.include_title_slide,
             )
         else:
-            detected_content_slides = detect_explicit_slide_count(
-                presentation.content
+            # First call for this presentation, no explicit slide count -
+            # detect whether the content declares its own "Slide N:"
+            # structure.
+            n_slides_to_generate = _get_n_slides_to_generate_from_detected_structure(
+                presentation
             )
-            if detected_content_slides is not None:
-                has_explicit_slide_structure = True
-                # Content that already declares its own "Slide N -" sections
-                # gets exactly that many outline slides - no synthesized
-                # title item added on top. A dedicated title/cover slide is a
-                # template-level concern (e.g. the e& brand template already
-                # splices in its own fixed cover/thank-you slides outside the
-                # outline entirely), not something the outline itself should
-                # invent when the user has already laid out their own slides.
-                detected_total_slides = min(
-                    detected_content_slides, MAX_NUMBER_OF_SLIDES
-                )
-                n_slides_to_generate = get_no_of_outlines_to_generate_for_n_slides(
-                    n_slides=detected_total_slides,
-                    toc=presentation.include_table_of_contents,
-                    title_slide=presentation.include_title_slide,
-                )
-            else:
-                n_slides_to_generate = None
+            has_explicit_slide_structure = n_slides_to_generate is not None
 
         # Suppress the title-slide prompt directives for this generation only
         # when explicit slide structure was detected - the presentation's own
@@ -274,6 +322,14 @@ async def stream_outlines(
         if presentation.n_slides <= 0:
             presentation.n_slides = len(presentation_outlines.slides)
 
+        if presentation.has_explicit_slide_structure is None:
+            # Persist the explicit-structure decision exactly once, right
+            # alongside the n_slides backfill above and in the same commit -
+            # every later call to this endpoint for this presentation must
+            # see a non-None value here and reuse it (see the branch logic
+            # above) rather than re-deriving it.
+            presentation.has_explicit_slide_structure = has_explicit_slide_structure
+
         presentation.outlines = presentation_outlines.model_dump()
         presentation.title = get_presentation_title_from_presentation_outline(
             presentation_outlines
@@ -291,12 +347,17 @@ async def stream_outlines(
             key="presentation",
             value={
                 **presentation.model_dump(mode="json"),
-                # Ephemeral, not persisted - lets the outline-review page know
-                # not to ask for a synthesized title slide when it later
-                # kicks off Smart generation from this outline (a dedicated
-                # cover slide would either duplicate e&'s own fixed cover or,
-                # for plain Smart mode, force the user's real first section
-                # into a title-only slide).
+                # Backed by a real persisted column as of the
+                # has_explicit_slide_structure idempotency fix -
+                # presentation.model_dump() above already includes the same
+                # value under this same key. Kept as an explicit override
+                # for clarity and because it's cheap, not because it's still
+                # ephemeral. Lets the outline-review page know not to ask
+                # for a synthesized title slide when it later kicks off
+                # Smart generation from this outline (a dedicated cover
+                # slide would either duplicate e&'s own fixed cover or, for
+                # plain Smart mode, force the user's real first section into
+                # a title-only slide).
                 "has_explicit_slide_structure": has_explicit_slide_structure,
             },
         ).to_string()

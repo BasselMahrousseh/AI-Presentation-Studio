@@ -91,6 +91,18 @@ class PresentationModel(SQLModel, table=True):
     generation_status: Optional[Literal["in_progress", "completed"]] = Field(
         sa_column=Column(String, nullable=True), default=None
     )
+    # None until stream_outlines()'s explicit-slide-structure detection has run
+    # at least once for this presentation; True/False afterwards, and never
+    # recomputed once set. Exists specifically so a repeat call to
+    # GET /outlines/stream/{id} (a frontend reconnect retry, a manual page
+    # reload, etc.) reuses the first call's detection decision instead of
+    # re-deriving it from n_slides - which this same endpoint backfills from 0
+    # to a real slide count as a side effect of a prior successful call, and
+    # would otherwise silently flip this decision on every subsequent call.
+    # See stream_outlines() in api/v1/ppt/endpoints/outlines.py.
+    has_explicit_slide_structure: Optional[bool] = Field(
+        sa_column=Column(Boolean, nullable=True), default=None
+    )
 
     def get_new_presentation(self):
         return PresentationModel(
