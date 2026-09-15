@@ -24,3 +24,4 @@ class PresentationWithSlides(BaseModel):
     type: Literal["standard", "smart"] = "standard"
     community_design_ids: Optional[List[int]] = None
     smart_template: Optional[str] = None
+    generation_status: Optional[Literal["in_progress", "completed"]] = None

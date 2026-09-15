@@ -52,6 +52,13 @@ interface PresentationGenerationState {
    * being produced. Null for streams that do not report it. */
   streamGeneratedSlides: number | null;
   streamStageMessage: string | null;
+  /** True while the live-stream connection has dropped and is being
+   * retried (usePresentationStreaming's own scheduleRetry). Surfaced in
+   * the UI via getStreamProgressLabel so a dropped/restarting server
+   * connection shows a visible "Reconnecting…" state instead of silently
+   * retrying with no feedback - see CLAUDE.md's "Next.js exited cleanly"
+   * entry for why a connection can drop mid-generation. */
+  isStreamReconnecting: boolean;
   /** Set by /generation right before navigating to /outline, so the outline
    * page knows which Smart-mode target the user picked and (for e&) any
    * .pptx-extracted brand colors to carry into the eventual Smart generation
@@ -81,6 +88,7 @@ const initialState: PresentationGenerationState = {
   streamTotalSlides: null,
   streamGeneratedSlides: null,
   streamStageMessage: null,
+  isStreamReconnecting: false,
   pendingSmartTarget: null,
   pendingSmartBrandColors: null,
   outlineHasExplicitStructure: false,
@@ -145,12 +153,16 @@ const presentationGenerationSlice = createSlice({
       state.streamTotalSlides = null;
       state.streamGeneratedSlides = null;
       state.streamStageMessage = null;
+      state.isStreamReconnecting = false;
     },
     setStreamTotalSlides: (state, action: PayloadAction<number>) => {
       state.streamTotalSlides = action.payload;
     },
     setStreamGeneratedSlides: (state, action: PayloadAction<number>) => {
       state.streamGeneratedSlides = action.payload;
+    },
+    setStreamReconnecting: (state, action: PayloadAction<boolean>) => {
+      state.isStreamReconnecting = action.payload;
     },
     setStreamStageMessage: (state, action: PayloadAction<string | null>) => {
       state.streamStageMessage = action.payload;
@@ -621,6 +633,7 @@ export const {
   clearPresentationData,
   setStreamTotalSlides,
   setStreamGeneratedSlides,
+  setStreamReconnecting,
   setStreamStageMessage,
   clearOutlines,
   deleteSlideOutline,

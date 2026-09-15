@@ -1561,6 +1561,19 @@ def _attribute(attributes: str, name: str) -> str:
     return match.group(1) if match.group(1) is not None else match.group(2)
 
 
+def extract_slide_type_from_html(html: str) -> str:
+    """Reads back a slide's own data-slide-type attribute, same extraction
+    _slide_from_html uses when first parsing a slide. Used by
+    presentation.py to rebuild seed_accepted_slides entries (which need the
+    same {title, html, speaker_note, slide_type} shape _continuation_prompt
+    expects) from already-persisted slides on a resumed generation, since
+    slide_type itself isn't stored as its own SlideModel column."""
+    match = _SECTION_OPEN.match(html or "")
+    if match is None:
+        return "content"
+    return _attribute(match.group(1), "data-slide-type") or "content"
+
+
 def _validate_slide_position(
     slide: dict[str, str],
     index: int,
@@ -1781,16 +1794,25 @@ async def generate_smart_presentation(
     on_metrics: SmartMetricsCallback | None = None,
     smart_template: Optional[str] = None,
     smart_brand_colors: Optional[list[str]] = None,
+    seed_accepted_slides: Optional[list[dict[str, str]]] = None,
 ) -> dict[str, Any]:
     client = get_client(config=get_llm_config(use_openai_responses_api=True))
     model = get_model()
     LOGGER.info(
-        "[smart-generation] start model=%s slides=%s language=%s source_context=%s community_reference=%s smart_template=%s fonts=%s",
+        "[smart-generation] start model=%s slides=%s language=%s source_context=%s community_reference=%s smart_template=%s fonts=%s seeded_slides=%s",
         model, n_slides, language or "auto", bool(source_context),
         bool(community_design_context), smart_template or "none", list((fonts or {}).keys()),
+        len(seed_accepted_slides or []),
     )
     reasoning, configured_thinking_support = get_smart_reasoning_config(model)
-    accepted_slides: list[dict[str, str]] = []
+    # Pre-populated when resuming a generation whose earlier attempt was
+    # interrupted (e.g. a client disconnect/reload) after some slides were
+    # already accepted and persisted - see presentation.py's
+    # is_resuming_generation handling. The rest of this loop needs no other
+    # change: index math (len(accepted_slides) + len(attempt_slides)) and
+    # the completed_slides prompt-continuity parameter below already
+    # generalize correctly to a non-empty starting point.
+    accepted_slides: list[dict[str, str]] = list(seed_accepted_slides or [])
     title = ""
     last_exception: Exception | None = None
     retry_error: str | None = None

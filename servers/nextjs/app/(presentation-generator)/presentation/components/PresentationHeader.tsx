@@ -115,6 +115,7 @@ const PresentationHeader = ({
     streamTotalSlides,
     streamGeneratedSlides,
     streamStageMessage,
+    isStreamReconnecting,
   } = useSelector((state: RootState) => state.presentationGeneration);
 
   const slidesGenerated = presentationData?.slides?.length ?? 0;
@@ -124,6 +125,7 @@ const PresentationHeader = ({
     streamGeneratedSlides,
     streamStageMessage,
     slidesGenerated,
+    isReconnecting: isStreamReconnecting,
   });
   const { onUndo, onRedo, canUndo, canRedo } = usePresentationUndoRedo();
 

@@ -110,6 +110,7 @@ from services.community_presentations import (
 )
 from utils.llm_calls.generate_smart_presentation import (
     determine_smart_slide_count,
+    extract_slide_type_from_html,
     generate_smart_presentation,
     resolve_smart_slide_count,
 )
@@ -1736,7 +1737,17 @@ async def _stream_smart_presentation(
                     .order_by(SlideModel.index)
                 )
             )
-        if existing_slides:
+        # A presentation that was still "in_progress" when it was last
+        # touched (e.g. the client disconnected/reloaded mid-generation -
+        # see CLAUDE.md's "Next.js exited cleanly" entry) resumes
+        # generation below instead of replaying a false-complete deck;
+        # only a genuinely-finished presentation's existing slides
+        # short-circuit generation entirely, as before.
+        is_resuming_generation = (
+            bool(existing_slides)
+            and presentation.generation_status == "in_progress"
+        )
+        if existing_slides and not is_resuming_generation:
             logger.info("[smart-workflow] smart_stream_reusing_existing presentation_id=%s slides=%s", presentation_id, len(existing_slides))
             for slide in existing_slides:
                 yield SSEResponse(
@@ -1761,6 +1772,9 @@ async def _stream_smart_presentation(
                 value=response.model_dump(mode="json"),
             ).to_string()
             return
+
+        if is_resuming_generation:
+            logger.info("[smart-workflow] smart_stream_resuming presentation_id=%s already_persisted_slides=%s", presentation_id, len(existing_slides))
 
         yield SSEStatusResponse(status="Preparing Smart presentation").to_string()
         references = await load_community_references(
@@ -1801,12 +1815,24 @@ async def _stream_smart_presentation(
 
         is_eand_template = presentation.smart_template == EAND_SMART_TEMPLATE_ID
         fixed_slide_count = EAND_FIXED_SLIDE_COUNT if is_eand_template else 0
-        if presentation.n_slides > 0:
+        if is_resuming_generation:
+            # presentation.n_slides already holds the resolved TOTAL
+            # (content + fixed) written by the interrupted run's own early
+            # commit below - resolve_smart_slide_count()/
+            # determine_smart_slide_count() both expect a raw, not-yet-
+            # resolved user-requested content count, so re-running either
+            # here against an already-resolved total would double-apply
+            # the resolution and desync indices from what's already
+            # streamed and persisted.
+            slide_count = presentation.n_slides
+            generated_slide_count = slide_count - fixed_slide_count
+        elif presentation.n_slides > 0:
             # For e& decks, a user-specified count means content slides only —
             # the fixed cover/thank-you slides are added on top below.
             generated_slide_count = resolve_smart_slide_count(
                 presentation.n_slides, fixed_slide_count=fixed_slide_count
             )
+            slide_count = generated_slide_count + fixed_slide_count
         else:
             yield SSEStatusResponse(
                 status="Choosing the right number of slides"
@@ -1820,12 +1846,27 @@ async def _stream_smart_presentation(
                 minimum_slide_count=1,
                 fixed_slide_count=fixed_slide_count,
             )
-        slide_count = generated_slide_count + fixed_slide_count
-        presentation.n_slides = slide_count
-        presentation.fonts = reference_fonts or {
-            "Inter": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
-        }
-        logger.info("[smart-workflow] smart_generation_ready presentation_id=%s resolved_slides=%s generated_content_slides=%s source_context_chars=%s fonts=%s", presentation_id, slide_count, generated_slide_count, len(source_context), list(presentation.fonts.keys()))
+            slide_count = generated_slide_count + fixed_slide_count
+
+        if not is_resuming_generation:
+            presentation.n_slides = slide_count
+            presentation.fonts = reference_fonts or {
+                "Inter": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+            }
+            logger.info("[smart-workflow] smart_generation_ready presentation_id=%s resolved_slides=%s generated_content_slides=%s source_context_chars=%s fonts=%s", presentation_id, slide_count, generated_slide_count, len(source_context), list(presentation.fonts.keys()))
+            # Committed immediately, not just in the final block at the end
+            # of this function: a client reconnecting mid-generation needs
+            # the real target n_slides right away - an auto-slide-count
+            # Smart deck would otherwise still read n_slides=0 in the DB
+            # for the entire generation - and PresentationPage.tsx's
+            # blank-fallback guard on the frontend treats n_slides==0 as
+            # its signal that an empty slide list is a genuinely fresh
+            # presentation rather than one still streaming.
+            async with async_session_maker() as sql_session:
+                sql_session.add(presentation)
+                presentation.generation_status = "in_progress"
+                await sql_session.commit()
+
         yield SSEResponse(
             event="response",
             data=json.dumps(
@@ -1850,6 +1891,23 @@ async def _stream_smart_presentation(
             )
         ).to_string()
         streamed_slides: dict[int, SlideModel] = {}
+        if is_resuming_generation:
+            for slide in existing_slides:
+                streamed_slides[slide.index] = slide
+                yield SSEResponse(
+                    event="response",
+                    data=json.dumps(
+                        {
+                            "type": "slide_html",
+                            "index": slide.index,
+                            "slide_id": str(slide.id),
+                            "html": slide.html_content,
+                            "slide": slide.model_dump(mode="json"),
+                            "total_slides": slide_count,
+                            "generated_slide_count": generated_slide_count,
+                        }
+                    ),
+                ).to_string()
         generation_events: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
 
         async def emit_slide(index: int, slide: dict[str, str]) -> None:
@@ -1876,12 +1934,47 @@ async def _stream_smart_presentation(
                 streamed_slide.html_content = rendered_html
                 streamed_slide.speaker_note = ""
             logger.info("[smart-workflow] smart_slide_emitted presentation_id=%s index=%s title=%r html_chars=%s", presentation_id, persisted_index, slide["title"], len(slide["html"]))
+            # Persisted as soon as it's accepted, not just at the very end -
+            # this is what lets a disconnect mid-generation resume instead
+            # of losing everything already generated (see the
+            # generation_status handling above). Safe even though this
+            # same object is re-added in the final commit block below:
+            # that block always deletes every existing slide row for this
+            # presentation first, so there's no primary-key collision
+            # regardless of what was already persisted here.
+            async with async_session_maker() as sql_session:
+                await sql_session.merge(streamed_slide)
+                await sql_session.commit()
             await generation_events.put(("slide", streamed_slide))
 
         async def emit_metrics(metrics: TextGenerationMetrics) -> None:
             logger.info("[smart-workflow] smart_metrics presentation_id=%s input_tokens=%s output_tokens=%s duration_seconds=%.2f", presentation_id, metrics.input_tokens, metrics.output_tokens, metrics.duration_seconds)
             await generation_events.put(("metrics", metrics))
 
+        seed_accepted_slides: list[dict[str, str]] | None = None
+        if is_resuming_generation:
+            # Seeds the retry loop's own accepted_slides so generation
+            # resumes after the last already-persisted content slide
+            # instead of restarting from slide 1. Uses the persisted
+            # (brand-templated) html as continuity context rather than the
+            # model's original raw output, which isn't stored separately -
+            # an accepted, minor fidelity gap for e& decks specifically
+            # (their brand chrome is spliced in before this point), not a
+            # correctness issue: this text is only ever used as "already
+            # accepted" prompt continuity, never re-validated.
+            seed_accepted_slides = [
+                {
+                    "title": (slide.content or {}).get("title", ""),
+                    "html": slide.html_content,
+                    "speaker_note": slide.speaker_note or "",
+                    # completed_slides entries need this - see
+                    # extract_slide_type_from_html's own docstring for why
+                    # it isn't just read off the SlideModel directly.
+                    "slide_type": extract_slide_type_from_html(slide.html_content),
+                }
+                for slide in sorted(streamed_slides.values(), key=lambda s: s.index)
+                if not is_eand_template or slide.index > 0
+            ]
         generation_task = asyncio.create_task(
             generate_smart_presentation(
                 content=presentation.content,
@@ -1902,6 +1995,7 @@ async def _stream_smart_presentation(
                 on_metrics=emit_metrics,
                 smart_template=presentation.smart_template,
                 smart_brand_colors=presentation.smart_brand_colors,
+                seed_accepted_slides=seed_accepted_slides,
             )
         )
 
@@ -2072,6 +2166,7 @@ async def _stream_smart_presentation(
                 )
             )
             sql_session.add(presentation)
+            presentation.generation_status = "completed"
             sql_session.add_all(slides)
             await sql_session.commit()
         logger.info("[smart-workflow] smart_persisted presentation_id=%s slides=%s", presentation_id, len(slides))
@@ -2329,15 +2424,17 @@ async def stream_presentation(id: uuid.UUID):
         # never touches the DB, so there's nothing to hold a connection
         # open for until this point.
         async with async_session_maker() as sql_session:
-            # Moved this here to make sure new slides are generated before deleting the old ones
+            # Moved this here to make sure new slides are generated before deleting the old ones.
+            # Deleted and inserted in the SAME commit (not two separate ones,
+            # as this used to do) so there's no window where this
+            # presentation has zero slides in the DB if the process is
+            # interrupted between the delete and the insert.
             await sql_session.execute(
                 delete(SlideModel).where(
                     SlideModel.presentation == id,
                     SlideModel.owner_id == get_current_owner_id(),
                 )
             )
-            await sql_session.commit()
-
             sql_session.add(presentation)
             sql_session.add_all(slides)
             sql_session.add_all(generated_assets)

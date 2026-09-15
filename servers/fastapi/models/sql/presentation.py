@@ -85,6 +85,12 @@ class PresentationModel(SQLModel, table=True):
     smart_brand_colors: Optional[List[str]] = Field(
         sa_column=Column(JSON), default=None
     )
+    # "in_progress" while a Smart-mode generation is still streaming, "completed"
+    # once it finishes. None for rows created before this column existed, and for
+    # every non-Smart presentation, which persist slides in one shot as before.
+    generation_status: Optional[Literal["in_progress", "completed"]] = Field(
+        sa_column=Column(String, nullable=True), default=None
+    )
 
     def get_new_presentation(self):
         return PresentationModel(

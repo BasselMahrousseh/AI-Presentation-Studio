@@ -7,6 +7,7 @@ import {
   setStreamStageMessage,
   setStreamTotalSlides,
   setStreamGeneratedSlides,
+  setStreamReconnecting,
   type PresentationData,
 } from "@/store/slices/presentationGeneration";
 import { jsonrepair } from "jsonrepair";
@@ -173,6 +174,7 @@ export const usePresentationStreaming = (
       clearRetryTimer();
       setLoading(false);
       dispatch(setStreaming(false));
+      dispatch(setStreamReconnecting(false));
       setError(true);
       if (options.showToast !== false) {
         notify.error("Presentation streaming failed", description);
@@ -189,6 +191,10 @@ export const usePresentationStreaming = (
       console.warn(
         `Presentation stream retry ${retryCount}/${MAX_STREAM_RETRIES}: ${reason}`
       );
+      // Surfaced in the UI (getStreamProgressLabel) instead of retrying
+      // silently - cleared the moment any real event comes back in on the
+      // next connection, below.
+      dispatch(setStreamReconnecting(true));
 
       closeEventSource();
       clearRetryTimer();
@@ -299,6 +305,12 @@ export const usePresentationStreaming = (
           }
           return;
         }
+
+        // Any successfully-parsed event proves the connection is genuinely
+        // alive again, not just open - clear the reconnecting state here
+        // rather than in an onopen handler, since the server can accept a
+        // connection while still recompiling/restarting underneath it.
+        dispatch(setStreamReconnecting(false));
 
         switch (data.type) {
           case "fonts": {

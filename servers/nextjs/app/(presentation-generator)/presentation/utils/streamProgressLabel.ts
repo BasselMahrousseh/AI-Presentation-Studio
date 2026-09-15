@@ -11,6 +11,15 @@ interface StreamProgressLabelInput {
   streamGeneratedSlides?: number | null;
   streamStageMessage: string | null;
   slidesGenerated: number;
+  /**
+   * True while the stream's connection has dropped and a retry is pending
+   * (see usePresentationStreaming's scheduleRetry). Checked before the
+   * isStreaming gate below so a dropped connection during an otherwise
+   * in-progress generation reads as "Reconnecting…" instead of silently
+   * looking identical to a stall - see CLAUDE.md's "Next.js exited
+   * cleanly" entry for why a connection can drop mid-generation.
+   */
+  isReconnecting?: boolean;
 }
 
 /** Real, backend-reported status text for an in-progress generation stream — no fabricated numbers. */
@@ -20,7 +29,9 @@ export function getStreamProgressLabel({
   streamGeneratedSlides,
   streamStageMessage,
   slidesGenerated,
+  isReconnecting,
 }: StreamProgressLabelInput): string | null {
+  if (isReconnecting) return "Reconnecting to server…";
   if (!isStreaming) return null;
 
   // Prefer the count of slides being generated; fall back to the deck total

@@ -147,6 +147,16 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
     Set<string>
   >(() => new Set());
   const [error, setError] = useState(false);
+  // Held true for a short bounded window after `loading` first turns
+  // false, before the loading overlay is actually allowed to hide - a
+  // calibrated proxy for "the page has had a moment to render", not a
+  // guarantee. Without this, a page load that lands on a still-
+  // recompiling/restarting dev server (see CLAUDE.md's "Next.js exited
+  // cleanly" entry) can hide the overlay and paint real slide content
+  // before Smart-mode's per-iframe Tailwind JIT compile (SmartHtmlSlide.tsx,
+  // which has no completion signal wired up) has actually finished.
+  const [contentSettled, setContentSettled] = useState(false);
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const slidesScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const templateV2EditorLoadedKeyRef = useRef<string | null>(null);
   const router = useRouter();
@@ -159,6 +169,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
     streamTotalSlides,
     streamGeneratedSlides,
     streamStageMessage,
+    isStreamReconnecting,
   } = useSelector((state: RootState) => state.presentationGeneration);
   const slidesLength = presentationData?.slides?.length ?? 0;
   const streamProgressLabel = getStreamProgressLabel({
@@ -167,6 +178,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
     streamGeneratedSlides,
     streamStageMessage,
     slidesGenerated: slidesLength,
+    isReconnecting: isStreamReconnecting,
   });
   const isSmartPresentation =
     searchParams.get("type") === "smart" ||
@@ -226,7 +238,19 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
       error ||
       stream ||
       !isTemplateV2Presentation ||
-      slidesLength > 0
+      slidesLength > 0 ||
+      // isTemplateV2Presentation is true for every presentation (version
+      // is hardcoded to "v2-standard" on create regardless of generation
+      // mode), so it isn't actually a safe guard on its own. n_slides is
+      // the backend's own authoritative target slide count - requiring it
+      // to also be 0 is what distinguishes a genuinely fresh, empty
+      // presentation from a fetch that raced a still-generating/
+      // reconnecting one (see CLAUDE.md's "Next.js exited cleanly" entry)
+      // and transiently read back zero slides for a deck that isn't
+      // actually empty. A Smart generation's real target n_slides is
+      // itself now persisted as soon as it's resolved (not just at the
+      // end), so this can't misfire during a genuine in-progress stream.
+      (presentationData?.n_slides ?? 0) !== 0
     ) {
       return;
     }
@@ -252,7 +276,28 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
   ]);
 
   useEffect(() => {
-    if (!loading) {
+    if (loading) {
+      setContentSettled(false);
+      if (settleTimerRef.current) {
+        clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = null;
+      }
+      return;
+    }
+    settleTimerRef.current = setTimeout(() => {
+      setContentSettled(true);
+      settleTimerRef.current = null;
+    }, 900);
+    return () => {
+      if (settleTimerRef.current) {
+        clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = null;
+      }
+    };
+  }, [loading]);
+
+  useEffect(() => {
+    if (!loading && contentSettled) {
       setLoadingState(IDLE_LOADING_STATE);
       return;
     }
@@ -266,7 +311,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
       ...STREAM_LOADING_STATE,
       message: streamProgressLabel || STREAM_LOADING_STATE.message,
     });
-  }, [loading, stream, streamProgressLabel]);
+  }, [loading, contentSettled, stream, streamProgressLabel]);
 
   useEffect(() => {
     if (!isStreaming) return;
