@@ -380,6 +380,33 @@ export class PresentationGenerationApi {
     }
   }
 
+  static async acknowledgeQualityFlagGroups(
+    presentationId: string,
+    groupKeys: string[]
+  ): Promise<{ acknowledged_quality_flag_groups: string[] }> {
+    try {
+      const response = await fetch(
+        getApiUrl(
+          `/api/v1/ppt/outlines/${presentationId}/quality-flags/acknowledge`
+        ),
+        {
+          method: "POST",
+          headers: getHeader(),
+          body: JSON.stringify({ group_keys: groupKeys }),
+          cache: "no-cache",
+        }
+      );
+
+      return await ApiResponseHandler.handleResponse(
+        response,
+        "Failed to acknowledge data quality flags"
+      );
+    } catch (error) {
+      console.error("error acknowledging quality flag groups", error);
+      throw error;
+    }
+  }
+
   // IMAGE AND ICON SEARCH
 
 

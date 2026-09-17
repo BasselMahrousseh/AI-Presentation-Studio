@@ -816,3 +816,43 @@ def test_removed_intermediate_revision_upgrades_through_consolidated_migration(
         assert "clusters" not in template_columns
     finally:
         engine.dispose()
+
+
+def test_upgrade_from_has_explicit_slide_structure_revision_adds_quality_flag_columns(
+    tmp_path,
+):
+    database_url = f"sqlite:///{tmp_path / 'pre-quality-flags.db'}"
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE presentations (id TEXT PRIMARY KEY, "
+                    "has_explicit_slide_structure BOOLEAN)"
+                )
+            )
+            connection.execute(
+                text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
+            )
+            connection.execute(
+                text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
+                {"revision": migrations.REVISION_HAS_EXPLICIT_SLIDE_STRUCTURE},
+            )
+
+        command.upgrade(_alembic_config(database_url), "head")
+
+        with engine.connect() as connection:
+            version = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            columns = {
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(presentations)"))
+            }
+
+        assert version == migrations.REVISION_HEAD
+        assert {"source_quality_flags", "acknowledged_quality_flag_groups"}.issubset(
+            columns
+        )
+    finally:
+        engine.dispose()

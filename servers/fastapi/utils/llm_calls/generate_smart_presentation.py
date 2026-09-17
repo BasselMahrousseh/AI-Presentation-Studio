@@ -524,6 +524,21 @@ shape. One pattern does not survive that conversion and must be avoided:
   stat callout ("48" in a large red font above or beside "teams expected" in
   smaller white text as two separate blocks) is safe; the same pairing
   written as one inline run of mixed-style text is not.
+- Every exported shape's position is captured once from a single browser
+  render and frozen — nothing in the exported file re-flows the way the live
+  HTML does. Never set `font-family` to a custom Google/web font (e.g.
+  "Inter", "Poppins", "Instrument Sans", "Manrope") unless it is explicitly
+  listed under "Available fonts" below. This file is never embedded in the
+  exported .pptx, so opening it on a machine without that exact font
+  installed substitutes a different font with different letter widths - a
+  title that wrapped to one line at capture time can wrap to an extra line
+  when reopened, and since nothing below it can shift down to compensate, it
+  silently overlaps the next element. When no font is listed under
+  "Available fonts" (the common case, with no uploaded brand reference),
+  set `font-family` on the root `<section>` to a plain, near-universally
+  installed system font stack instead - e.g. `Calibri, Arial, sans-serif` or
+  `Georgia, 'Times New Roman', serif` for a serif deck - never a Google Fonts
+  name, however it reads visually.
 """
 
 SMART_DIRECT_HTML_PROMPT = (

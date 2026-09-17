@@ -4,6 +4,7 @@ import { notify } from "@/components/ui/sonner";
 import {
   setOutlines,
   setOutlineHasExplicitStructure,
+  setQualityFlagGroups,
 } from "@/store/slices/presentationGeneration";
 import { jsonrepair } from "jsonrepair";
 import { RootState } from "@/store/store";
@@ -23,7 +24,7 @@ export const useOutlineStreaming = (
   enabled = true
 ) => {
   const dispatch = useDispatch();
-  const { outlines } = useSelector(
+  const { outlines, outlinesPresentationId } = useSelector(
     (state: RootState) => state.presentationGeneration
   );
   const [isStreaming, setIsStreaming] = useState(false);
@@ -32,13 +33,21 @@ export const useOutlineStreaming = (
   const [highestActiveIndex, setHighestActiveIndex] = useState<number>(-1);
   const [statusMessage, setStatusMessage] = useState(DEFAULT_STATUS_MESSAGE);
   const outlinesRef = useRef<{ content: string }[]>(outlines);
+  // Tracks which presentation_id `outlinesRef` actually belongs to, so a
+  // client-side navigation to a new presentation (which changes this hook's
+  // `presentationId` argument before the store has a chance to clear the
+  // previous presentation's outlines) can't be mistaken for "this
+  // presentation's outline is already loaded" - see setOutlines/
+  // setPresentationId in the Redux slice for where this is kept in sync.
+  const outlinesPresentationIdRef = useRef<string | null>(outlinesPresentationId);
   const prevSlidesRef = useRef<{ content: string }[]>([]);
   const activeIndexRef = useRef<number>(-1);
   const highestIndexRef = useRef<number>(-1);
 
   useEffect(() => {
     outlinesRef.current = outlines;
-  }, [outlines]);
+    outlinesPresentationIdRef.current = outlinesPresentationId;
+  }, [outlines, outlinesPresentationId]);
 
   useEffect(() => {
     const resetStreamingState = (message = DEFAULT_STATUS_MESSAGE) => {
@@ -52,7 +61,11 @@ export const useOutlineStreaming = (
       highestIndexRef.current = -1;
     };
 
-    if (!enabled || !presentationId || outlinesRef.current.length > 0) {
+    const hasFreshOutlinesForThisPresentation =
+      outlinesRef.current.length > 0 &&
+      outlinesPresentationIdRef.current === presentationId;
+
+    if (!enabled || !presentationId || hasFreshOutlinesForThisPresentation) {
       resetStreamingState();
       return;
     }
@@ -156,6 +169,12 @@ export const useOutlineStreaming = (
         }
 
         switch (data.type) {
+          case "quality_flags":
+            if (Array.isArray(data.groups)) {
+              dispatch(setQualityFlagGroups(data.groups));
+            }
+            break;
+
           case "status":
             if (data.status) {
               setStatusMessage(data.status);

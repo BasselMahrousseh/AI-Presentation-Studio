@@ -14,6 +14,7 @@ import {
   setOutlines,
   setPresentationId,
   clearPendingSmartGeneration,
+  acknowledgeQualityFlagGroupLocally,
 } from "@/store/slices/presentationGeneration";
 import {
   limitOutlines,
@@ -27,6 +28,7 @@ import { useOutlineManagement } from "../hooks/useOutlineManagement";
 import { useOutlineStreaming } from "../hooks/useOutlineStreaming";
 import { usePresentationGeneration } from "../hooks/usePresentationGeneration";
 import { useTemplateSummaries } from "../../hooks/useTemplateSummaries";
+import DataQualityPanel from "./DataQualityPanel";
 import EmptyStateView from "./EmptyStateView";
 import OutlineContent from "./OutlineContent";
 import OutlineStandardHeader from "./OutlineStandardHeader";
@@ -84,7 +86,11 @@ const OutlinePage: React.FC = () => {
     presentation_id: storedPresentationId,
     outlines,
     pendingSmartTarget,
+    qualityFlagGroups,
   } = useSelector((state: RootState) => state.presentationGeneration);
+  const [acknowledgingGroupKey, setAcknowledgingGroupKey] = useState<
+    string | null
+  >(null);
   const queryPresentationId = searchParams.get("id")?.trim() || null;
   const suggestedTemplate = searchParams.get("template")?.trim() || null;
   const autoStart = searchParams.get("autostart") === "true";
@@ -130,8 +136,14 @@ const OutlinePage: React.FC = () => {
 
   const outlineControlsBusy =
     streamState.isLoading || streamState.isStreaming;
+  const allQualityFlagsAcknowledged = qualityFlagGroups.every(
+    (group) => group.acknowledged
+  );
   const isOutlineReady =
-    hasOutlineStreamFinished && !outlineControlsBusy && outlines.length > 0;
+    hasOutlineStreamFinished &&
+    !outlineControlsBusy &&
+    outlines.length > 0 &&
+    allQualityFlagsAcknowledged;
   const isOutlineAssistantVisible = !isTemplateStage && hasSelectedTemplate;
   const outlineStreamFinished =
     !isTemplateStage &&
@@ -207,6 +219,27 @@ const OutlinePage: React.FC = () => {
     };
     dispatch(setOutlines(updatedOutlines));
   };
+
+  const handleAcknowledgeQualityFlagGroup = useCallback(
+    async (groupKey: string) => {
+      if (!presentation_id) {
+        return;
+      }
+      setAcknowledgingGroupKey(groupKey);
+      try {
+        await PresentationGenerationApi.acknowledgeQualityFlagGroups(
+          presentation_id,
+          [groupKey]
+        );
+        dispatch(acknowledgeQualityFlagGroupLocally(groupKey));
+      } catch (error) {
+        console.error("Failed to acknowledge data quality flag group", error);
+      } finally {
+        setAcknowledgingGroupKey(null);
+      }
+    },
+    [dispatch, presentation_id]
+  );
 
   const handleOutlineChanged = useCallback(async () => {
     if (!presentation_id) {
@@ -344,6 +377,11 @@ const OutlinePage: React.FC = () => {
         <>
           <div className="lg:mr-[369px]">
             <main className="mx-auto w-[calc(100%-2.5rem)] max-w-[967px] pb-28 pt-7 sm:w-[calc(100%-5rem)] sm:pt-9">
+              <DataQualityPanel
+                groups={qualityFlagGroups}
+                onAcknowledge={handleAcknowledgeQualityFlagGroup}
+                acknowledgingGroupKey={acknowledgingGroupKey}
+              />
               <div>
                 <OutlineContent
                   outlines={outlines}

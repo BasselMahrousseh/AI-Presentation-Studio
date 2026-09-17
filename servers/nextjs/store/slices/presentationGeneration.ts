@@ -24,6 +24,25 @@ export interface PresentationData {
   structure?: any;
 }
 
+export interface VisualQualityFlag {
+  source_file: string;
+  location: string;
+  visual_label?: string | null;
+  visual_kind: "chart" | "table" | "image";
+  status: "native_data" | "partial" | "image_only";
+  detail: string;
+  recommendation: string;
+}
+
+export interface QualityFlagGroup {
+  group_key: string;
+  source_file: string;
+  status: "native_data" | "partial" | "image_only";
+  summary: string;
+  items: VisualQualityFlag[];
+  acknowledged: boolean;
+}
+
 export interface ChatHtmlSelection {
   slideId?: string | null;
   slideIndex: number;
@@ -39,6 +58,12 @@ interface PresentationGenerationState {
   isLoading: boolean;
   isStreaming: boolean | null;
   outlines: { content: string }[];
+  /** The presentation_id that `outlines` was populated for, set alongside it
+   * in setOutlines. Lets consumers (e.g. useOutlineStreaming's SSE-reconnect
+   * guard) tell genuinely-loaded outlines apart from another presentation's
+   * stale data still sitting in this global field after a client-side
+   * navigation - `outlines.length > 0` alone can't make that distinction. */
+  outlinesPresentationId: string | null;
   error: string | null;
   presentationData: PresentationData | null;
   isSlidesRendered: boolean;
@@ -72,11 +97,17 @@ interface PresentationGenerationState {
    * own fixed cover or force a real content section into a title-only
    * slide. Resets when a new presentation_id is set. */
   outlineHasExplicitStructure: boolean;
+  /** Populated from the outline stream's "quality_flags" SSE event - groups of
+   * source-document charts/tables whose data couldn't be fully extracted, which
+   * the outline-review Data Quality panel must show before Generate is enabled.
+   * Resets when a new presentation_id is set. */
+  qualityFlagGroups: QualityFlagGroup[];
 }
 
 const initialState: PresentationGenerationState = {
   presentation_id: null,
   outlines: [],
+  outlinesPresentationId: null,
   isSlidesRendered: false,
   isLayoutLoading: false,
   isLoading: false,
@@ -92,6 +123,7 @@ const initialState: PresentationGenerationState = {
   pendingSmartTarget: null,
   pendingSmartBrandColors: null,
   outlineHasExplicitStructure: false,
+  qualityFlagGroups: [],
 };
 
 const presentationGenerationSlice = createSlice({
@@ -113,6 +145,9 @@ const presentationGenerationSlice = createSlice({
       if (state.presentation_id !== action.payload) {
         state.chatHtmlSelection = null;
         state.outlineHasExplicitStructure = false;
+        state.qualityFlagGroups = [];
+        state.outlines = [];
+        state.outlinesPresentationId = null;
       }
       state.presentation_id = action.payload;
       state.error = null;
@@ -122,6 +157,23 @@ const presentationGenerationSlice = createSlice({
       action: PayloadAction<boolean>
     ) => {
       state.outlineHasExplicitStructure = action.payload;
+    },
+    setQualityFlagGroups: (
+      state,
+      action: PayloadAction<QualityFlagGroup[]>
+    ) => {
+      state.qualityFlagGroups = action.payload;
+    },
+    acknowledgeQualityFlagGroupLocally: (
+      state,
+      action: PayloadAction<string>
+    ) => {
+      const group = state.qualityFlagGroups.find(
+        (candidate) => candidate.group_key === action.payload
+      );
+      if (group) {
+        group.acknowledged = true;
+      }
     },
     setPendingSmartGeneration: (
       state,
@@ -169,10 +221,12 @@ const presentationGenerationSlice = createSlice({
     },
     clearOutlines: (state) => {
       state.outlines = [];
+      state.outlinesPresentationId = null;
     },
     // Set outlines
     setOutlines: (state, action: PayloadAction<{ content: string }[]>) => {
       state.outlines = limitOutlines(action.payload);
+      state.outlinesPresentationId = state.presentation_id;
     },
     // Set presentation data
     setPresentationData: (state, action: PayloadAction<PresentationData>) => {
@@ -628,6 +682,8 @@ export const {
   setPendingSmartGeneration,
   clearPendingSmartGeneration,
   setOutlineHasExplicitStructure,
+  setQualityFlagGroups,
+  acknowledgeQualityFlagGroupLocally,
   setSlidesRendered,
   setError,
   clearPresentationData,

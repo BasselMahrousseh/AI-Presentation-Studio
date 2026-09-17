@@ -40,6 +40,7 @@ from models.presentation_structure_model import PresentationStructureModel
 from models.presentation_with_slides import (
     PresentationWithSlides,
 )
+from services.document_fact_dedup_service import build_deduplicated_context
 from services.documents_loader import DocumentsLoader
 from services.chat.slide_ui_helpers import _normalize_generated_image_fit
 from services.temp_file_service import TEMP_FILE_SERVICE
@@ -50,6 +51,7 @@ from services.mem0_presentation_memory_service import (
 )
 from utils.dict_utils import deep_update
 from utils.export_utils import export_presentation
+from utils.llm_utils import DisconnectChecker
 from utils.llm_calls.generate_presentation_outlines import (
     generate_ppt_outline,
     get_messages as get_outline_messages,
@@ -1715,6 +1717,7 @@ async def prepare_presentation(
 
 async def _stream_smart_presentation(
     presentation: PresentationModel,
+    disconnect_checker: Optional[DisconnectChecker] = None,
 ) -> StreamingResponse:
     presentation_id = presentation.id
     logger.info(
@@ -1794,7 +1797,14 @@ async def _stream_smart_presentation(
             await documents_loader.load_documents(
                 TEMP_FILE_SERVICE.create_temp_dir()
             )
-            source_parts.extend(document for document in documents_loader.documents if document)
+            document_context = await build_deduplicated_context(
+                presentation.file_paths,
+                documents_loader.documents,
+                documents_loader.structured_pptx_data,
+                disconnect_checker=disconnect_checker,
+            )
+            if document_context:
+                source_parts.append(document_context)
             logger.info("[smart-workflow] smart_documents_loaded presentation_id=%s documents=%s", presentation_id, len(documents_loader.documents))
 
         if presentation.web_search:
@@ -2191,7 +2201,7 @@ async def _stream_smart_presentation(
 
 
 @PRESENTATION_ROUTER.get("/stream/{id}", response_model=PresentationWithSlides)
-async def stream_presentation(id: uuid.UUID):
+async def stream_presentation(id: uuid.UUID, request: Request):
     # This request can run for several minutes (Smart mode especially:
     # per-slide LLM calls plus Puppeteer layout-check renders). Fetching
     # `presentation` through a dependency-injected session that FastAPI
@@ -2208,7 +2218,9 @@ async def stream_presentation(id: uuid.UUID):
         raise HTTPException(status_code=404, detail="Presentation not found")
     logger.info("[smart-workflow] stream_requested presentation_id=%s mode=%s stored_slides=%s", id, presentation.generation_mode, presentation.n_slides)
     if presentation.generation_mode == "smart":
-        return await _stream_smart_presentation(presentation)
+        return await _stream_smart_presentation(
+            presentation, disconnect_checker=request.is_disconnected
+        )
     if not presentation.structure:
         raise HTTPException(
             status_code=400,
@@ -2675,7 +2687,12 @@ async def generate_presentation_handler(
                 await documents_loader.load_documents()
                 documents = documents_loader.documents
                 if documents:
-                    additional_context = "\n\n".join(documents)
+                    additional_context = await build_deduplicated_context(
+                        request.files,
+                        documents,
+                        documents_loader.structured_pptx_data,
+                        disconnect_checker=disconnect_checker,
+                    )
 
             # Finding number of slides to generate by considering table of contents
             n_slides_to_generate = request.n_slides

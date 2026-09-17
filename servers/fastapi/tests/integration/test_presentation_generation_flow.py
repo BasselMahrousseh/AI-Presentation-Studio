@@ -27,6 +27,9 @@ class FakeRequest:
         self.cookies: dict[str, str] = {}
         self.state = SimpleNamespace()
 
+    async def is_disconnected(self) -> bool:
+        return False
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -831,7 +834,9 @@ def test_stream_presentation_uses_template_schema_for_content_generation():
         }
 
     async def consume_stream():
-        response = await presentation_endpoint.stream_presentation(id=presentation_id)
+        response = await presentation_endpoint.stream_presentation(
+            id=presentation_id, request=FakeRequest()
+        )
         chunks = []
         async for chunk in response.body_iterator:
             chunks.append(chunk)
@@ -1083,3 +1088,74 @@ def test_derive_presentation_hydrates_template_slide_ui():
     assert new_presentation.version == PresentationVersion.V2_STANDARD
     assert new_slide.presentation == new_presentation.id
     assert title_element["runs"][0]["text"] == "Derived headline"
+
+
+def test_smart_stream_threads_disconnect_checker_into_document_dedup():
+    # Regression test: Smart-mode presentation streaming used to omit
+    # disconnect_checker from its build_deduplicated_context call (unlike
+    # the outline-stream and legacy-generate call sites), so a client
+    # disconnect during Smart generation could never cancel the in-flight
+    # per-source LLM fact-extraction work.
+    presentation_id = uuid.uuid4()
+    now = datetime.now()
+    presentation = PresentationModel(
+        id=presentation_id,
+        version=PresentationVersion.V2_STANDARD,
+        generation_mode="smart",
+        generation_status="not_started",
+        content="deck",
+        n_slides=0,
+        language="English",
+        title="Deck",
+        file_paths=["/tmp/source.pdf"],
+        community_design_ids=None,
+        web_search=False,
+        created_at=now,
+        updated_at=now,
+    )
+    session = FakeAsyncSession(get_results={presentation_id: presentation})
+
+    class _FakeDocumentsLoader:
+        def __init__(self, *_args, **_kwargs):
+            self.documents = ["fake document text"]
+            self.structured_pptx_data = None
+
+        async def load_documents(self, *_args, **_kwargs):
+            return None
+
+    captured_kwargs: dict = {}
+
+    class _StopTest(Exception):
+        pass
+
+    async def fake_build_deduplicated_context(*_args, **kwargs):
+        captured_kwargs.update(kwargs)
+        raise _StopTest
+
+    sentinel_checker = AsyncMock(return_value=False)
+
+    async def consume_stream():
+        response = await presentation_endpoint._stream_smart_presentation(
+            presentation, disconnect_checker=sentinel_checker
+        )
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk)
+        return chunks
+
+    with patch.object(
+        presentation_endpoint,
+        "async_session_maker",
+        lambda: session,
+    ), patch.object(
+        presentation_endpoint,
+        "DocumentsLoader",
+        new=_FakeDocumentsLoader,
+    ), patch.object(
+        presentation_endpoint,
+        "build_deduplicated_context",
+        new=fake_build_deduplicated_context,
+    ):
+        _run(consume_stream())
+
+    assert captured_kwargs.get("disconnect_checker") is sentinel_checker

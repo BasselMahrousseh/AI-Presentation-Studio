@@ -2173,3 +2173,16 @@ def test_final_parse_honours_the_static_waiver_at_one_index():
         response, **common, skip_layout_heuristics_at_index=0
     )
     assert [slide["title"] for slide in slides] == ["Stuck", "Clean"]
+
+
+def test_pptx_export_fidelity_prompt_forbids_custom_web_fonts_with_no_reference():
+    """Part B fix: exported shapes are frozen at absolute positions with no
+    embedded font, so a custom web font (e.g. "Inter") not installed on the
+    machine that opens the file can wrap differently and overlap whatever
+    follows it. The model must be told to fall back to a universal system
+    font stack when no reference font was supplied."""
+    prompt = smart_generation.SMART_PPTX_EXPORT_FIDELITY_PROMPT
+
+    assert "Never set `font-family` to a custom Google/web font" in prompt
+    assert "Inter" in prompt
+    assert "Calibri, Arial, sans-serif" in prompt

@@ -9,6 +9,7 @@ import pytest
 
 from api.v1.ppt.endpoints import outlines as outlines_endpoint
 from constants.presentation import MAX_NUMBER_OF_SLIDES
+from models.extraction_quality import VisualExtractability, VisualQualityFlag
 from models.sql.presentation import PresentationModel, PresentationVersion
 from tests.conftest import FakeAsyncSession
 from utils.outline_utils import get_no_of_outlines_to_generate_for_n_slides
@@ -75,6 +76,16 @@ async def _drain_and_get_presentation_payload(response) -> dict:
     return payload
 
 
+async def _drain_and_collect_events(response) -> list[dict]:
+    events = []
+    async for chunk in response.body_iterator:
+        for block in chunk.split("\n\n"):
+            if not block.startswith("event: response\ndata: "):
+                continue
+            events.append(json.loads(block[len("event: response\ndata: "):]))
+    return events
+
+
 def _stream_outlines_patches(calls: list):
     return (
         patch.object(
@@ -95,12 +106,16 @@ def _stream_outlines_patches(calls: list):
     )
 
 
-async def _stream_once(presentation_id: uuid.UUID, session: FakeAsyncSession) -> dict:
-    response = await outlines_endpoint.stream_outlines(
+async def _stream_once_response(presentation_id: uuid.UUID, session: FakeAsyncSession):
+    return await outlines_endpoint.stream_outlines(
         id=presentation_id,
         request=FakeRequestWithDisconnect(),
         sql_session=session,
     )
+
+
+async def _stream_once(presentation_id: uuid.UUID, session: FakeAsyncSession) -> dict:
+    response = await _stream_once_response(presentation_id, session)
     return await _drain_and_get_presentation_payload(response)
 
 
@@ -195,3 +210,119 @@ def test_stream_outlines_detected_slide_target_is_stable_across_calls(marker_cou
     assert calls[1] == expected
     assert first["has_explicit_slide_structure"] is True
     assert second["has_explicit_slide_structure"] is True
+
+
+def _fake_documents_loader(quality_flags: list[VisualQualityFlag]):
+    class FakeDocumentsLoader:
+        def __init__(self, *args, **kwargs):
+            self.documents = ["extracted document text"]
+            self.structured_pptx_data = [None]
+            self.quality_flags = quality_flags
+
+        async def load_documents(self, *args, **kwargs):
+            return None
+
+    return FakeDocumentsLoader
+
+
+def test_stream_outlines_emits_and_persists_quality_flag_groups():
+    presentation_id = uuid.uuid4()
+    presentation = _make_presentation(
+        "Combine these two reports.",
+        file_paths=["/tmp/a.pdf", "/tmp/b.pptx"],
+        id=presentation_id,
+    )
+    session = FakeAsyncSession(get_results={presentation_id: presentation})
+    calls: list = []
+    flags = [
+        VisualQualityFlag(
+            source_file="a.pdf",
+            location="Page 1",
+            visual_kind="image",
+            status=VisualExtractability.IMAGE_ONLY,
+            detail="detail",
+            recommendation="recommendation",
+        )
+    ]
+
+    p1, p2, p3 = _stream_outlines_patches(calls)
+    with p1, p2, p3, patch.object(
+        outlines_endpoint, "DocumentsLoader", _fake_documents_loader(flags)
+    ):
+        response = _run(_stream_once_response(presentation_id, session))
+        events = _run(_drain_and_collect_events(response))
+
+    quality_flag_events = [event for event in events if event.get("type") == "quality_flags"]
+    assert len(quality_flag_events) == 1
+    groups = quality_flag_events[0]["groups"]
+    assert len(groups) == 1
+    assert groups[0]["group_key"] == "a.pdf::image_only"
+    assert groups[0]["acknowledged"] is False
+
+    assert presentation.source_quality_flags == [flags[0].model_dump(mode="json")]
+
+
+def test_stream_outlines_reflects_previously_acknowledged_groups():
+    presentation_id = uuid.uuid4()
+    presentation = _make_presentation(
+        "Combine these two reports.",
+        file_paths=["/tmp/a.pdf"],
+        acknowledged_quality_flag_groups=["a.pdf::image_only"],
+        id=presentation_id,
+    )
+    session = FakeAsyncSession(get_results={presentation_id: presentation})
+    calls: list = []
+    flags = [
+        VisualQualityFlag(
+            source_file="a.pdf",
+            location="Page 1",
+            visual_kind="image",
+            status=VisualExtractability.IMAGE_ONLY,
+            detail="detail",
+            recommendation="recommendation",
+        )
+    ]
+
+    p1, p2, p3 = _stream_outlines_patches(calls)
+    with p1, p2, p3, patch.object(
+        outlines_endpoint, "DocumentsLoader", _fake_documents_loader(flags)
+    ):
+        response = _run(_stream_once_response(presentation_id, session))
+        events = _run(_drain_and_collect_events(response))
+
+    groups = next(event for event in events if event.get("type") == "quality_flags")["groups"]
+    assert groups[0]["acknowledged"] is True
+
+
+def test_acknowledge_quality_flag_groups_persists_group_keys():
+    presentation_id = uuid.uuid4()
+    presentation = _make_presentation("Some content", id=presentation_id)
+    session = FakeAsyncSession(get_results={presentation_id: presentation})
+
+    result = _run(
+        outlines_endpoint.acknowledge_quality_flag_groups(
+            id=presentation_id,
+            payload=outlines_endpoint.AcknowledgeQualityFlagGroupsRequest(
+                group_keys=["a.pdf::image_only"]
+            ),
+            sql_session=session,
+        )
+    )
+
+    assert result["acknowledged_quality_flag_groups"] == ["a.pdf::image_only"]
+    assert presentation.acknowledged_quality_flag_groups == ["a.pdf::image_only"]
+
+    # Acknowledging a second group merges with, rather than replaces, the first.
+    result2 = _run(
+        outlines_endpoint.acknowledge_quality_flag_groups(
+            id=presentation_id,
+            payload=outlines_endpoint.AcknowledgeQualityFlagGroupsRequest(
+                group_keys=["b.pptx::partial"]
+            ),
+            sql_session=session,
+        )
+    )
+    assert result2["acknowledged_quality_flag_groups"] == [
+        "a.pdf::image_only",
+        "b.pptx::partial",
+    ]

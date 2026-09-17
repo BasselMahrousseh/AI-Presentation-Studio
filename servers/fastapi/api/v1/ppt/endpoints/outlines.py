@@ -10,16 +10,22 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from constants.presentation import MAX_NUMBER_OF_SLIDES
+from models.extraction_quality import (
+    AcknowledgeQualityFlagGroupsRequest,
+    group_quality_flags,
+)
 from models.presentation_outline_model import PresentationOutlineModel
 from models.sql.presentation import PresentationModel
 from models.sse_response import (
     SSECompleteResponse,
     SSEErrorResponse,
+    SSEQualityFlagsResponse,
     SSEResponse,
     SSEStatusResponse,
 )
 from services.temp_file_service import TEMP_FILE_SERVICE
 from services.database import get_async_session
+from services.document_fact_dedup_service import build_deduplicated_context
 from services.documents_loader import DocumentsLoader
 from services.mem0_presentation_memory_service import (
     MEM0_PRESENTATION_MEMORY_SERVICE,
@@ -116,6 +122,28 @@ async def update_outline(
     return outline
 
 
+@OUTLINES_ROUTER.post("/{id}/quality-flags/acknowledge")
+async def acknowledge_quality_flag_groups(
+    id: uuid.UUID,
+    payload: AcknowledgeQualityFlagGroupsRequest,
+    sql_session: AsyncSession = Depends(get_async_session),
+):
+    presentation = await sql_session.get(PresentationModel, id)
+    if not presentation:
+        raise HTTPException(status_code=404, detail="Presentation not found")
+
+    acknowledged = set(presentation.acknowledged_quality_flag_groups or [])
+    acknowledged.update(payload.group_keys)
+    presentation.acknowledged_quality_flag_groups = sorted(acknowledged)
+
+    sql_session.add(presentation)
+    await sql_session.commit()
+
+    return {
+        "acknowledged_quality_flag_groups": presentation.acknowledged_quality_flag_groups
+    }
+
+
 @OUTLINES_ROUTER.get("/stream/{id}")
 async def stream_outlines(
     id: uuid.UUID,
@@ -161,7 +189,31 @@ async def stream_outlines(
             await documents_loader.load_documents(temp_dir)
             documents = documents_loader.documents
             if documents:
-                additional_context = "\n\n".join(documents)
+                additional_context = await build_deduplicated_context(
+                    presentation.file_paths,
+                    documents,
+                    documents_loader.structured_pptx_data,
+                    disconnect_checker=request.is_disconnected,
+                )
+
+            # Recomputed fresh on every call (deterministic from the same source
+            # files, unlike has_explicit_slide_structure) - safe to just overwrite.
+            # acknowledged_quality_flag_groups is never touched here; only the
+            # dedicated acknowledge endpoint below mutates it.
+            presentation.source_quality_flags = [
+                flag.model_dump(mode="json") for flag in documents_loader.quality_flags
+            ]
+            sql_session.add(presentation)
+            await sql_session.commit()
+
+            quality_flag_groups = group_quality_flags(
+                documents_loader.quality_flags,
+                presentation.acknowledged_quality_flag_groups,
+            )
+            if quality_flag_groups:
+                yield SSEQualityFlagsResponse(
+                    groups=[group.model_dump(mode="json") for group in quality_flag_groups]
+                ).to_string()
 
         presentation_outlines_text = ""
 

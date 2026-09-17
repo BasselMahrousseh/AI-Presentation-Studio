@@ -38,6 +38,16 @@ class SSEErrorResponse(BaseModel):
         ).to_string()
 
 
+class SSEQualityFlagsResponse(BaseModel):
+    groups: list
+
+    def to_string(self):
+        return SSEResponse(
+            event="response",
+            data=json.dumps({"type": "quality_flags", "groups": self.groups}),
+        ).to_string()
+
+
 class SSECompleteResponse(BaseModel):
     key: str
     value: object

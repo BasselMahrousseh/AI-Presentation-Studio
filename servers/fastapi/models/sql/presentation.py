@@ -103,6 +103,18 @@ class PresentationModel(SQLModel, table=True):
     has_explicit_slide_structure: Optional[bool] = Field(
         sa_column=Column(Boolean, nullable=True), default=None
     )
+    # Flat list of VisualQualityFlag dicts (models/extraction_quality.py), recomputed
+    # fresh on every stream_outlines() call from the presentation's own file_paths -
+    # unlike has_explicit_slide_structure, there is no poisoned-fallback risk here, so
+    # simply overwriting on each call is safe and keeps this in sync with the files.
+    source_quality_flags: Optional[list] = Field(sa_column=Column(JSON), default=None)
+    # Group keys (see extraction_quality.group_quality_flags) the user has explicitly
+    # accepted as "keep as static images" in the outline-review Data Quality panel.
+    # Mutated only by the dedicated acknowledge endpoint - stream_outlines() must never
+    # touch this, or a reconnect/retry would silently re-block an already-cleared group.
+    acknowledged_quality_flag_groups: Optional[List[str]] = Field(
+        sa_column=Column(JSON), default=None
+    )
 
     def get_new_presentation(self):
         return PresentationModel(
