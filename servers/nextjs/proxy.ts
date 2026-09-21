@@ -114,8 +114,64 @@ function isApiAuthExempt(pathname: string): boolean {
   );
 }
 
+/**
+ * Render-only mode (`STUDIO_RENDER_ONLY=true`): this Next.js app serves only what the export
+ * pipeline and FastAPI call back into. The user-facing pages live in the Workspace UI instead, so
+ * everything else answers 404. Off by default; the old UI keeps working until cutover flips it.
+ */
+const RENDER_ONLY_ALLOWED_PREFIXES = [
+  "/pdf-maker",
+  "/api/export-presentation",
+  "/api/export-presentation-data",
+  "/api/export-chart-capture",
+  "/api/export-table-capture",
+  "/api/template",
+  "/api/validate-layout-code",
+  "/api/update-svg",
+  // Plain rewrites to FastAPI (nginx does this in Docker). The SSE stream handlers are not
+  // allowed: browsers reach FastAPI streams through the Workspace proxy, not through here.
+  "/api/v1/",
+  "/api/v2/",
+];
+
+function isRenderOnly(): boolean {
+  return ["1", "true", "yes", "on"].includes(
+    (process.env.STUDIO_RENDER_ONLY ?? "").trim().toLowerCase()
+  );
+}
+
+function isRenderOnlyAllowed(pathname: string): boolean {
+  if (pathname.startsWith("/_next/")) return true;
+  // Public files (fonts, icons, the tailwind runtime) have an extension; pages do not.
+  if (/\.[A-Za-z0-9]+$/.test(pathname)) return true;
+  if (isFastApiAssetPath(pathname)) return true;
+  if (isSseStreamPath(pathname)) return false;
+  return RENDER_ONLY_ALLOWED_PREFIXES.some((prefix) =>
+    prefix.endsWith("/")
+      ? pathname.startsWith(prefix)
+      : pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
+}
+
+/** What this proxy handled before render-only mode existed, so normal mode is unchanged. */
+function isLegacyMatch(pathname: string): boolean {
+  return (
+    pathname.startsWith("/api/") ||
+    isFastApiAssetPath(pathname) ||
+    pathname === "/pdf-maker"
+  );
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  if (isRenderOnly()) {
+    if (!isRenderOnlyAllowed(pathname)) {
+      return new NextResponse("Not found", { status: 404 });
+    }
+  } else if (!isLegacyMatch(pathname)) {
+    return NextResponse.next();
+  }
 
   // Docker handles these paths in nginx. Electron has no nginx and chooses
   // random loopback ports, so proxy them at request time instead of baking a
@@ -185,5 +241,7 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/:path*", "/app_data/:path*", "/static/:path*", "/pdf-maker"],
+  // Wide on purpose so render-only mode can also 404 pages. In normal mode proxy() returns
+  // immediately for anything it did not handle before (see isLegacyMatch).
+  matcher: ["/((?!_next/static|_next/image).*)"],
 };
