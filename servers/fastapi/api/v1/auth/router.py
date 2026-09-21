@@ -10,6 +10,7 @@ from api.v1.auth.schemas import AuthCredentialsRequest, LoginCredentialsRequest
 from api.v1.auth.assets import is_app_data_path_authorized
 from api.v1.auth.rate_limit import LOGIN_RATE_LIMITER, login_rate_limit_key
 from api.v1.auth.principal import resolve_request_principal
+from api.v1.auth.workspace_jwt import workspace_jwt_enabled
 from api.v1.auth.users import (
     PASSWORD_HELPER,
     get_jwt_strategy,
@@ -81,6 +82,7 @@ def _set_login_cookie(response: JSONResponse, token: str, request: Request) -> N
 
 @API_V1_AUTH_ROUTER.get("/status")
 async def get_status(
+    request: Request,
     session: AsyncSession = Depends(get_async_session),
     user: User | None = Depends(read_user_from_cookie),
 ):
@@ -92,7 +94,13 @@ async def get_status(
             "user_id": None,
             "role": "admin",
         }
-    configured = await _account_count(session) > 0
+    if user is None and workspace_jwt_enabled():
+        # Next.js route handlers and the export renderer ask this endpoint who the caller is.
+        # A Workspace token (bearer or studio_token cookie) is a session too; API keys are not.
+        principal, workspace_user = await resolve_request_principal(request, session)
+        if principal is not None and principal.method == "jwt":
+            user = workspace_user
+    configured = workspace_jwt_enabled() or await _account_count(session) > 0
     return {
         "configured": configured,
         "authenticated": user is not None,

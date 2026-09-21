@@ -86,8 +86,16 @@ async def bootstrap_database_admin() -> None:
             await _backfill_legacy_ownership(session, admin)
             return
 
+        # Workspace accounts (created on first authenticated request, see workspace_jwt.py) have
+        # no password login and are never administrators, so they must not make a Workspace-only
+        # deployment look like a broken local-account database on its next restart.
         account_count = int(
-            await session.scalar(select(func.count()).select_from(User)) or 0
+            await session.scalar(
+                select(func.count())
+                .select_from(User)
+                .where(User.external_subject.is_(None))
+            )
+            or 0
         )
         if account_count:
             raise RuntimeError(

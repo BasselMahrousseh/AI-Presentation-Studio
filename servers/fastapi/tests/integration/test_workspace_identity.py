@@ -17,6 +17,7 @@ from sqlmodel import SQLModel
 import api.main  # noqa: F401  (registers every table on SQLModel.metadata)
 import api.middlewares as middlewares
 from fastapi import APIRouter
+from api.v1.auth.router import API_V1_AUTH_ROUTER
 from api.v1.ppt.endpoints.presentation import PRESENTATION_ROUTER
 from models.sql.access_token import AccessToken
 from models.sql.presentation import PresentationModel, PresentationVersion
@@ -67,6 +68,7 @@ class Env:
         ppt = APIRouter(prefix="/api/v1/ppt")
         ppt.include_router(PRESENTATION_ROUTER)
         app.include_router(ppt)
+        app.include_router(API_V1_AUTH_ROUTER)
 
         async def override():
             async with self.maker() as s:
@@ -123,6 +125,16 @@ def test_cookie_mirror_is_accepted_but_api_key_wins_over_stale_cookie(env):
 
 def test_bearer_caller_gets_export_session_token_and_jwt_user_is_not_admin_gated(env):
     assert env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token())).json()["export_token"] is True
+
+
+def test_auth_status_recognises_workspace_token_but_not_api_keys(env):
+    # Next.js route handlers and the export renderer decide "is this caller signed in" from here.
+    for kwargs in ({"headers": _bearer(_token("carol"))}, {"cookies": {"studio_token": _token("carol")}}):
+        body = env.client.get("/api/v1/auth/status", **kwargs).json()
+        assert body["authenticated"] is True and body["role"] == "user"
+        assert body["configured"] is True and body["user_id"]
+    assert env.client.get("/api/v1/auth/status", headers=_bearer(env.api_key)).json()["authenticated"] is False
+    assert env.client.get("/api/v1/auth/status", headers=_bearer(_token(hours=-1))).json()["authenticated"] is False
 
 
 def test_fresh_database_with_no_users_still_works_for_workspace_tokens(tmp_path, monkeypatch):

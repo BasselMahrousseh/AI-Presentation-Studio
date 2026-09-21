@@ -139,3 +139,57 @@ def test_reset_auth_without_password_refuses_to_delete_or_replace_admin(
             await engine.dispose()
 
     asyncio.run(runner())
+
+
+def _bootstrap_with_users(monkeypatch, tmp_path, users):
+    for name in ("RESET_AUTH", "AUTH_OVERRIDE_FROM_ENV", "AUTH_USERNAME", "AUTH_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("USER_CONFIG_PATH", str(tmp_path / "userConfig.json"))
+
+    async def runner():
+        engine, session_maker = await _create_auth_database(tmp_path / "auth.db")
+        try:
+            async with session_maker() as session:
+                session.add_all(users)
+                await session.commit()
+            monkeypatch.setattr(bootstrap, "async_session_maker", session_maker)
+            await bootstrap.bootstrap_database_admin()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(runner())
+
+
+def test_workspace_only_database_restarts_without_a_bootstrap_admin(monkeypatch, tmp_path):
+    # Workspace accounts are created on first login and never have a password or admin role.
+    _bootstrap_with_users(
+        monkeypatch,
+        tmp_path,
+        [
+            User(
+                username="ws:alice-1a2b3c4d",
+                external_subject="alice",
+                hashed_password="!external",
+                is_active=True,
+                is_verified=True,
+                is_superuser=False,
+            )
+        ],
+    )
+
+
+def test_local_accounts_without_an_admin_still_refuse_to_start(monkeypatch, tmp_path):
+    with pytest.raises(RuntimeError, match="no bootstrap administrator"):
+        _bootstrap_with_users(
+            monkeypatch,
+            tmp_path,
+            [
+                User(
+                    username="local-user",
+                    hashed_password=PASSWORD_HELPER.hash("some-password-1"),
+                    is_active=True,
+                    is_verified=True,
+                    is_superuser=False,
+                )
+            ],
+        )
