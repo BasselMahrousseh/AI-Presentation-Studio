@@ -23,7 +23,9 @@ const electronBuildUrl = new URL(
   import.meta.url,
 );
 
-test("Linux Electron slides render in-page without Chromium iframe processes", async () => {
+// Skipped: reads electron/scripts/build-nextjs-resources.cjs, and the electron/ directory (inherited
+// from the upstream open-source project) no longer exists in this fork.
+test("Linux Electron slides render in-page without Chromium iframe processes", { skip: "electron/ was removed from this fork" }, async () => {
   const [source, buildScript] = await Promise.all([
     readFile(smartHtmlSlideUrl, "utf8"),
     readFile(electronBuildUrl, "utf8"),
