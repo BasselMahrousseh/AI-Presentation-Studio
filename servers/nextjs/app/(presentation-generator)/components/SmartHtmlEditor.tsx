@@ -18,6 +18,7 @@ import {
   updateSlideHtmlContent,
 } from "@/store/slices/presentationGeneration";
 import type { RootState } from "@/store/store";
+import { resolveSmartHtmlAssets, restoreSmartHtmlAssets } from "@/lib/smart-html-assets";
 import { MixpanelEvent, trackEvent } from "@/utils/mixpanel";
 import ImageEditor from "./ImageEditor";
 import SmartChartEditor, { type SmartChartDraft } from "./SmartChartEditor";
@@ -96,7 +97,9 @@ function chartColor(value: unknown): string {
 }
 
 function chartDraftFromCanvas(canvas: HTMLCanvasElement): SmartChartDraft | null {
-  const chart = (window as Window & {
+  // `window.Chart` is already typed globally (lib/chart-browser.ts) with a narrower chart shape than
+  // this editor reads, so go through `unknown` instead of intersecting the two.
+  const chart = (window as unknown as {
     Chart?: { getChart?: (canvas: HTMLCanvasElement) => ChartRuntime | undefined };
   }).Chart?.getChart?.(canvas);
   const dataset = chart?.data?.datasets?.[0];
@@ -319,7 +322,7 @@ export default function SmartHtmlEditor({
       .querySelectorAll<HTMLElement>("[data-smart-editable-media]")
       .forEach((element) => element.removeAttribute("data-smart-editable-media"));
 
-    const nextHtml = clone.innerHTML.trim();
+    const nextHtml = restoreSmartHtmlAssets(clone.innerHTML.trim());
     dirtyRef.current = false;
     if (!nextHtml || nextHtml === html) return;
 
@@ -336,7 +339,7 @@ export default function SmartHtmlEditor({
     const container = containerRef.current;
     if (!container || !tailwindReady) return;
     setStylesSettled(false);
-    container.innerHTML = html;
+    container.innerHTML = resolveSmartHtmlAssets(html);
     dirtyRef.current = false;
     // Deterministic fix for arbitrary-value text sizing (font-size/
     // line-height/letter-spacing) - see smart-slide-arbitrary-styles.ts.

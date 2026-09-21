@@ -8,6 +8,7 @@ import {
   CHART_BROWSER_SCRIPT_URL,
   CHART_DATALABELS_SCRIPT_URL,
 } from "@/lib/chart-browser";
+import { resolveSmartHtmlAssets } from "@/lib/smart-html-assets";
 import { TAILWIND_BROWSER_SCRIPT_URL } from "@/lib/tailwind-browser";
 import { useSmartChartInjection } from "./useSmartChartInjection";
 
@@ -131,7 +132,7 @@ function LinuxInPageSmartHtmlSlide({
   const [sanitizedHtml, setSanitizedHtml] = useState("");
 
   useEffect(() => {
-    setSanitizedHtml(DOMPurify.sanitize(html, SANITIZE_CONFIG));
+    setSanitizedHtml(DOMPurify.sanitize(resolveSmartHtmlAssets(html), SANITIZE_CONFIG));
   }, [html]);
 
   useSlideFontAssets(fonts, executeScripts);
@@ -193,7 +194,10 @@ function IframeSmartHtmlSlide({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
-  const srcDoc = useMemo(() => previewDocument(html, fonts), [fonts, html]);
+  const srcDoc = useMemo(
+    () => previewDocument(resolveSmartHtmlAssets(html), fonts),
+    [fonts, html]
+  );
 
   useEffect(() => {
     if (fixedSize) return;
