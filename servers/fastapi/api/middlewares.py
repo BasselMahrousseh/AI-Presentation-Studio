@@ -12,6 +12,7 @@ from api.v1.auth.context import (
 )
 from api.v1.auth.principal import resolve_request_principal
 from api.v1.auth.users import get_jwt_strategy
+from api.v1.auth.workspace_jwt import workspace_jwt_enabled
 from models.sql.user import User
 from services.database import async_session_maker
 from services.presenton_cloud_proxy import maybe_proxy_presenton_cloud_request
@@ -100,7 +101,9 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
             configured = bool(
                 await session.scalar(select(func.count()).select_from(User))
             )
-            if not configured:
+            # A fresh database has no users yet, but Workspace users are created on first
+            # authenticated request, so do not demand the local admin setup in that mode.
+            if not configured and not workspace_jwt_enabled():
                 return JSONResponse(
                     status_code=428,
                     content={
@@ -135,7 +138,12 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
             request.state.auth_principal = principal
             request.state.current_user = user
             request.state.auth_username = principal.username
-            if principal.method == "api_key" and user is not None:
+            # The export renderer calls back into FastAPI and can only carry a cookie, so it
+            # needs a Studio session token whenever the caller did not arrive with a cookie
+            # (API keys and Workspace bearer tokens).
+            if user is not None and (
+                principal.method == "api_key" or not request.headers.get("cookie")
+            ):
                 request.state.internal_session_token = (
                     await get_jwt_strategy().write_token(user)
                 )

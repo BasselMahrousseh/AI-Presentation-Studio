@@ -20,7 +20,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from constants.presentation import MAX_NUMBER_OF_SLIDES
@@ -1353,6 +1353,13 @@ async def get_all_presentations(
             )
         ),
     ] = True,
+    sort_by: Annotated[
+        Literal["created_at", "updated_at"],
+        Query(description="Sort newest-first by creation or last-edit time."),
+    ] = "created_at",
+    favorites_only: Annotated[
+        bool, Query(description="Only include decks marked as favourite.")
+    ] = False,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
     if include_slides:
@@ -1365,7 +1372,14 @@ async def get_all_presentations(
 
     if version is not None:
         query = query.where(PresentationModel.version == version)
-    query = query.order_by(PresentationModel.created_at.desc())
+    if favorites_only:
+        query = query.where(PresentationModel.is_favorite.is_(True))
+    sort_column = (
+        PresentationModel.updated_at
+        if sort_by == "updated_at"
+        else PresentationModel.created_at
+    )
+    query = query.order_by(sort_column.desc())
 
     results = await sql_session.execute(query)
     if not include_slides:
@@ -1409,6 +1423,35 @@ async def get_presentation(
         **_presentation_response_data(presentation),
         slides=slides,
     )
+
+
+class FavoriteUpdate(BaseModel):
+    is_favorite: bool
+
+
+@PRESENTATION_ROUTER.patch("/{id}/favorite")
+async def set_presentation_favorite(
+    id: uuid.UUID,
+    body: FavoriteUpdate,
+    sql_session: AsyncSession = Depends(get_async_session),
+):
+    # The owner scope on ORM selects makes another user's deck a plain 404 here.
+    presentation = await sql_session.get(PresentationModel, id)
+    if not presentation:
+        raise HTTPException(404, "Presentation not found")
+
+    # Core UPDATE with updated_at pinned to itself: favouriting is not an edit, and the
+    # column's onupdate hook would otherwise bump "last edited" and reorder the dashboard.
+    await sql_session.execute(
+        update(PresentationModel)
+        .where(PresentationModel.id == id)
+        .values(
+            is_favorite=body.is_favorite,
+            updated_at=PresentationModel.updated_at,
+        )
+    )
+    await sql_session.commit()
+    return {"id": id, "is_favorite": body.is_favorite}
 
 
 @PRESENTATION_ROUTER.delete("/{id}", status_code=204)

@@ -24,6 +24,12 @@ class User(UserBase):
     username: Mapped[str] = mapped_column(
         String(128), unique=True, index=True, nullable=False
     )
+    # Stable identity from the GenAI Workspace JWT `sub` claim (lower-cased). NULL for local
+    # Studio accounts. Workspace users are matched on this column only, never on `username`,
+    # so a Workspace user named "admin" can never resolve to the local admin account.
+    external_subject: Mapped[Optional[str]] = mapped_column(
+        String(256), unique=True, index=True, nullable=True
+    )
     admin_slot: Mapped[Optional[str]] = mapped_column(
         String(32), unique=True, nullable=True
     )

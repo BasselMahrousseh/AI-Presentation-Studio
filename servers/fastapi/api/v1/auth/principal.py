@@ -10,6 +10,12 @@ from api.v1.auth.users import UsernameUserDatabase, UserManager, get_jwt_strateg
 from models.sql.access_token import AccessToken
 from models.sql.user import User
 from api.v1.auth.config import SESSION_COOKIE_NAME
+from api.v1.auth.workspace_jwt import (
+    WORKSPACE_TOKEN_COOKIE_NAME,
+    get_or_create_user_for_subject,
+    resolve_workspace_user,
+    trusted_service_usernames,
+)
 
 
 @dataclass(frozen=True)
@@ -39,8 +45,34 @@ async def resolve_request_principal(
             )
 
     authorization = request.headers.get("Authorization", "")
-    if authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
+    bearer = (
+        authorization.split(" ", 1)[1].strip()
+        if authorization.lower().startswith("bearer ")
+        else ""
+    )
+
+    # GenAI Workspace session: `Authorization: Bearer <jwt>`, or the HttpOnly `studio_token`
+    # cookie mirrored by the Workspace proxy for <img>/EventSource, which cannot set headers.
+    if bearer:
+        workspace_token = "" if bearer.startswith("sk-presenton-") else bearer
+    else:
+        workspace_token = request.cookies.get(WORKSPACE_TOKEN_COOKIE_NAME, "")
+    if workspace_token:
+        user = await resolve_workspace_user(session, workspace_token)
+        if user is None:
+            return None, None
+        return (
+            AuthPrincipal(
+                user_id=user.id,
+                username=user.username,
+                is_admin=False,
+                method="jwt",
+            ),
+            user,
+        )
+
+    if bearer:
+        token = bearer
         if not token.startswith("sk-presenton-"):
             return None, None
         access_token = await session.get(AccessToken, token)
@@ -49,6 +81,27 @@ async def resolve_request_principal(
         user = await session.get(User, access_token.user_id)
         if user is None or not user.is_active or not user.is_superuser:
             return None, None
+
+        on_behalf_of = request.headers.get("X-On-Behalf-Of")
+        if on_behalf_of is not None:
+            # Only keys belonging to an explicitly trusted service account may act for a user.
+            # An untrusted or malformed attempt is rejected rather than silently ignored, so a
+            # deck can never end up owned by the service account by accident.
+            if user.username.lower() not in trusted_service_usernames():
+                return None, None
+            delegate = await get_or_create_user_for_subject(session, on_behalf_of)
+            if delegate is None:
+                return None, None
+            return (
+                AuthPrincipal(
+                    user_id=delegate.id,
+                    username=delegate.username,
+                    is_admin=False,
+                    method="jwt",
+                ),
+                delegate,
+            )
+
         return (
             AuthPrincipal(
                 user_id=user.id,

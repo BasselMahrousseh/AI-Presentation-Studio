@@ -4,6 +4,7 @@ from typing import List, Literal, Optional
 import uuid
 import copy
 from sqlalchemy import JSON, Column, DateTime, Enum as SAEnum, ForeignKey, String
+from sqlalchemy import false as sa_false
 from sqlmodel import Boolean, Field, SQLModel
 
 from models.presentation_outline_model import PresentationOutlineModel
@@ -67,6 +68,14 @@ class PresentationModel(SQLModel, table=True):
     instructions: Optional[str] = Field(sa_column=Column(String), default=None)
     tone: Optional[str] = Field(sa_column=Column(String), default=None)
     verbosity: Optional[str] = Field(sa_column=Column(String), default=None)
+    # Per-deck favourite flag. Decks are owner-only, so a boolean is enough; sharing would
+    # need a per-user join table instead.
+    is_favorite: bool = Field(
+        sa_column=Column(
+            Boolean, nullable=False, default=False, server_default=sa_false()
+        ),
+        default=False,
+    )
     include_table_of_contents: bool = Field(sa_column=Column(Boolean), default=False)
     include_title_slide: bool = Field(sa_column=Column(Boolean), default=True)
     web_search: bool = Field(sa_column=Column(Boolean), default=False)
