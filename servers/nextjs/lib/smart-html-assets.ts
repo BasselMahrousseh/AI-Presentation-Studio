@@ -2,12 +2,12 @@ import { resolveBackendAssetUrl } from "@/utils/api";
 
 /**
  * Smart slides store raw HTML that references backend-served files by root-relative path
- * (`/app_data/images/...`, `/static/...`). That only resolves when the app shares an origin with the
+ * (`/app_data/images/...`, `/static/...`, and the e& template artwork under `/smart-templates/...`). That only resolves when the app shares an origin with the
  * backend. A host that reaches the backend through a proxy prefix (the Workspace UI) needs those
  * paths rewritten when the HTML is displayed, and restored before it is saved so the stored slide
  * never contains a host-specific prefix.
  */
-const ASSET_PATH = String.raw`\/(?:app_data|static)\/[^"'\s)&<>]*`;
+const ASSET_PATH = String.raw`\/(?:app_data|static|smart-templates)\/[^"'\s)&<>]*`;
 const ASSET_ATTRIBUTE = new RegExp(
   String.raw`(\b(?:src|poster|data-src)\s*=\s*)(["'])(${ASSET_PATH})\2`,
   "gi"
@@ -39,5 +39,6 @@ export function resolveSmartHtmlAssets(html: string): string {
 export function restoreSmartHtmlAssets(html: string): string {
   const prefix = backendAssetPrefix();
   if (!html || !prefix) return html;
-  return html.split(`${prefix}/app_data/`).join("/app_data/").split(`${prefix}/static/`).join("/static/");
+  return html.split(`${prefix}/app_data/`).join("/app_data/").split(`${prefix}/static/`).join("/static/")
+    .split(`${prefix}/smart-templates/`).join("/smart-templates/");
 }
