@@ -1090,6 +1090,87 @@ def test_derive_presentation_hydrates_template_slide_ui():
     assert title_element["runs"][0]["text"] == "Derived headline"
 
 
+def test_export_existing_presentation_exports_current_state_without_regenerating():
+    presentation_id = uuid.uuid4()
+    presentation = PresentationModel(
+        id=presentation_id,
+        version=PresentationVersion.V2_STANDARD,
+        content="deck",
+        n_slides=1,
+        language="English",
+        title="My Deck",
+        layout=None,
+        tone="default",
+        verbosity="standard",
+        instructions=None,
+    )
+    session = FakeAsyncSession(get_results={presentation_id: presentation})
+    request = presentation_endpoint.ExportPresentationRequest(export_as="pptx")
+
+    calls: list[tuple] = []
+
+    async def fake_export_presentation(pid, title, export_as, *, cookie_header=None):
+        calls.append((pid, title, export_as, cookie_header))
+        return PresentationAndPath(
+            presentation_id=pid,
+            path="/app_data/exports/users/owner-1/My Deck.pptx",
+        )
+
+    fake_request = FakeRequest()
+    fake_request.cookies["presenton_session"] = "session-token"
+
+    with patch.object(
+        presentation_endpoint,
+        "export_presentation",
+        new=fake_export_presentation,
+    ):
+        result = _run(
+            presentation_endpoint.export_existing_presentation(
+                id=presentation_id,
+                data=request,
+                request_http=fake_request,
+                sql_session=session,
+            )
+        )
+
+    # No generation/edit happened: nothing was added or deleted, only exported.
+    assert session.added == []
+    assert session.added_all == []
+    assert len(calls) == 1
+    called_id, called_title, called_export_as, called_cookie_header = calls[0]
+    assert called_id == presentation_id
+    assert called_title == "My Deck"
+    assert called_export_as == "pptx"
+    assert called_cookie_header is not None
+    assert result.presentation_id == presentation_id
+    assert result.path == "/app_data/exports/users/owner-1/My Deck.pptx"
+
+
+def test_export_existing_presentation_404s_for_a_missing_or_foreign_presentation():
+    # The owner scope on ORM selects makes another user's deck a plain 404 here (get()
+    # returns None for any id not in the caller's own owner-scoped results, same as
+    # GET /{id} and PATCH /{id}/favorite).
+    session = FakeAsyncSession(get_results={})
+    request = presentation_endpoint.ExportPresentationRequest(export_as="pdf")
+
+    with patch.object(
+        presentation_endpoint,
+        "export_presentation",
+        new=_fake_export_presentation,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            _run(
+                presentation_endpoint.export_existing_presentation(
+                    id=uuid.uuid4(),
+                    data=request,
+                    request_http=FakeRequest(),
+                    sql_session=session,
+                )
+            )
+
+    assert exc.value.status_code == 404
+
+
 def test_smart_stream_threads_disconnect_checker_into_document_dedup():
     # Regression test: Smart-mode presentation streaming used to omit
     # disconnect_checker from its build_deduplicated_context call (unlike

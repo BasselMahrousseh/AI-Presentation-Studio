@@ -95,6 +95,41 @@ def filesystem_image_path_to_app_data_url(path_or_url: str) -> str:
     return absolute_fastapi_asset_url("/app_data/images/" + rel.replace(os.sep, "/"))
 
 
+def filesystem_export_path_to_app_data_url(path_or_url: str) -> str:
+    """
+    Browser-facing URL for a file saved under APP_DATA_DIRECTORY/exports (see
+    get_exports_directory()) — same rationale and same safety checks as
+    filesystem_image_path_to_app_data_url, just rooted at "exports" instead of "images".
+    """
+    if not path_or_url or not isinstance(path_or_url, str):
+        return path_or_url
+    stripped = path_or_url.strip()
+    if stripped.startswith(("http://", "https://", "data:", "blob:")):
+        return stripped
+    if stripped.startswith(("/app_data/", "/static/")):
+        return absolute_fastapi_asset_url(stripped)
+    app_data = get_app_data_directory_env()
+    if not app_data:
+        return stripped
+    exports_root = os.path.normpath(os.path.join(app_data, "exports"))
+    try:
+        abs_export = os.path.normpath(os.path.abspath(stripped))
+        abs_root = os.path.normpath(os.path.abspath(exports_root))
+    except (OSError, ValueError):
+        return stripped
+    abs_root_key = os.path.normcase(abs_root)
+    try:
+        common = os.path.commonpath([abs_root, abs_export])
+    except ValueError:
+        return stripped
+    if os.path.normcase(common) != abs_root_key:
+        return stripped
+    rel = os.path.relpath(abs_export, abs_root)
+    if rel.startswith(".."):
+        return stripped
+    return absolute_fastapi_asset_url("/app_data/exports/" + rel.replace(os.sep, "/"))
+
+
 def resolve_app_path_to_filesystem(path_or_url: str) -> Optional[str]:
     """
     Resolve an app-served path or URL to an actual filesystem path.

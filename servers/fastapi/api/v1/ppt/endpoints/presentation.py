@@ -28,7 +28,7 @@ from enums.async_task_status import AsyncTaskStatus
 from enums.webhook_event import WebhookEvent
 from models.api_error_model import APIErrorModel
 from models.generate_presentation_request import GeneratePresentationRequest
-from models.presentation_and_path import PresentationPathAndEditPath
+from models.presentation_and_path import PresentationAndPath, PresentationPathAndEditPath
 from models.presentation_from_template import EditPresentationRequest
 from models.presentation_outline_model import (
     PresentationOutlineModel,
@@ -49,6 +49,7 @@ from services.image_generation_service import ImageGenerationService
 from services.mem0_presentation_memory_service import (
     MEM0_PRESENTATION_MEMORY_SERVICE,
 )
+from utils.asset_directory_utils import filesystem_export_path_to_app_data_url
 from utils.dict_utils import deep_update
 from utils.export_utils import export_presentation
 from utils.llm_utils import DisconnectChecker
@@ -3369,4 +3370,38 @@ async def derive_presentation_from_existing_one(
     return PresentationPathAndEditPath(
         **presentation_and_path.model_dump(),
         edit_path=f"/presentation?id={new_presentation.id}",
+    )
+
+
+class ExportPresentationRequest(BaseModel):
+    export_as: Literal["pptx", "pdf"]
+
+
+@PRESENTATION_ROUTER.post("/{id}/export", response_model=PresentationAndPath)
+async def export_existing_presentation(
+    id: uuid.UUID,
+    data: Annotated[ExportPresentationRequest, Body()],
+    request_http: Request,
+    sql_session: AsyncSession = Depends(get_async_session),
+):
+    """
+    Exports a presentation's already-persisted content (no generation/edit step) — unlike
+    /edit and /derive, which always generate or mutate content before exporting. Renders the
+    same /pdf-maker page those two already point at, via the same export_presentation() service.
+    """
+    # The owner scope on ORM selects makes another user's deck a plain 404 here.
+    presentation = await sql_session.get(PresentationModel, id)
+    if not presentation:
+        raise HTTPException(status_code=404, detail="Presentation not found")
+
+    presentation_and_path = await export_presentation(
+        presentation.id,
+        presentation.title or str(uuid.uuid4()),
+        data.export_as,
+        cookie_header=_build_export_cookie_header(request_http),
+    )
+
+    return PresentationAndPath(
+        presentation_id=presentation_and_path.presentation_id,
+        path=filesystem_export_path_to_app_data_url(presentation_and_path.path),
     )
