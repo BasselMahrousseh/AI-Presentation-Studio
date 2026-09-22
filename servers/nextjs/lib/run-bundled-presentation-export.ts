@@ -4,6 +4,7 @@ import fs from "fs/promises";
 import { spawn } from "child_process";
 import { randomUUID } from "crypto";
 import { sanitizeFilename } from "@/app/(presentation-generator)/utils/others";
+import { checkExportOutput } from "@/lib/export-output-check";
 import {
   AsyncSemaphore,
   BoundedTextBuffer,
@@ -299,7 +300,69 @@ export async function runBundledPresentationExport(params: {
   format: BundledPresentationExportFormat;
   cookieHeader?: string;
 }): Promise<BundledPresentationExportResult> {
-  return runBundledPresentationExportLocked(params);
+  const expectedSlides = await fetchExpectedSlideCount(params.presentationId, params.cookieHeader);
+  if (process.env.NODE_ENV !== "production") {
+    // A cold dev-mode compile of /pdf-maker is what makes the render race the page's hydration.
+    await warmExportPage(params.presentationId, params.format);
+  }
+
+  let lastReason = "";
+  for (let attempt = 1; attempt <= EXPORT_OUTPUT_ATTEMPTS; attempt++) {
+    const result = await runBundledPresentationExportLocked(params);
+    let reason: string | null = null;
+    try {
+      const check = checkExportOutput(params.format, await fs.readFile(result.path), expectedSlides);
+      if (!check.ok) reason = check.reason;
+    } catch (error) {
+      reason = error instanceof Error ? error.message : String(error);
+    }
+    if (reason === null) return result;
+
+    lastReason = reason;
+    console.warn("[bundled-export] output check failed", {
+      presentationId: params.presentationId,
+      format: params.format,
+      attempt,
+      expectedSlides,
+      reason,
+    });
+    await fs.rm(result.path, { force: true }).catch(() => {});
+  }
+  throw new Error(`Export failed: ${lastReason}. Please try again.`);
+}
+
+const EXPORT_OUTPUT_ATTEMPTS = 2;
+
+/** How many slides the deck really has, or null if it cannot be read (then only empty output is rejected). */
+async function fetchExpectedSlideCount(
+  presentationId: string,
+  cookieHeader?: string
+): Promise<number | null> {
+  try {
+    const response = await fetch(
+      `${getFastApiInternalBaseUrl()}/api/v1/ppt/presentation/${encodeURIComponent(presentationId)}`,
+      {
+        headers: cookieHeader?.trim() ? { cookie: cookieHeader } : undefined,
+        signal: AbortSignal.timeout(10_000),
+      }
+    );
+    if (!response.ok) return null;
+    const data = (await response.json()) as { slides?: unknown };
+    return Array.isArray(data.slides) ? data.slides.length : null;
+  } catch {
+    return null;
+  }
+}
+
+async function warmExportPage(presentationId: string, format: string): Promise<void> {
+  const base = process.env.NEXT_PUBLIC_URL?.trim() || "http://127.0.0.1";
+  try {
+    await fetch(`${base}/pdf-maker?id=${encodeURIComponent(presentationId)}&format=${format}`, {
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch {
+    // Best effort only: the export itself still runs.
+  }
 }
 
 async function runBundledPresentationExportLocked(params: {
