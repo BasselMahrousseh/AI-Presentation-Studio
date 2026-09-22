@@ -20,7 +20,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import delete, update
+from sqlalchemy import delete, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from constants.presentation import MAX_NUMBER_OF_SLIDES
@@ -1360,9 +1360,27 @@ async def get_all_presentations(
     favorites_only: Annotated[
         bool, Query(description="Only include decks marked as favourite.")
     ] = False,
+    include_unfinished: Annotated[
+        bool,
+        Query(
+            description=(
+                "Also list decks whose generation is still 'in_progress' even though their first "
+                "slide does not exist yet (e.g. interrupted mid-generation), returned with an empty "
+                "slides list. Off by default: clients that assume slides[0] exists must opt in."
+            )
+        ),
+    ] = False,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
-    if include_slides:
+    if include_slides and include_unfinished:
+        # Outer join: a deck whose first slide does not exist yet (e& decks add the cover last)
+        # must still be listed while its generation is unfinished, so the user can resume or delete
+        # it. Slide-less drafts (e.g. the outline step's) are filtered out below.
+        query = select(PresentationModel, SlideModel).outerjoin(
+            SlideModel,
+            (SlideModel.presentation == PresentationModel.id) & (SlideModel.index == 0),
+        )
+    elif include_slides:
         query = select(PresentationModel, SlideModel).join(
             SlideModel,
             (SlideModel.presentation == PresentationModel.id) & (SlideModel.index == 0),
@@ -1374,6 +1392,13 @@ async def get_all_presentations(
         query = query.where(PresentationModel.version == version)
     if favorites_only:
         query = query.where(PresentationModel.is_favorite.is_(True))
+    if include_slides and include_unfinished:
+        query = query.where(
+            or_(
+                SlideModel.id.is_not(None),
+                PresentationModel.generation_status == "in_progress",
+            )
+        )
     sort_column = (
         PresentationModel.updated_at
         if sort_by == "updated_at"
@@ -1394,7 +1419,7 @@ async def get_all_presentations(
     rows = results.all()
     presentations_with_slides = []
     for presentation, first_slide in rows:
-        slides = [first_slide]
+        slides = [first_slide] if first_slide is not None else []
         presentations_with_slides.append(
             PresentationWithSlides(
                 **_presentation_response_data(presentation),

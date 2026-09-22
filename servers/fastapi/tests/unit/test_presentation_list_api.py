@@ -100,3 +100,49 @@ def test_get_all_presentations_can_skip_slide_preview_join():
     assert "WHERE presentations.version = 'v1-standard'" in compiled
     assert "JOIN slides" not in compiled
     assert "ORDER BY presentations.created_at DESC" in compiled
+
+
+def test_get_all_presentations_lists_unfinished_decks_but_not_slide_less_drafts():
+    session = _CapturingAsyncSession()
+
+    asyncio.run(
+        presentation_endpoint.get_all_presentations(include_unfinished=True, sql_session=session)
+    )
+
+    compiled = _compile_statement(session.executed_statement)
+    assert "LEFT OUTER JOIN slides" in compiled
+    assert "slides.id IS NOT NULL" in compiled
+    assert "presentations.generation_status = 'in_progress'" in compiled
+
+
+def test_get_all_presentations_returns_an_unfinished_deck_with_no_first_slide():
+    now = datetime.now(timezone.utc)
+    unfinished = PresentationModel(
+        version=PresentationVersion.V2_STANDARD,
+        content="Interrupted",
+        n_slides=13,
+        language="en",
+        title="Interrupted deck",
+        generation_status="in_progress",
+        created_at=now,
+        updated_at=now,
+    )
+    session = _CapturingAsyncSession([(unfinished, None)])
+
+    response = asyncio.run(
+        presentation_endpoint.get_all_presentations(include_unfinished=True, sql_session=session)
+    )
+
+    assert len(response) == 1
+    assert response[0].slides == []
+    assert response[0].generation_status == "in_progress"
+
+
+def test_get_all_presentations_keeps_inner_join_unless_unfinished_is_requested():
+    session = _CapturingAsyncSession()
+
+    asyncio.run(presentation_endpoint.get_all_presentations(sql_session=session))
+
+    compiled = _compile_statement(session.executed_statement)
+    assert "LEFT OUTER JOIN" not in compiled
+    assert "'in_progress'" not in compiled
