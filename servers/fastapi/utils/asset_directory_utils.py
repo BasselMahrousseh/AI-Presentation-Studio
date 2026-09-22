@@ -77,11 +77,13 @@ def filesystem_image_path_to_app_data_url(path_or_url: str) -> str:
         return stripped
     images_root = os.path.normpath(os.path.join(app_data, "images"))
     try:
-        abs_image = os.path.normpath(os.path.abspath(stripped))
-        abs_root = os.path.normpath(os.path.abspath(images_root))
+        # realpath, not abspath - see the matching comment in
+        # filesystem_export_path_to_app_data_url, which hit this same symlink mismatch live
+        # under APP_DATA_DIRECTORY=/tmp/... on macOS.
+        abs_image = os.path.normpath(os.path.realpath(stripped))
+        abs_root = os.path.normpath(os.path.realpath(images_root))
     except (OSError, ValueError):
         return stripped
-    abs_image_key = os.path.normcase(abs_image)
     abs_root_key = os.path.normcase(abs_root)
     try:
         common = os.path.commonpath([abs_root, abs_image])
@@ -113,8 +115,13 @@ def filesystem_export_path_to_app_data_url(path_or_url: str) -> str:
         return stripped
     exports_root = os.path.normpath(os.path.join(app_data, "exports"))
     try:
-        abs_export = os.path.normpath(os.path.abspath(stripped))
-        abs_root = os.path.normpath(os.path.abspath(exports_root))
+        # realpath, not abspath: abspath doesn't resolve symlinks, and on macOS APP_DATA_DIRECTORY
+        # under /tmp (e.g. run_studio.sh's default) is really /private/tmp - the exported file's own
+        # path comes back already resolved through that symlink, so comparing unresolved abspaths
+        # here made every export "outside" its own exports root and silently returned the raw
+        # filesystem path unconverted (reproduced live: a 404 on a /private/tmp/... download URL).
+        abs_export = os.path.normpath(os.path.realpath(stripped))
+        abs_root = os.path.normpath(os.path.realpath(exports_root))
     except (OSError, ValueError):
         return stripped
     abs_root_key = os.path.normcase(abs_root)

@@ -1,4 +1,12 @@
-from utils.asset_directory_utils import filesystem_export_path_to_app_data_url
+import os
+import sys
+
+import pytest
+
+from utils.asset_directory_utils import (
+    filesystem_export_path_to_app_data_url,
+    filesystem_image_path_to_app_data_url,
+)
 
 
 def test_maps_a_real_export_file_to_its_app_data_url(monkeypatch, tmp_path):
@@ -64,3 +72,48 @@ def test_returns_the_stripped_path_unchanged_when_app_data_directory_is_unset(mo
     url = filesystem_export_path_to_app_data_url("  /tmp/exports/deck.pptx  ")
 
     assert url == "/tmp/exports/deck.pptx"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="os.symlink needs elevated privilege on Windows")
+def test_resolves_correctly_when_app_data_directory_is_reached_through_a_symlink(
+    monkeypatch, tmp_path
+):
+    # Reproduces the real failure live-hit under run_studio.sh: APP_DATA_DIRECTORY=/tmp/studio-appdata,
+    # but macOS's /tmp is itself a symlink to /private/tmp, and the export subprocess's own returned
+    # path comes back already resolved through it. Comparing unresolved abspaths (the previous
+    # implementation) made every real export "outside" its own exports root and silently returned the
+    # raw filesystem path unconverted - which is exactly the 404 observed on a live export.
+    real_root = tmp_path / "real_appdata"
+    real_root.mkdir()
+    (real_root / "exports").mkdir()
+    symlinked_root = tmp_path / "appdata_symlink"
+    os.symlink(real_root, symlinked_root)
+
+    monkeypatch.setenv("APP_DATA_DIRECTORY", str(symlinked_root))
+    monkeypatch.delenv("NEXT_PUBLIC_FAST_API", raising=False)
+
+    # The "export subprocess" returns a path already resolved through the symlink, same as the real
+    # bug - not one built by joining onto the (symlinked) APP_DATA_DIRECTORY env value.
+    exported = real_root / "exports" / "Comparing-Large-Language-Models_b6fd4956.pptx"
+
+    url = filesystem_export_path_to_app_data_url(str(exported))
+
+    assert url == "/app_data/exports/Comparing-Large-Language-Models_b6fd4956.pptx"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="os.symlink needs elevated privilege on Windows")
+def test_image_url_helper_has_the_same_symlink_fix(monkeypatch, tmp_path):
+    real_root = tmp_path / "real_appdata"
+    real_root.mkdir()
+    (real_root / "images").mkdir()
+    symlinked_root = tmp_path / "appdata_symlink"
+    os.symlink(real_root, symlinked_root)
+
+    monkeypatch.setenv("APP_DATA_DIRECTORY", str(symlinked_root))
+    monkeypatch.delenv("NEXT_PUBLIC_FAST_API", raising=False)
+
+    image = real_root / "images" / "users" / "owner-1" / "slide.png"
+
+    url = filesystem_image_path_to_app_data_url(str(image))
+
+    assert url == "/app_data/images/users/owner-1/slide.png"
