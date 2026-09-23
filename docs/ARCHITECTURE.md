@@ -16,9 +16,20 @@ content. Success is measured on accuracy (faithful to source material), security
 in-tenant, access is attributable), and cost — none of which is currently instrumented in production
 (no eval harness, no audit log, no token/cost accounting).
 
+**This repo is no longer a standalone product — it is the generation engine behind a feature inside
+GenAI-Workspace, and that is the intended end state, not a temporary migration step.** End users reach
+Studio's generation, outline, and slide-editing screens through Workspace's own shell/theme/login, at
+`/app/studio/*` in the `GenAI-Workspace-UI` repo — not by visiting this repo's `servers/nextjs` app
+directly. What stays in *this* repo going forward: the FastAPI backend (`servers/fastapi`, the real API
+surface Workspace calls into), and `servers/nextjs` as the source-of-truth dev/build surface for the
+render/export code Workspace's own copy is kept in sync with, plus the handful of screens deliberately
+never ported (`/theme`, `/community`, `/settings`, `/admin`, Custom Template Studio, `/upload` — see
+§8). Studio's own Next.js frontend is not the product surface anymore; new work on the end-user
+generation/outline/editor screens belongs in `GenAI-Workspace-UI`, porting back into this repo's
+`servers/nextjs` only where it's shared render/export code (§8's sync mechanism).
+
 On top of the inherited Presenton base, the team layers e&-specific work: a branded **"e& Smart
-Mode"** generation template, UI reskin, and (in progress) porting the user-facing screens into a
-separate **GenAI-Workspace** shell application (see §8).
+Mode"** generation template plus the Workspace integration described in §8.
 
 ## 2. Tech stack & repo layout
 
@@ -256,14 +267,17 @@ footer; the fixed brand markup is never sent to the model. If a `.pptx` is attac
 files for an e& generation, its real shape-fill colors are extracted and used instead of the default
 red/dark-blue/white/black palette.
 
-## 8. Studio ⇄ GenAI-Workspace migration (in progress)
+## 8. Studio ⇄ GenAI-Workspace integration — the current architecture, not a side effort
 
-A separate, larger effort is porting Studio's user-facing screens (dashboard trimmed, `/generation`,
-`/outline`, the presentation editor incl. chat + export) to run **inside** the GenAI-Workspace shell
-UI, using Workspace's own shell/theme/login — Studio's FastAPI (+ a small headless renderer) stays a
-separate deployment behind a same-origin proxy. `/theme`, `/community`, `/settings`, `/admin`,
-templates, and `/upload` are explicitly **not** ported (all dead-code/out-of-scope for the migration,
-distinct from being dead in Studio itself).
+Studio's user-facing screens (trimmed dashboard, `/generation`, `/outline`, the presentation editor
+incl. chat + export) already run **inside** the GenAI-Workspace shell UI, using Workspace's own
+shell/theme/login, for every phase that matters day-to-day (0–6 below are done and pushed). This is
+not a parallel or optional effort layered on top of "the real app" — it **is** what this project is
+now: Studio's FastAPI (+ a small headless renderer) is the backend, reached behind a same-origin
+proxy; GenAI-Workspace is the front door end users actually see. `/theme`, `/community`, `/settings`,
+`/admin`, templates, and `/upload` are explicitly **not** ported (out-of-scope for the integration,
+distinct from being dead in Studio itself) — they're the only reason to still run Studio's own
+Next.js frontend as a product surface at all, and only for whoever specifically needs those screens.
 
 | Phase | State |
 |---|---|
