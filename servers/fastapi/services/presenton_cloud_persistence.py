@@ -108,9 +108,26 @@ async def persist_cloud_presentation_created(
                 community_design_ids=request_payload.get("community_design_ids")
                 if isinstance(request_payload.get("community_design_ids"), list)
                 else None,
+                source_presentation_id=await _owned_source_presentation_id(
+                    session, owner_id, request_payload.get("source_presentation_id")
+                ),
             )
             session.add(presentation)
         await session.commit()
+
+
+async def _owned_source_presentation_id(
+    session, owner_id: uuid.UUID | None, value: Any
+) -> uuid.UUID | None:
+    # The proxied create never reaches create_presentation()'s own check, so the link is
+    # validated here: a source the caller does not own is dropped rather than recorded.
+    source_id = _uuid(value)
+    if source_id is None:
+        return None
+    source = await session.get(PresentationModel, source_id)
+    if source is None or source.owner_id != owner_id:
+        return None
+    return source_id
 
 
 async def persist_cloud_presentation_complete(
@@ -179,6 +196,7 @@ async def persist_cloud_presentation_complete(
         presentation.theme = _dict(cloud_payload.get("theme"))
         presentation.fonts = _dict(cloud_payload.get("fonts"))
         presentation.owner_id = owner_id
+        presentation.mark_deck_generated()
 
         slides: list[SlideModel] = []
         for fallback_index, value in enumerate(slides_payload):

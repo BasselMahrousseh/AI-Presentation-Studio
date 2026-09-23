@@ -383,6 +383,7 @@ async def stream_outlines(
             presentation.has_explicit_slide_structure = has_explicit_slide_structure
 
         presentation.outlines = presentation_outlines.model_dump()
+        presentation.mark_outline_generated()
         presentation.title = get_presentation_title_from_presentation_outline(
             presentation_outlines
         )

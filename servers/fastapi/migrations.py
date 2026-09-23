@@ -38,7 +38,9 @@ REVISION_GENERATION_STATUS = "b1e3a5c7d9f2"
 REVISION_HAS_EXPLICIT_SLIDE_STRUCTURE = "8aa26640d3e8"
 REVISION_QUALITY_FLAGS = "c3f8a1b2d4e6"
 REVISION_WORKSPACE_IDENTITY = "a1f0c2d4e6b8"
-REVISION_HEAD = REVISION_WORKSPACE_IDENTITY
+REVISION_GENERATION_FEEDBACK = "b7d3e9f1a2c4"
+REVISION_SOURCE_PRESENTATION = "c4e6a8b0d2f3"
+REVISION_HEAD = REVISION_SOURCE_PRESENTATION
 
 
 async def migrate_database_on_startup() -> None:
@@ -142,6 +144,10 @@ def _infer_revision_from_schema(
         for table in owned_tables
     )
     if "provider_settings" in tables and "user" in tables and ownership_ready:
+        if "generation_feedback" in tables and _has_column(
+            inspector, "presentations", "deck_generation_id"
+        ):
+            return REVISION_GENERATION_FEEDBACK
         if "presentations" in tables and _has_column(
             inspector, "presentations", "smart_template"
         ):
@@ -314,6 +320,7 @@ def _is_unversioned_populated_database(database_url: str) -> bool:
         "access_tokens",
         "provider_settings",
         "presenton_cloud_provider",
+        "generation_feedback",
     }
     engine = create_engine(database_url)
     try:

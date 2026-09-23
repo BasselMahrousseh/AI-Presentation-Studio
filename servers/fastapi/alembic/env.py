@@ -18,6 +18,7 @@ from models.sql.async_presentation_generation_status import (  # noqa: F401, E40
 )
 from models.sql.chat_history_message import ChatHistoryMessageModel  # noqa: F401, E402
 from models.sql.font_upload import FontUpload  # noqa: F401, E402
+from models.sql.generation_feedback import GenerationFeedback  # noqa: F401, E402
 from models.sql.image_asset import ImageAsset  # noqa: F401, E402
 from models.sql.key_value import KeyValueSqlModel  # noqa: F401, E402
 from models.sql.ollama_pull_status import OllamaPullStatus  # noqa: F401, E402

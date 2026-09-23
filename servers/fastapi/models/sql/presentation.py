@@ -3,7 +3,7 @@ from enum import Enum
 from typing import List, Literal, Optional
 import uuid
 import copy
-from sqlalchemy import JSON, Column, DateTime, Enum as SAEnum, ForeignKey, String
+from sqlalchemy import JSON, Column, DateTime, Enum as SAEnum, ForeignKey, String, Uuid
 from sqlalchemy import false as sa_false
 from sqlmodel import Boolean, Field, SQLModel
 
@@ -124,6 +124,35 @@ class PresentationModel(SQLModel, table=True):
     acknowledged_quality_flag_groups: Optional[List[str]] = Field(
         sa_column=Column(JSON), default=None
     )
+    # Fresh uuid4 each time an outline / a whole deck finishes generating, so user feedback
+    # (models/sql/generation_feedback.py) is tied to the exact generation it rates rather
+    # than to the presentation, whose outline and slides are overwritten in place on every
+    # regeneration. Manual edits and chat revisions deliberately do not rotate these.
+    outline_generation_id: Optional[uuid.UUID] = Field(
+        sa_column=Column(Uuid, nullable=True), default=None
+    )
+    deck_generation_id: Optional[uuid.UUID] = Field(
+        sa_column=Column(Uuid, nullable=True), default=None
+    )
+    # The presentation whose approved outline this one was created from (the Smart flow
+    # creates a fresh presentation from the outline-review page's outline text), so the
+    # outline rating on the source can be joined to the deck rating on this one. None for
+    # everything else, including all rows created before this column existed.
+    source_presentation_id: Optional[uuid.UUID] = Field(
+        sa_column=Column(
+            Uuid,
+            ForeignKey("presentations.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+        default=None,
+    )
+
+    def mark_outline_generated(self) -> None:
+        self.outline_generation_id = uuid.uuid4()
+
+    def mark_deck_generated(self) -> None:
+        self.deck_generation_id = uuid.uuid4()
 
     def get_new_presentation(self):
         return PresentationModel(

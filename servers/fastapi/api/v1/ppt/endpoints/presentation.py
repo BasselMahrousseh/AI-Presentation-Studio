@@ -1539,6 +1539,7 @@ async def create_presentation(
     community_design_ids: Annotated[Optional[List[int]], Body()] = None,
     smart_template: Annotated[Optional[str], Body()] = None,
     smart_brand_colors: Annotated[Optional[List[str]], Body()] = None,
+    source_presentation_id: Annotated[Optional[uuid.UUID], Body()] = None,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
 
@@ -1585,6 +1586,11 @@ async def create_presentation(
             status_code=400,
             detail="A prompt, document, or community reference is required",
         )
+    # Owner-scoped get: another user's presentation is indistinguishable from a missing one.
+    if source_presentation_id is not None and not await sql_session.get(
+        PresentationModel, source_presentation_id
+    ):
+        raise HTTPException(404, "Source presentation not found")
 
     presentation_id = uuid.uuid4()
     language_to_store = (language or "").strip()
@@ -1613,6 +1619,7 @@ async def create_presentation(
         community_design_ids=normalized_community_ids or None,
         smart_template=normalized_smart_template,
         smart_brand_colors=normalized_smart_brand_colors,
+        source_presentation_id=source_presentation_id,
     )
 
     sql_session.add(presentation)
@@ -2246,6 +2253,7 @@ async def _stream_smart_presentation(
             )
             sql_session.add(presentation)
             presentation.generation_status = "completed"
+            presentation.mark_deck_generated()
             sql_session.add_all(slides)
             await sql_session.commit()
         logger.info("[smart-workflow] smart_persisted presentation_id=%s slides=%s", presentation_id, len(slides))
@@ -2516,6 +2524,7 @@ async def stream_presentation(id: uuid.UUID, request: Request):
                     SlideModel.owner_id == get_current_owner_id(),
                 )
             )
+            presentation.mark_deck_generated()
             sql_session.add(presentation)
             sql_session.add_all(slides)
             sql_session.add_all(generated_assets)
@@ -3097,6 +3106,8 @@ async def generate_presentation_handler(
             _hydrate_template_slide_ui(slide, layout_payload)
 
         # 8. Save PresentationModel and Slides
+        presentation.mark_outline_generated()
+        presentation.mark_deck_generated()
         sql_session.add(presentation)
         sql_session.add_all(slides)
         sql_session.add_all(generated_assets)

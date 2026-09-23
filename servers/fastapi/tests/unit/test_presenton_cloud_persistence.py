@@ -100,6 +100,8 @@ def test_cloud_generation_is_mirrored_into_the_local_database(monkeypatch, tmp_p
             assert completed.title == "Launch Plan"
             assert completed.generation_mode == "smart"
             assert completed.fonts == {"Inter": "https://example.com/inter.woff2"}
+            # Feedback on this deck is keyed on its generation id.
+            assert completed.deck_generation_id is not None
             assert len(slides) == 1
             assert slides[0].id == slide_id
             assert slides[0].owner_id == owner_id
@@ -132,3 +134,46 @@ def test_cloud_generation_is_mirrored_into_the_local_database(monkeypatch, tmp_p
         await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_cloud_created_presentation_keeps_only_an_owned_source_link(monkeypatch, tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'source.db'}")
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(presenton_cloud_persistence, "async_session_maker", session_maker)
+    alice, bob = uuid.uuid4(), uuid.uuid4()
+    alice_source, bob_source = uuid.uuid4(), uuid.uuid4()
+
+    def source_row(presentation_id, owner_id):
+        return PresentationModel(
+            id=presentation_id, owner_id=owner_id, version="v2-standard",
+            content="outline", n_slides=1, language="English",
+        )
+
+    async def create(source_id):
+        presentation_id = uuid.uuid4()
+        await presenton_cloud_persistence.persist_cloud_presentation_created(
+            alice,
+            {"content": "approved outline", "generation_mode": "smart",
+             "source_presentation_id": str(source_id)},
+            {"id": str(presentation_id), "content": "approved outline"},
+        )
+        async with session_maker() as session:
+            return (await session.get(PresentationModel, presentation_id)).source_presentation_id
+
+    async def run():
+        async with engine.begin() as connection:
+            await connection.run_sync(User.__table__.create)
+            await connection.run_sync(PresentationModel.__table__.create)
+        async with session_maker() as session:
+            session.add_all([source_row(alice_source, alice), source_row(bob_source, bob)])
+            await session.commit()
+
+        assert await create(alice_source) == alice_source
+        # Another user's presentation (or a missing one) is dropped, not recorded.
+        assert await create(bob_source) is None
+        assert await create(uuid.uuid4()) is None
+
+    try:
+        asyncio.run(run())
+    finally:
+        asyncio.run(engine.dispose())

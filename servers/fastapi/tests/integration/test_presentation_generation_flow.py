@@ -821,6 +821,7 @@ def test_stream_presentation_uses_template_schema_for_content_generation():
         created_at=now,
         updated_at=now,
     )
+    assert presentation.deck_generation_id is None
     session = FakeAsyncSession(get_results={presentation_id: presentation})
     generated_layouts: list[SlideLayoutModel] = []
     generated_slide_numbers: list[int] = []
@@ -866,6 +867,8 @@ def test_stream_presentation_uses_template_schema_for_content_generation():
         chunks = _run(consume_stream())
 
     assert chunks
+    # A finished deck generation gets its own id, which user feedback is keyed on.
+    assert presentation.deck_generation_id is not None
     assert len(generated_layouts) == 1
     assert generated_slide_numbers == [1]
     generated_layout = generated_layouts[0]

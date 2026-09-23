@@ -326,3 +326,33 @@ def test_acknowledge_quality_flag_groups_persists_group_keys():
         "a.pdf::image_only",
         "b.pptx::partial",
     ]
+
+
+def test_each_outline_generation_gets_a_fresh_generation_id_but_manual_edits_keep_it():
+    """Feedback is keyed on outline_generation_id, so it must change exactly when the
+    outline is regenerated - not when the user edits the generated outline by hand."""
+    presentation_id = uuid.uuid4()
+    presentation = _make_presentation("Some deck content", id=presentation_id)
+    session = FakeAsyncSession(get_results={presentation_id: presentation})
+    calls: list = []
+
+    p1, p2, p3 = _stream_outlines_patches(calls)
+    with p1, p2, p3:
+        first = _run(_stream_once(presentation_id, session))
+        second = _run(_stream_once(presentation_id, session))
+
+    assert first["outline_generation_id"] and second["outline_generation_id"]
+    assert first["outline_generation_id"] != second["outline_generation_id"]
+    assert str(presentation.outline_generation_id) == second["outline_generation_id"]
+
+    from models.presentation_outline_model import PresentationOutlineModel
+
+    edited = PresentationOutlineModel(slides=[{"content": "## Edited by hand"}])
+    with patch.object(
+        outlines_endpoint.MEM0_PRESENTATION_MEMORY_SERVICE,
+        "store_generated_outlines",
+        new=AsyncMock(),
+    ):
+        _run(outlines_endpoint.update_outline(id=presentation_id, outline=edited, sql_session=session))
+
+    assert str(presentation.outline_generation_id) == second["outline_generation_id"]

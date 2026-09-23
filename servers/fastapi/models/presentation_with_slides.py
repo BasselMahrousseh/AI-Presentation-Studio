@@ -26,3 +26,5 @@ class PresentationWithSlides(BaseModel):
     smart_template: Optional[str] = None
     generation_status: Optional[Literal["in_progress", "completed"]] = None
     is_favorite: bool = False
+    outline_generation_id: Optional[uuid.UUID] = None
+    deck_generation_id: Optional[uuid.UUID] = None

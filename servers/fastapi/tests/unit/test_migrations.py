@@ -856,3 +856,164 @@ def test_upgrade_from_has_explicit_slide_structure_revision_adds_quality_flag_co
         )
     finally:
         engine.dispose()
+
+
+def test_generation_feedback_migration_backfills_generation_ids(tmp_path):
+    """Pre-existing decks get their own generation ids, so their feedback is keyed per deck."""
+    database_url = f"sqlite:///{tmp_path / 'generation-feedback.db'}"
+    config = _alembic_config(database_url)
+    command.upgrade(config, migrations.REVISION_WORKSPACE_IDENTITY)
+
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            not_null = [
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(presentations)"))
+                if row[3] and not row[5]
+            ]
+            defaults = {
+                "version": "v2-standard", "content": "c", "n_slides": 1, "language": "en",
+                "created_at": "2026-01-01 00:00:00", "updated_at": "2026-01-01 00:00:00",
+                "generation_mode": "smart", "is_favorite": 0,
+            }
+            rows = {
+                "a" * 32: '{"slides": [{"content": "x"}]}',  # outline + slides
+                "b" * 32: '{"slides": [{"content": "x"}]}',  # outline only
+                "c" * 32: None,  # neither
+                "d" * 32: "null",  # JSON null outline
+            }
+            for presentation_id, outlines in rows.items():
+                values = {name: defaults[name] for name in not_null if name != "id"}
+                values.update(id=presentation_id, outlines=outlines)
+                columns = ", ".join(values)
+                params = ", ".join(f":{name}" for name in values)
+                connection.execute(
+                    text(f"INSERT INTO presentations ({columns}) VALUES ({params})"), values
+                )
+            connection.execute(
+                text(
+                    "INSERT INTO slides (id, presentation, layout_group, layout, \"index\", content)"
+                    " VALUES (:id, :p, 'g', 'l', 0, '{}')"
+                ),
+                {"id": "e" * 32, "p": "a" * 32},
+            )
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as connection:
+            version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            result = {
+                row[0]: (row[1], row[2])
+                for row in connection.execute(
+                    text("SELECT id, outline_generation_id, deck_generation_id FROM presentations")
+                )
+            }
+            tables = {
+                row[0]
+                for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type = 'table'"))
+            }
+    finally:
+        engine.dispose()
+
+    assert version == migrations.REVISION_HEAD
+    assert "generation_feedback" in tables
+    assert result["a" * 32][0] and result["a" * 32][1]
+    assert result["b" * 32][0] and result["b" * 32][1] is None
+    assert result["c" * 32] == (None, None)
+    assert result["d" * 32] == (None, None)
+    # Every deck gets its own id, never a shared one.
+    assert result["a" * 32][0] != result["b" * 32][0]
+
+    # Idempotent: a second upgrade run (the migration guards) must not re-roll the ids.
+    command.downgrade(config, migrations.REVISION_WORKSPACE_IDENTITY)
+    command.upgrade(config, "head")
+
+
+def test_source_presentation_migration_adds_nullable_self_link(tmp_path):
+    """Existing rows stay NULL (no reliable source to backfill from); deleting a source nulls the link."""
+    database_url = f"sqlite:///{tmp_path / 'source-presentation.db'}"
+    config = _alembic_config(database_url)
+    command.upgrade(config, migrations.REVISION_GENERATION_FEEDBACK)
+
+    engine = create_engine(database_url)
+
+    def insert(connection, presentation_id, **extra):
+        not_null = [
+            row[1]
+            for row in connection.execute(text("PRAGMA table_info(presentations)"))
+            if row[3] and not row[5]
+        ]
+        defaults = {
+            "version": "v2-standard", "content": "c", "n_slides": 1, "language": "en",
+            "created_at": "2026-01-01 00:00:00", "updated_at": "2026-01-01 00:00:00",
+            "generation_mode": "smart", "is_favorite": 0,
+        }
+        values = {name: defaults[name] for name in not_null if name != "id"}
+        values.update(id=presentation_id, **extra)
+        connection.execute(
+            text(
+                f"INSERT INTO presentations ({', '.join(values)}) "
+                f"VALUES ({', '.join(f':{name}' for name in values)})"
+            ),
+            values,
+        )
+
+    def schema():
+        with engine.connect() as connection:
+            columns = {
+                row[1] for row in connection.execute(text("PRAGMA table_info(presentations)"))
+            }
+            foreign_keys = [
+                (row[2], row[3], row[4], row[6])
+                for row in connection.execute(text("PRAGMA foreign_key_list(presentations)"))
+            ]
+            indexes = {
+                row[1] for row in connection.execute(text("PRAGMA index_list(presentations)"))
+            }
+        return columns, foreign_keys, indexes
+
+    try:
+        with engine.begin() as connection:
+            insert(connection, "a" * 32)
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as connection:
+            version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            existing = connection.execute(
+                text("SELECT source_presentation_id FROM presentations WHERE id = :id"),
+                {"id": "a" * 32},
+            ).scalar_one()
+        assert version == migrations.REVISION_HEAD == migrations.REVISION_SOURCE_PRESENTATION
+        assert existing is None
+        columns, foreign_keys, indexes = schema()
+        assert "source_presentation_id" in columns
+        assert ("presentations", "source_presentation_id", "id", "SET NULL") in foreign_keys
+        assert "ix_presentations_source_presentation_id" in indexes
+
+        with engine.begin() as connection:
+            connection.execute(text("PRAGMA foreign_keys = ON"))
+            insert(connection, "b" * 32, source_presentation_id="a" * 32)
+            connection.execute(text("DELETE FROM presentations WHERE id = :id"), {"id": "a" * 32})
+            orphan = connection.execute(
+                text("SELECT source_presentation_id FROM presentations WHERE id = :id"),
+                {"id": "b" * 32},
+            ).scalar_one()
+        assert orphan is None
+
+        # Round trip, then a re-run over a half-applied state (column there, no FK/index).
+        command.downgrade(config, migrations.REVISION_GENERATION_FEEDBACK)
+        assert "source_presentation_id" not in schema()[0]
+        with engine.begin() as connection:
+            connection.execute(
+                text("ALTER TABLE presentations ADD COLUMN source_presentation_id CHAR(32)")
+            )
+        command.upgrade(config, "head")
+        columns, foreign_keys, indexes = schema()
+        assert [fk for fk in foreign_keys if fk[1] == "source_presentation_id"] == [
+            ("presentations", "source_presentation_id", "id", "SET NULL")
+        ]
+        assert "ix_presentations_source_presentation_id" in indexes
+    finally:
+        engine.dispose()
