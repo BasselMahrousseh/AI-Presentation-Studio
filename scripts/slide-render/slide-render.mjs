@@ -15,6 +15,9 @@
  *
  * Files keep their relative paths under the target, so relative imports stay valid. Only `@/`
  * alias imports are rewritten to `@/features/studio/`.
+ *
+ * `sync` never overwrites or deletes a copy that was edited in Workspace since the last sync. It
+ * stops and lists those files instead, so a Workspace-side fix is not lost silently.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -43,6 +46,22 @@ const HOST_OWNED = [
   /^utils\/(api|apiErrorMessages|mixpanel|analytics|chatgptAuth|codexModels|providerConstants|storeHelpers|presentationLimits)\.ts$/,
   /^types\/llm_config\.ts$/,
 ];
+
+/**
+ * Shared files Workspace deliberately keeps its own version of, because it hosts them differently
+ * from Studio. `sync` does not copy or delete them and Workspace's verifier only checks they exist.
+ * Their Studio hashes stay in the lock, so `check` still flags a Studio-side change to one of them:
+ * port that change into Workspace's copy by hand. Removing an entry needs the Workspace difference
+ * moved into Studio first (see docs/ARCHITECTURE.md, "Slide-render sync").
+ */
+const WORKSPACE_OWNED = {
+  // Workspace serves the e& template artwork (/smart-templates/...) from its own public/ folder
+  // with its basePath; Studio fetches it from the backend.
+  "lib/smart-html-assets.ts": "e& template artwork is served by Workspace itself",
+  // Workspace defers the Tailwind browser runtime until a slide editor asks for it: its
+  // @property --tw-translate-* registrations clash with Workspace's own Tailwind build.
+  "components/runtime/TailwindBrowserRuntime.tsx": "runtime load is deferred in Workspace",
+};
 
 const EXTENSIONS = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", "/index.ts", "/index.tsx"];
 const SOURCE_FILE = /\.(tsx?|jsx?|mjs)$/;
@@ -119,7 +138,11 @@ function buildLock() {
     source[file] = sha256(fs.readFileSync(path.join(APP_ROOT, file)));
     synced[file] = sha256(syncedContent(file));
   }
-  return { entries: ENTRIES, hostOwned, source, synced };
+  for (const file of Object.keys(WORKSPACE_OWNED)) {
+    if (!(file in source)) throw new Error(`WORKSPACE_OWNED lists a file that is not shared: ${file}`);
+    delete synced[file];
+  }
+  return { entries: ENTRIES, hostOwned, workspaceOwned: Object.keys(WORKSPACE_OWNED), source, synced };
 }
 
 function readLock() {
@@ -134,7 +157,10 @@ function diffLocks(committed, current) {
   const before = committed?.source ?? {};
   for (const file of Object.keys(current.source)) {
     if (!(file in before)) problems.push(`new shared file (not in lock): ${file}`);
-    else if (before[file] !== current.source[file]) problems.push(`changed since lock: ${file}`);
+    else if (before[file] !== current.source[file]) {
+      const note = file in WORKSPACE_OWNED ? " (Workspace-owned: port the change into Workspace's copy by hand)" : "";
+      problems.push(`changed since lock: ${file}${note}`);
+    }
   }
   for (const file of Object.keys(before)) {
     if (!(file in current.source)) problems.push(`no longer shared (removed or now host-owned): ${file}`);
@@ -172,14 +198,34 @@ function sync(targetDir) {
     return fail("Refusing to sync: the lock is stale.\n  " + problems.join("\n  ") + "\nRun `update` first.");
   }
   const target = path.resolve(targetDir);
-  // Remove copies of files that stopped being shared, using the previous target lock.
   const previousLockPath = path.join(target, "slide-render.lock.json");
-  if (fs.existsSync(previousLockPath)) {
-    const previous = JSON.parse(fs.readFileSync(previousLockPath, "utf8"));
-    for (const file of Object.keys(previous.synced ?? {})) {
-      if (!(file in current.synced)) fs.rmSync(path.join(target, file), { force: true });
-    }
+  const previous = fs.existsSync(previousLockPath)
+    ? JSON.parse(fs.readFileSync(previousLockPath, "utf8"))
+    : { synced: {} };
+  const previousSynced = previous.synced ?? {};
+  const workspaceOwned = new Set(current.workspaceOwned);
+  const stale = Object.keys(previousSynced).filter(
+    (file) => !(file in current.synced) && !workspaceOwned.has(file)
+  );
+
+  // Refuse before writing anything if a copy we would overwrite or delete was changed in
+  // Workspace since the last sync (or exists there without ever having been synced).
+  const edited = [];
+  for (const file of [...Object.keys(current.synced), ...stale]) {
+    const destination = path.join(target, file);
+    if (!fs.existsSync(destination)) continue;
+    const actual = sha256(fs.readFileSync(destination));
+    if (actual !== previousSynced[file] && actual !== current.synced[file]) edited.push(file);
   }
+  if (edited.length) {
+    return fail(
+      "Refusing to sync: these Workspace copies were edited since the last sync and would be lost:\n  " +
+        edited.join("\n  ") +
+        "\nMove the change into Studio, or add the file to WORKSPACE_OWNED in slide-render.mjs."
+    );
+  }
+
+  for (const file of stale) fs.rmSync(path.join(target, file), { force: true });
   for (const file of Object.keys(current.synced)) {
     const destination = path.join(target, file);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -189,7 +235,8 @@ function sync(targetDir) {
   fs.copyFileSync(path.join(HERE, "verify-copies.mjs"), path.join(target, "verify-slide-render.mjs"));
   console.log(
     `slide-render: synced ${Object.keys(current.synced).length} files into ${target}.\n` +
-      `Host-owned (Workspace must provide at the same relative paths): ${current.hostOwned.length} files.`
+      `Host-owned (Workspace must provide at the same relative paths): ${current.hostOwned.length} files.\n` +
+      `Workspace-owned, not copied: ${current.workspaceOwned.join(", ")}.`
   );
 }
 
@@ -197,6 +244,8 @@ function report() {
   const { shared, hostOwned } = classify(computeClosure());
   console.log(`SHARED (${shared.length}):\n  ${shared.join("\n  ")}`);
   console.log(`\nHOST-OWNED (${hostOwned.length}):\n  ${hostOwned.join("\n  ")}`);
+  const owned = Object.entries(WORKSPACE_OWNED).map(([file, why]) => `${file} (${why})`);
+  console.log(`\nWORKSPACE-OWNED (${owned.length}), shared but not copied:\n  ${owned.join("\n  ")}`);
 }
 
 function fail(message) {

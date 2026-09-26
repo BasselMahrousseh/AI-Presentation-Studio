@@ -34,6 +34,10 @@
     "utils/providerConstants.ts",
     "utils/storeHelpers.ts"
   ],
+  "workspaceOwned": [
+    "lib/smart-html-assets.ts",
+    "components/runtime/TailwindBrowserRuntime.tsx"
+  ],
   "source": {
     "app/(presentation-generator)/_shared/blank-slide-prompt-event.ts": "309bea60b44c9a2501c488b39bfcdf2009a86ba4942add7824db9cce58e2c36f",
     "app/(presentation-generator)/_shared/blank-slide.ts": "bb4aafd114e411e9edcb9a8d6d8000b91fac0b699d7e3d4a576175cd604ba7e6",
@@ -160,7 +164,6 @@
     "app/(presentation-generator)/upload/type.ts": "71c74021b416a099f763eb87c56d96d85e097f919c718af72c1460a2b4d9f568",
     "app/(presentation-generator)/utils/prism-languages.ts": "9ba51be06f8c3eb2b99a5622c61613ad5230a60001436ebecb71833574729ff1",
     "app/hooks/useNearViewport.ts": "b6043d5b9a937e16ef5fc1f197176aa6f86c24d24b66e424b13f39ab107e1c8f",
-    "components/runtime/TailwindBrowserRuntime.tsx": "cbe5baf5ab8fa5a14bdd6ed515fc0fadbcaca0d395e1266730460591087cfc73",
     "components/slide-editor/charts/ChartColorPalette.tsx": "59742aa82a9880ef13bd43b9d7a8f6357218ffd1d82897d6d39849a78bf5bdf6",
     "components/slide-editor/charts/ChartEditorContent.tsx": "992959bc6f9b9070bced3e3b0eb9226f66e767087184e31386f9687963c56f9f",
     "components/slide-editor/charts/ChartToolbar.tsx": "dee17920604f6f080ecad9170716755dc512c2fb8e6090e9c2ba4671eeef4835",
@@ -242,7 +245,6 @@
     "lib/chart-browser.ts": "2b0881cc53db879c546ddf65bedcc5cdb1f0ede5a731b4dab21ee4b8ddcbc9a7",
     "lib/chart-export-capture.ts": "94b400376b3a1b110ea0825db8ccea9f51b0888d66957b429718aa478746c7cf",
     "lib/math.ts": "53394a59b98a08238c59a9133764a4cf3826cdf75584f7120e2077a7d011b973",
-    "lib/smart-html-assets.ts": "9b4ee170d6e6604c3e62564165c14754489820d3486326d0f8cce040d36ba3ae",
     "lib/smart-slide-arbitrary-styles.ts": "b591a2e294faf4bf712479452d7a9fc7a475bc6251a3686ebe37fcd18e10a48d",
     "lib/svg-color.ts": "82519812326ee7e906b5c082a8a4a8df6af4499d09acaf6ee36fcb6ccd71c6f2",
     "lib/table-export-capture.ts": "24d32938fc08128ed5f4262bbb0231cc9893cb816e4f2a55e81d5085f30a505c",

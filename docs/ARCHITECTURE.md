@@ -315,6 +315,37 @@ user asking. See `STUDIO_IN_WORKSPACE_STATUS.md` (GenAI-Workspace root) for the 
 continuously-updated status of this migration — this document covers Studio's own architecture, not
 the migration's day-to-day state.
 
+### Slide-render sync
+
+The editor (in Workspace) and the exporter (Studio's `/pdf-maker`, which the PPTX/PDF export
+screenshots) must draw slides identically, or an export won't match what the user saw. So Studio holds
+the one master copy of the slide-drawing code (the import closure of `app/(export)/pdf-maker/page.tsx`),
+and `scripts/slide-render/slide-render.mjs sync <workspace>/src/features/studio` copies it into
+Workspace. The rule is: edit in Studio, then sync. A lock file of hashes lets `check` (Studio) and
+`npm run verify:studio-render` (Workspace) catch drift.
+
+Two safeguards keep a sync from undoing Workspace-side fixes:
+
+- **`WORKSPACE_OWNED`** in `slide-render.mjs` lists shared files Workspace deliberately keeps its own
+  version of. They are not copied or deleted by `sync`, and Workspace's verifier only checks they exist.
+  Their Studio hashes stay in the lock, so `check` still reports a Studio-side change to one of them,
+  which must then be ported into Workspace's copy by hand. Current entries:
+  - `lib/smart-html-assets.ts`: Workspace serves the e& template artwork (`/smart-templates/...`) from
+    its own `public/` folder with its basePath; Studio fetches it from the backend.
+  - `components/runtime/TailwindBrowserRuntime.tsx`: Workspace defers loading the Tailwind browser
+    runtime until a slide editor needs it, because its `@property --tw-translate-*` registrations clash
+    with Workspace's own Tailwind build and break `translate` utilities app-wide.
+- **Edit protection.** `sync` refuses to run, before writing anything, if any copy it would overwrite or
+  delete was changed in Workspace since the last sync, and lists those files.
+
+**Future option (not built): remove the Workspace-owned exceptions.** Make Studio's copies of both files
+handle both hosts, for example an asset-base setting for where `/smart-templates/` lives, and a "defer
+runtime load" setting that Studio leaves off and Workspace turns on, each supplied by the host app like
+the existing host-owned modules. Then the two files become ordinary synced files again, `WORKSPACE_OWNED`
+can be emptied, and Studio-side changes to them reach Workspace automatically instead of by hand. Worth
+doing if either file starts changing often in Studio; it touches Studio's own editor and exporter, so it
+needs a Studio render/export check as well as a Workspace one.
+
 ## 9. Current status summary
 
 ### 9.1 Backend

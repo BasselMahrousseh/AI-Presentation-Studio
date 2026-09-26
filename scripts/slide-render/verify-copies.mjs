@@ -29,6 +29,10 @@ for (const file of lock.hostOwned) {
   if (!fs.existsSync(path.join(DIR, file))) problems.push(`host-owned file not provided: ${file}`);
 }
 
+for (const file of lock.workspaceOwned ?? []) {
+  if (!fs.existsSync(path.join(DIR, file))) problems.push(`workspace-owned file missing: ${file}`);
+}
+
 if (problems.length) {
   console.error(
     "Studio slide-render copies drifted from the lock:\n  " +
