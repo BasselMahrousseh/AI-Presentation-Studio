@@ -1523,6 +1523,18 @@ async def duplicate_presentation(
     )
 
 
+def _existing_source_file_paths(file_paths: Optional[List[str]]) -> List[str]:
+    """Resolve stored source file paths, dropping any that no longer exist
+    (TempFileService wipes the temp dir on every backend start)."""
+    existing: List[str] = []
+    for file_path in file_paths or []:
+        try:
+            existing.append(TEMP_FILE_SERVICE.resolve_temp_path(file_path, must_exist=True))
+        except HTTPException:
+            logger.warning("[smart-workflow] source file unavailable, skipping: %s", file_path)
+    return existing
+
+
 @PRESENTATION_ROUTER.post("/create", response_model=PresentationModel)
 async def create_presentation(
     content: Annotated[str, Body()],
@@ -1574,11 +1586,17 @@ async def create_presentation(
             status_code=400,
             detail="Smart brand templates are available only in Smart mode",
         )
-    if normalized_smart_brand_colors and normalized_smart_template != EAND_SMART_TEMPLATE_ID:
+    if normalized_smart_brand_colors and generation_mode != "smart":
         raise HTTPException(
             status_code=400,
-            detail="Custom brand colors require the e& Smart brand template",
+            detail="Custom brand colors are available only in Smart mode",
         )
+    if normalized_smart_brand_colors and normalized_smart_template == EAND_SMART_TEMPLATE_ID:
+        # The e& palette is fixed: a reference deck's colors only restyle an
+        # unbranded (Standard) Smart deck. Dropped rather than rejected so a
+        # client still sending them for e& can't block deck creation.
+        logger.info("[smart-workflow] ignoring custom brand colors for the e& template")
+        normalized_smart_brand_colors = None
     if generation_mode == "smart" and not (
         content.strip() or file_paths or normalized_community_ids
     ):
@@ -1587,18 +1605,30 @@ async def create_presentation(
             detail="A prompt, document, or community reference is required",
         )
     # Owner-scoped get: another user's presentation is indistinguishable from a missing one.
-    if source_presentation_id is not None and not await sql_session.get(
-        PresentationModel, source_presentation_id
-    ):
-        raise HTTPException(404, "Source presentation not found")
+    source_presentation = None
+    if source_presentation_id is not None:
+        source_presentation = await sql_session.get(
+            PresentationModel, source_presentation_id
+        )
+        if not source_presentation:
+            raise HTTPException(404, "Source presentation not found")
 
     presentation_id = uuid.uuid4()
     language_to_store = (language or "").strip()
-    validated_file_paths = (
-        TEMP_FILE_SERVICE.resolve_existing_temp_paths(file_paths)
-        if file_paths
-        else None
-    )
+    if file_paths:
+        validated_file_paths = TEMP_FILE_SERVICE.resolve_existing_temp_paths(file_paths)
+    elif source_presentation is not None and source_presentation.file_paths:
+        # A deck built from an approved outline (the outline page's Smart/e&
+        # buttons) must see the same source documents the outline was grounded
+        # in - otherwise every figure not condensed into an outline bullet is
+        # lost. Inherited files may have been removed since (the temp dir is
+        # wiped on every backend start), so skip missing ones instead of
+        # failing the whole deck with a 404.
+        validated_file_paths = _existing_source_file_paths(
+            source_presentation.file_paths
+        ) or None
+    else:
+        validated_file_paths = None
     # DB schema stores an int; 0 is used as internal marker for auto slide count.
     n_slides_to_store = n_slides if n_slides is not None else 0
 
@@ -1864,17 +1894,26 @@ async def _stream_smart_presentation(
         logger.info("[smart-workflow] smart_references_loaded presentation_id=%s references=%s reference_fonts=%s", presentation_id, len(references), list(reference_fonts.keys()))
 
         source_parts: list[str] = []
-        if presentation.file_paths:
+        # Source files live in the temp dir, which is wiped on every backend
+        # start - a restart between creating this deck and streaming it (or
+        # resuming an interrupted run) must degrade to outline-only generation,
+        # not a 404 mid-stream.
+        source_file_paths = _existing_source_file_paths(presentation.file_paths)
+        if presentation.file_paths and len(source_file_paths) < len(presentation.file_paths):
+            yield SSEStatusResponse(
+                status="Some source documents are no longer available"
+            ).to_string()
+        if source_file_paths:
             yield SSEStatusResponse(status="Reading source documents").to_string()
             documents_loader = DocumentsLoader(
-                file_paths=presentation.file_paths,
+                file_paths=source_file_paths,
                 presentation_language=presentation.language,
             )
             await documents_loader.load_documents(
                 TEMP_FILE_SERVICE.create_temp_dir()
             )
             document_context = await build_deduplicated_context(
-                presentation.file_paths,
+                source_file_paths,
                 documents_loader.documents,
                 documents_loader.structured_pptx_data,
                 disconnect_checker=disconnect_checker,

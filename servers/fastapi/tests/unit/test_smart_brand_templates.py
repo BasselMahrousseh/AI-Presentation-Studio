@@ -118,3 +118,25 @@ def test_custom_color_palette_does_not_get_the_synthetic_chart_palette():
     assert "#82AA40" not in prompt
 
 
+
+
+def test_unbranded_smart_deck_gets_the_reference_deck_palette_without_eand_shell():
+    prompt = get_smart_brand_prompt(None, ["#123456", "#654321", "#AABBCC"])
+
+    assert "COLOUR PALETTE" in prompt
+    assert "Use #123456 for large panels" in prompt
+    assert "Use #654321 sparingly" in prompt
+    assert "#AABBCC" in prompt
+    assert "e& BRAND TEMPLATE CONTRACT" not in prompt
+    assert "#0B1F3A" not in prompt and "#E00600" not in prompt
+
+
+def test_unbranded_single_color_palette_does_not_borrow_eand_dark_blue():
+    prompt = get_smart_brand_prompt(None, ["#123456"])
+
+    assert "#0B1F3A" not in prompt
+    assert "Use #000000 sparingly" in prompt
+
+
+def test_unbranded_smart_deck_without_colors_gets_no_palette_contract():
+    assert get_smart_brand_prompt(None, None) == ""

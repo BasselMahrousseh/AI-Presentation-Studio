@@ -1239,6 +1239,11 @@ def test_smart_stream_threads_disconnect_checker_into_document_dedup():
         presentation_endpoint,
         "build_deduplicated_context",
         new=fake_build_deduplicated_context,
+    ), patch.object(
+        # /tmp/source.pdf is fictional; the stream skips missing source files.
+        presentation_endpoint,
+        "_existing_source_file_paths",
+        new=lambda file_paths: list(file_paths or []),
     ):
         _run(consume_stream())
 

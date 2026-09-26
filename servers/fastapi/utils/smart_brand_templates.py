@@ -187,6 +187,33 @@ def _brand_palette_roles(
     return panel, accent, supporting
 
 
+def _custom_palette_prompt(custom_colors: list[str]) -> str:
+    """Colour-only contract for an unbranded Smart deck whose user attached a
+    reference deck: no e& shell, bookends, or footer rules - just its palette."""
+    (panel_hex, _), (accent_hex, _), supporting_colors = _brand_palette_roles(custom_colors)
+    if len(custom_colors) < 2:
+        # _brand_palette_roles falls back to e& dark blue for a missing
+        # accent; an unbranded deck must not pick up e& colors that way.
+        accent_hex = "#000000"
+    supporting_line = (
+        f"\n- Supporting palette colors, for chart series or minor variety only: "
+        f"{', '.join(supporting_colors)}."
+        if supporting_colors
+        else ""
+    )
+    return f"""
+
+COLOUR PALETTE (required)
+This palette was extracted from the user's uploaded reference deck; treat it
+as the brand's real colors, not a suggestion.
+- Use {panel_hex} for large panels, section bands, headlines, and secondary emphasis.
+- Use {accent_hex} sparingly for primary emphasis, key numbers, rules, and calls to action.
+- Use white #FFFFFF as the primary canvas and card background, and black #000000
+  for body copy and fine detail.{supporting_line}
+- Keep the deck visually restrained: do not introduce colours outside this
+  palette (plus white/black)."""
+
+
 def get_smart_brand_prompt(
     template_id: str | None, custom_colors: list[str] | None = None
 ) -> str:
@@ -197,9 +224,15 @@ def get_smart_brand_prompt(
     they're actually used in that deck. When present they replace the
     default e& red/dark-blue palette; the fixed brand chrome (logo,
     Confidential label, footer bar) and layout/footer rules are unaffected —
-    only the model's own content colors change."""
+    only the model's own content colors change.
+
+    New e& decks never receive custom colors (create_presentation drops
+    them - the e& palette stays fixed); `custom_colors` with the e& template
+    only still occurs for decks created before that rule, so regenerating
+    their slides keeps matching the rest of the deck. Without a template,
+    custom colors give an unbranded Smart deck its reference deck's palette."""
     if template_id is None:
-        return ""
+        return _custom_palette_prompt(custom_colors) if custom_colors else ""
     if template_id != EAND_SMART_TEMPLATE_ID:
         raise HTTPException(status_code=400, detail="Unknown Smart brand template")
 
