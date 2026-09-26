@@ -1705,29 +1705,6 @@ def parse_smart_presentation_html(
     return title_match.group(1).strip(), slides
 
 
-def normalize_smart_deck(payload: dict[str, Any], n_slides: int) -> dict[str, Any]:
-    """Normalize legacy structured Smart payloads without generating speaker notes."""
-    slides = payload.get("slides")
-    if not isinstance(slides, Sequence) or isinstance(slides, (str, bytes)):
-        raise HTTPException(status_code=400, detail="The model returned no Smart slides")
-    if len(slides) != n_slides:
-        raise HTTPException(
-            status_code=400,
-            detail=f"The model returned {len(slides)} slides instead of {n_slides}",
-        )
-    normalized = [
-        _slide_from_html(slide.get("html"), index)
-        for index, slide in enumerate(slides)
-        if isinstance(slide, dict)
-    ]
-    if len(normalized) != n_slides:
-        raise HTTPException(status_code=400, detail="The model returned an invalid Smart slide")
-    return {
-        "title": str(payload.get("title") or normalized[0]["title"]).strip(),
-        "slides": normalized,
-    }
-
-
 async def _stream_deck_response(
     client: Any,
     model: str,

@@ -17,7 +17,7 @@
 | **Classification** | [TBD — Public / Internal / Confidential / Restricted; owner: document author, per e& information-classification policy] |
 | **Created** | 2026-09-08 |
 | **Last Modified** | 2026-09-08 |
-| **Related Documents** | `README.md` · `VISION.md` · `CLAUDE.md` (engineering working notes) · upstream project: presenton.ai · `SDD-Reference_v2.2_2026-07-06.md` |
+| **Related Documents** | `README.md` · `CLAUDE.md` (engineering working notes) · `docs/ARCHITECTURE.md` · upstream project: presenton.ai · `SDD-Reference_v2.2_2026-07-06.md` (relocated outside this repo — see `docs/ARCHITECTURE.md`) |
 | **Document Tier** | **Full** — all 18 sections (see §2.4 for tier justification) |
 
 ### Change Log

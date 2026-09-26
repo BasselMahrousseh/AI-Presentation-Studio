@@ -1,9 +1,11 @@
 # AI Presentation Studio — Architecture Reference
 
 Distilled from the live codebase (`studio-dev`, worktree of `AI-Presentation-Studio`, branch
-`feature/workspace-identity`), `CLAUDE.md`'s session history, `SDD-AI-Presentation-Studio_v1.0.md`,
-and `STUDIO_IN_WORKSPACE_STATUS.md`. Written as a standalone reference — read this before diving into
-`CLAUDE.md`'s raw, chronological session notes.
+`feature/workspace-identity`), `SDD-AI-Presentation-Studio_v1.0.md`, and `STUDIO_IN_WORKSPACE_STATUS.md`.
+Written as the standalone architecture reference — read this first. `CLAUDE.md` is a short, current
+working-notes file (business context, durable lessons, genuinely open items) kept separately; it no
+longer carries a chronological session log — full historical detail for any resolved item is in git
+history (`git log -- CLAUDE.md`), not duplicated here or there.
 
 ## 1. What this project is
 
@@ -41,11 +43,10 @@ AI-Presentation-Studio/
 ├── presentation-export/  Gitignored, downloaded prebuilt Node/Puppeteer bundle — PPTX/PDF renderer
 ├── templates/            Bundled legacy TemplateV2 layout JSON (seeded into DB on startup, see §3)
 ├── resources/             LiteParse document-extraction runner
-├── layouts.json           Legacy layout registry
 ├── docker-compose.yml     production / production-gpu / development / development-gpu services
 ├── nginx.conf             Reverse proxy config used inside the Docker image
 ├── SDD-AI-Presentation-Studio_v1.0.md   Full solution design audit (architecture, data model, risk register)
-└── CLAUDE.md               Raw chronological session log — root-cause diagnoses, fixed/open bugs
+└── CLAUDE.md               Short working-notes file — business context, durable lessons, open items
 ```
 
 Two servers only; the browser talks to both through one Next.js "Proxy" (`servers/nextjs/proxy.ts`,
@@ -126,7 +127,6 @@ webhook, mock, and async-task routers are top-level.
 | `/api/v1/ppt/template` | `template.py` | Custom Template Studio (create/edit/list/delete templates from an uploaded PPTX) |
 | `/api/v1/ppt/community/presentations` | `community.py` | Community/shared deck browsing |
 | `/api/v1/ppt/feedback` | `feedback.py` | Thumbs up/down generation feedback (outline + deck stage) |
-| `/api/v1/ppt/layouts` | `layouts.py` | Layout registry |
 
 ### 4.3 Key endpoints (not exhaustive — see routers above for the full surface)
 
@@ -153,8 +153,9 @@ webhook, mock, and async-task routers are top-level.
 | `GET` | `/api/v1/auth/status`, `/llm-status`, `/verify` | Session/LLM-config status; `/verify` is nginx's `auth_request` target |
 | `POST` | `/api/v1/auth/setup`, `/login`, `/logout` | Local auth flows |
 
-**Confirmed dead**, not wired to any frontend caller: `POST /presentation/generate`,
-`/generate/async`, `GET /status/{id}` — the live generation path is `prepare` + `stream/{id}`.
+**Removed** (were confirmed dead, not wired to any frontend caller, and deleted in a repo-cleanup
+pass): `POST /presentation/generate`, `/generate/async`, `GET /status/{id}`, and their supporting
+`GeneratePresentationRequest` model. The live generation path is `prepare` + `stream/{id}`.
 
 **`/api/v2/ppt/presentation/*`** is not a second FastAPI router — it's proxied straight through to an
 external **Presenton Cloud** service by `services/presenton_cloud_proxy.py` (`generate-html/init`,
@@ -173,7 +174,7 @@ username, and Workspace users are never admins (see §8).
 ### 4.5 Async jobs
 
 `AsyncTaskModel` is genuinely used for template creation (polled by the frontend). The equivalent
-wrapper for presentation generation is the confirmed-dead `/generate/async` family above.
+wrapper for presentation generation was the now-removed `/generate/async` family above.
 
 ## 5. Frontend — Next.js (`servers/nextjs`)
 
@@ -195,11 +196,14 @@ Next.js 16.3.2 / React 19, App Router. `app/DashboardShell.tsx` wraps the authen
 | `(export)/pdf-maker` | Headless render target only — never linked, used exclusively by the export pipeline (Puppeteer navigates here) |
 | `/generate`, `/dashboard` | Legacy-URL redirect shims to `/generation` and `/` respectively |
 
-### 5.2 Confirmed dead / orphaned (inherited from upstream Presenton)
+### 5.2 Removed dead/orphaned code (inherited from upstream Presenton)
 
-`app/frontend/` (a whole alternate prototype dashboard, hardcodes `127.0.0.1:8000`, zero inbound
+`app/frontend/` (a whole alternate prototype dashboard, hardcoded `127.0.0.1:8000`, zero inbound
 links), `/documents-preview`, `components/DashboardNav.tsx`, and the Next.js API routes
-`api/github-stars`, `api/has-required-key`, `api/templates` (non-`v1`), `api/upload-image`.
+`api/github-stars`, `api/has-required-key`, `api/templates` (non-`v1`), `api/upload-image` were all
+confirmed dead (zero inbound references) and deleted in a repo-cleanup pass. If similarly
+name-plausible code is ever found under these paths again, it isn't a revert — check `git log` for
+context before assuming it's meant to come back.
 
 ### 5.3 SSE handling
 
@@ -315,8 +319,8 @@ the migration's day-to-day state.
 
 ### 9.1 Backend
 
-Extensively hardened across many sessions (see `CLAUDE.md` for full forensic detail per item — this
-is a summary, not a substitute). Representative fixed-bug classes:
+Extensively hardened across many sessions (full forensic detail per item is in git history —
+`git log -- CLAUDE.md` — this is a summary, not a substitute). Representative fixed-bug classes:
 - Silent env-precedence bugs in Docker (`KEY=${KEY:-}` making "unset" a real empty string, breaking
   `LLM`/`AZURE_OPENAI_*`, `CAN_CHANGE_KEYS`, `DISABLE_IMAGE_GENERATION` in `docker compose` dev runs).
 - An outline-flag idempotency bug (`has_explicit_slide_structure` flipping to `false` on any repeat
@@ -359,8 +363,9 @@ production; every deployment this fork has actually run has been SQLite.
 
 ## 10. Where to go deeper
 
-- `CLAUDE.md` (repo root) — the full chronological forensic log this document was distilled from;
-  read it for exact root-cause traces, exact commit/test counts, and every deferred item's reasoning.
+- `CLAUDE.md` (repo root) — short working-notes file: business context, durable lessons, and genuinely
+  open items. For exact root-cause traces, commit/test counts, and resolved-item reasoning from past
+  sessions, use `git log -- CLAUDE.md` — that detail is no longer duplicated in the file itself.
 - `SDD-AI-Presentation-Studio_v1.0.md` — the original full solution-design audit: architecture, data
   model, security posture, risk register.
 - `STUDIO_IN_WORKSPACE_STATUS.md` (GenAI-Workspace repo root) — live status of the Workspace

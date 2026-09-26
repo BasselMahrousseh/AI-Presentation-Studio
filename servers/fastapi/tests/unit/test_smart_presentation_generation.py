@@ -25,7 +25,6 @@ from utils.llm_calls.generate_smart_presentation import (
     determine_smart_slide_count,
     get_smart_messages,
     get_smart_reasoning_config,
-    normalize_smart_deck,
     normalize_smart_slide_html,
     parse_smart_presentation_html,
     resolve_smart_slide_count,
@@ -699,26 +698,6 @@ def test_smart_html_normalization_accepts_separated_positioned_content():
 
     assert "First" in html
     assert "Second" in html
-
-
-def test_smart_deck_requires_exact_slide_count_and_omits_speaker_notes():
-    valid_slide = {
-        "title": "One",
-        "html": _smart_slide_html("One"),
-        "speaker_note": "This must be discarded",
-    }
-    deck = normalize_smart_deck(
-        {"title": "Deck", "slides": [valid_slide, {**valid_slide, "title": "Two"}]},
-        2,
-    )
-    assert deck["title"] == "Deck"
-    assert len(deck["slides"]) == 2
-    assert all(slide["speaker_note"] == "" for slide in deck["slides"])
-
-    with pytest.raises(HTTPException):
-        normalize_smart_deck({"title": "Deck", "slides": [valid_slide]}, 2)
-    with pytest.raises(HTTPException):
-        normalize_smart_slide_html("<div>Not a slide</div>")
 
 
 def test_explicit_smart_slide_count_is_bounded():

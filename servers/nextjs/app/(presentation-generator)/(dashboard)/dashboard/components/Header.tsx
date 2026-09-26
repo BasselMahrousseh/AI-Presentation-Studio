@@ -10,7 +10,6 @@ import { ArrowLeft } from "lucide-react";
 const PATHS_WITH_HEADER_BACK = [
   "/upload",
   "/outline",
-  "/documents-preview",
   "/template-preview",
 ] as const;
 
@@ -22,8 +21,7 @@ const Header = () => {
   const pathname = usePathname();
   const showHeaderBack = PATHS_WITH_HEADER_BACK.some((p) => pathMatches(pathname, p));
 
-  const backToUpload =
-    pathMatches(pathname, "/outline") || pathMatches(pathname, "/documents-preview");
+  const backToUpload = pathMatches(pathname, "/outline");
   const backToTemplates = pathMatches(pathname, "/template-preview");
 
   const backHref = backToUpload ? "/upload" : backToTemplates ? "/templates" : "/";

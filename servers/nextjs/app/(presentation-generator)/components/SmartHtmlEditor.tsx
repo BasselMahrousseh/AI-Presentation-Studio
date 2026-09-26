@@ -711,7 +711,10 @@ export default function SmartHtmlEditor({
           ref={containerRef}
           data-smart-slide-instance={instanceId}
           data-smart-selecting={enableHtmlSelector ? "true" : undefined}
-          className="smart-html-editor relative h-full w-full overflow-hidden bg-white"
+          // text-black: this container sits in the host page, not an iframe, so text the
+          // model leaves uncoloured would inherit the host theme (near-white in Workspace
+          // dark mode). Black matches the iframe preview and the export.
+          className="smart-html-editor relative h-full w-full overflow-hidden bg-white text-black"
           aria-label={title}
         />
         {!stylesSettled && (

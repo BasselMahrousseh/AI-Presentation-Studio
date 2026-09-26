@@ -2,6 +2,8 @@
 
 An AI presentation workspace built on Presenton. Create an editable slide deck from a brief, then export it to PowerPoint. Alongside regular Smart Mode, the app provides a dedicated **e& Smart Mode** that applies the supplied e& corporate design without asking the model to recreate it.
 
+**This repo is now consumed primarily as a backend/feature inside GenAI-Workspace**, not as a standalone app for end users. Studio's FastAPI (`servers/fastapi`) is the real API surface; its generation/outline/editor screens are ported into and served from the separate `GenAI-Workspace-UI` repo (see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §8 for the full integration). The setup below runs Studio's own `servers/nextjs` frontend directly — still needed for local development, for the screens deliberately never ported (`/theme`, `/community`, `/settings`, `/admin`, Custom Template Studio, `/upload`), and as the source-of-truth dev surface the Workspace copy of shared render/export code is synced from.
+
 ## Features
 
 - Generate presentations from a short prompt, source documents, or web research.
@@ -22,9 +24,9 @@ The e& button creates a fixed deck structure:
 The default request contains five slides, so the model creates three middle content slides. The e& flow requires at least three slides: title, content, and thank-you. Normal Smart Mode remains unchanged.
 
 ```text
-servers/fastapi/utils/smart_brand_templates.py  Brand shells and fixed slides
-servers/nextjs/public/smart-templates/eand/     Supplied e& image assets
-servers/nextjs/app/frontend/index.tsx            Separate e& generate button
+servers/fastapi/utils/smart_brand_templates.py       Brand shells and fixed slides
+servers/nextjs/public/smart-templates/eand/          Supplied e& image assets
+servers/nextjs/app/generation/GenerationPageClient.tsx  "Generate e& deck" button
 ```
 
 ## Project structure
@@ -99,6 +101,8 @@ npm install --omit=dev --ignore-scripts
 ```
 
 The runner is stored at `resources/document-extraction/liteparse_runner.mjs` and FastAPI detects it automatically. Restart FastAPI after installing dependencies or changing its environment.
+
+This same root install is also required for the `presentation-export/` bundle's `sharp` dependency — skip it and PPTX/PDF export fails with `Cannot find module 'sharp'`.
 
 ### 5. Install the PPTX export runtime
 
