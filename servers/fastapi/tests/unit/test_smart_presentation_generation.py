@@ -839,6 +839,19 @@ def test_slide_html_without_canvas_clip_removes_only_overflow_hidden():
 # ---------------------------------------------------------------------------
 
 
+def _requested_indices(messages, n_slides):
+    """Which slide indices a fake model is being asked for: one slide for a
+    single-slide repair/backfill prompt, otherwise the deck's remaining tail."""
+    prompt = str(messages[1].content)
+    single = re.search(
+        r"SINGLE-SLIDE MODE\s+Generate exactly 1 slide block: slide (\d+) of", prompt
+    )
+    if single:
+        return [int(single.group(1)) - 1]
+    remaining = int(re.search(r"Generate exactly (\d+)", prompt).group(1))
+    return list(range(n_slides - remaining, n_slides))
+
+
 def test_generation_waives_render_checks_after_repeated_stalls_at_one_slide(monkeypatch):
     """A slide the model cannot get under the overflow threshold must not be
     able to consume the entire retry budget and take the whole deck down with
@@ -861,14 +874,10 @@ def test_generation_waives_render_checks_after_repeated_stalls_at_one_slide(monk
     )
 
     async def fake_stream(client, model, messages, on_chunk, **kwargs):
-        prompt = str(messages[1].content)
-        match = re.search(r"Generate exactly (\d+)", prompt)
-        remaining = int(match.group(1))
-        start = n_slides - remaining
         response = "<!-- PRESENTATION_TITLE: Deck -->"
-        for offset in range(remaining):
+        for index in _requested_indices(messages, n_slides):
             # The second slide of the deck always trips the overflow check.
-            title = "STALLS" if start + offset == 1 else f"Slide {start + offset}"
+            title = "STALLS" if index == 1 else f"Slide {index}"
             response += (
                 "<!-- SLIDE_START -->"
                 + _smart_slide_html(title=title)
@@ -1291,9 +1300,9 @@ def test_layout_check_passes_a_bounded_queue_timeout_not_an_unbounded_wait(
 
 
 # ---------------------------------------------------------------------------
-# Retry-loop instrumentation: the permanent per-attempt failure log, and the
-# opt-in salvage probe used to measure how much generated work each failure
-# throws away (see SMART_SALVAGE_PROBE_ENV).
+# Per-slide repair: a failing slide is regenerated on its own while the stream
+# keeps going, instead of the whole deck being retried (see
+# SMART_MAX_SLIDE_REPAIRS).
 # ---------------------------------------------------------------------------
 
 
@@ -1306,12 +1315,8 @@ def _stalling_deck_stream(n_slides, fail_at_index, monkeypatch):
             raise HTTPException(status_code=400, detail="content is too tall")
 
     async def fake_stream(client, model, messages, on_chunk, **kwargs):
-        prompt = str(messages[1].content)
-        remaining = int(re.search(r"Generate exactly (\d+)", prompt).group(1))
-        start = n_slides - remaining
         response = "<!-- PRESENTATION_TITLE: Deck -->"
-        for offset in range(remaining):
-            index = start + offset
+        for index in _requested_indices(messages, n_slides):
             title = "BAD" if index == fail_at_index else f"Slide {index}"
             response += (
                 "<!-- SLIDE_START -->"
@@ -1346,71 +1351,6 @@ def _generate(n_slides):
             include_table_of_contents=False,
         )
     )
-
-
-def test_failed_attempt_logs_the_slide_position_it_died_at(monkeypatch, caplog):
-    """Without this line there is no way to tell a wasted attempt that died at
-    slide 1 from one that kept 12 of 14 slides - the distinction that decides
-    whether salvaging the discarded tail is worth anything."""
-    _stalling_deck_stream(8, fail_at_index=5, monkeypatch=monkeypatch)
-    monkeypatch.delenv(smart_generation.SMART_SALVAGE_PROBE_ENV, raising=False)
-
-    with caplog.at_level("INFO", logger=smart_generation.LOGGER.name):
-        _generate(8)
-
-    failures = [r for r in caplog.records if "attempt_failed" in r.getMessage()]
-    assert failures, "a failing attempt must log where it died"
-    first = failures[0].getMessage()
-    # Slide 6 (1-based) is index 5, and the 5 slides before it were kept.
-    assert "died_at_slide=6" in first
-    assert "of=8" in first
-    assert "new_slides_this_attempt=5" in first
-
-
-def test_salvage_probe_counts_the_discarded_tail_without_changing_the_deck(
-    monkeypatch,
-):
-    """The probe must measure what a failure throws away while leaving the
-    generated deck byte-for-byte identical - otherwise it would be changing the
-    very behaviour it is supposed to measure."""
-    _stalling_deck_stream(8, fail_at_index=2, monkeypatch=monkeypatch)
-
-    monkeypatch.delenv(smart_generation.SMART_SALVAGE_PROBE_ENV, raising=False)
-    without_probe = [slide["title"] for slide in _generate(8)["slides"]]
-
-    monkeypatch.setenv(smart_generation.SMART_SALVAGE_PROBE_ENV, "1")
-    with_probe = [slide["title"] for slide in _generate(8)["slides"]]
-
-    assert with_probe == without_probe
-
-
-def test_salvage_probe_reports_the_valid_slides_behind_the_failure(
-    monkeypatch, caplog
-):
-    """Slide 3 of 8 fails, so slides 4-8 arrive behind it and are all valid:
-    5 downstream slides that the retry currently discards."""
-    _stalling_deck_stream(8, fail_at_index=2, monkeypatch=monkeypatch)
-    monkeypatch.setenv(smart_generation.SMART_SALVAGE_PROBE_ENV, "1")
-
-    with caplog.at_level("INFO", logger=smart_generation.LOGGER.name):
-        _generate(8)
-
-    probes = [r.getMessage() for r in caplog.records if "salvage-probe" in r.getMessage()]
-    assert probes, "the probe must report what the failed attempt discarded"
-    assert "failed_slide=3" in probes[0]
-    assert "downstream_slides=5" in probes[0]
-    assert "downstream_valid=5" in probes[0]
-
-
-def test_salvage_probe_is_off_unless_explicitly_enabled(monkeypatch):
-    """It costs a real render per discarded slide, so it must never run by
-    accident in normal generation."""
-    monkeypatch.delenv(smart_generation.SMART_SALVAGE_PROBE_ENV, raising=False)
-    assert smart_generation._salvage_probe_enabled() is False
-    monkeypatch.setenv(smart_generation.SMART_SALVAGE_PROBE_ENV, "0")
-    assert smart_generation._salvage_probe_enabled() is False
-    monkeypatch.setenv(smart_generation.SMART_SALVAGE_PROBE_ENV, "1")
-    assert smart_generation._salvage_probe_enabled() is True
 
 
 def test_prompts_state_the_usable_content_height_not_just_coordinates():
@@ -1525,7 +1465,6 @@ def test_scaled_slide_html_is_what_gets_accepted(monkeypatch):
     monkeypatch.setattr(
         smart_generation, "_check_smart_slide_layout", fake_layout_check
     )
-    monkeypatch.delenv(smart_generation.SMART_SALVAGE_PROBE_ENV, raising=False)
 
     result = _generate(3)
 
@@ -1837,12 +1776,8 @@ def _static_stalling_deck_stream(
         return result
 
     async def fake_stream(client, model, messages, on_chunk, **kwargs):
-        prompt = str(messages[1].content)
-        remaining = int(re.search(r"Generate exactly (\d+)", prompt).group(1))
-        start = n_slides - remaining
         response = "<!-- PRESENTATION_TITLE: Deck -->"
-        for offset in range(remaining):
-            index = start + offset
+        for index in _requested_indices(messages, n_slides):
             if index == fail_at_index:
                 slide_html = _smart_slide_html(
                     title="BAD", body=_static_heuristic_stalling_body()
@@ -1964,7 +1899,8 @@ def test_static_heuristics_are_not_skipped_before_the_threshold(monkeypatch, cap
     raw_failures_before_skip = [
         m
         for m in messages[:skip_index]
-        if "attempt_failed" in m and "overflow or overlap risks" in m
+        if ("slide_failed_validation" in m or "slide_repair_rejected" in m)
+        and "overflow or overlap risks" in m
     ]
     assert (
         len(raw_failures_before_skip)
@@ -1976,21 +1912,16 @@ def test_static_heuristics_are_not_skipped_before_the_threshold(monkeypatch, cap
 def test_static_heuristics_still_apply_to_slides_after_the_stalled_position(
     monkeypatch, caplog
 ):
-    """Rung 1 waives only the ONE position that has actually stalled (scoped
-    via index == len(accepted_slides), exactly like the render waiver) - a
-    later slide in the same attempt that independently trips the same
-    heuristic must still fail that attempt."""
+    """The ladder is earned per slide: slide 2's static waiver must never leak
+    to slide 3. Slide 3 independently trips the same heuristic in the stream,
+    so it must be rejected there and climb its own ladder."""
 
     async def clean_render_check(html, *, check_eand_footer=False):
         return None
 
     async def fake_stream(client, model, messages, on_chunk, **kwargs):
-        prompt = str(messages[1].content)
-        remaining = int(re.search(r"Generate exactly (\d+)", prompt).group(1))
-        start = 3 - remaining
         response = "<!-- PRESENTATION_TITLE: Deck -->"
-        for offset in range(remaining):
-            index = start + offset
+        for index in _requested_indices(messages, 3):
             if index == 1:
                 slide_html = _smart_slide_html(
                     title="BAD", body=_static_heuristic_stalling_body()
@@ -2022,15 +1953,16 @@ def test_static_heuristics_still_apply_to_slides_after_the_stalled_position(
         result = _generate(3)
 
     records = [r.getMessage() for r in caplog.records]
-    skip_slide2 = next(
-        i
-        for i, m in enumerate(records)
-        if "static_layout_heuristics_skipped" in m and "slide=2" in m
+    # Slide 3 was checked (and rejected) by the static heuristic in the
+    # stream - no waiver was in force for it.
+    assert any(
+        "slide_failed_validation slide=3" in m and "overflow or overlap risks" in m
+        for m in records
     )
-    following_failures = [m for m in records[skip_slide2:] if "attempt_failed" in m]
-    assert following_failures, "the attempt must still fail after the position-1 waiver"
-    assert "died_at_slide=3" in following_failures[0]
-    assert "overflow or overlap risks" in following_failures[0]
+    skipped = [m for m in records if "static_layout_heuristics_skipped" in m]
+    # Each slide got its own waiver only after its own failures.
+    assert any("slide=2" in m for m in skipped)
+    assert any("slide=3" in m for m in skipped)
 
     assert len(result["slides"]) == 3
     assert result["slides"][1]["title"] == "BAD"
@@ -2165,3 +2097,320 @@ def test_pptx_export_fidelity_prompt_forbids_custom_web_fonts_with_no_reference(
     assert "Never set `font-family` to a custom Google/web font" in prompt
     assert "Inter" in prompt
     assert "Calibri, Arial, sans-serif" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Per-slide repair instead of whole-deck retry.
+#
+# Measured cost of the old behaviour (benchmark/logs/fastapi.log): 47 failed
+# whole-deck attempts across 10 runs, 17-47s each, because the first failing
+# slide aborted the stream (discarding every slide drafted behind it) and the
+# next attempt re-sent the whole deck prompt.
+# ---------------------------------------------------------------------------
+
+
+def _slide_block(html):
+    return "<!-- SLIDE_START -->" + html + "<!-- SLIDE_END -->"
+
+
+def _is_single_slide_call(messages):
+    return "SINGLE-SLIDE MODE" in str(messages[1].content)
+
+
+def _patch_llm(monkeypatch, fake_stream, *, render=None, reasoning=(None, False)):
+    async def clean_render(html, *, check_eand_footer=False):
+        return None
+
+    monkeypatch.setattr(
+        smart_generation, "_check_smart_slide_layout", render or clean_render
+    )
+    monkeypatch.setattr(smart_generation, "_stream_deck_response", fake_stream)
+    monkeypatch.setattr(smart_generation, "get_llm_config", lambda **_kwargs: {})
+    monkeypatch.setattr(smart_generation, "get_client", lambda **_kwargs: object())
+    monkeypatch.setattr(smart_generation, "get_model", lambda: "test-model")
+    monkeypatch.setattr(
+        smart_generation, "get_smart_reasoning_config", lambda model: reasoning
+    )
+
+
+def _generate_with_callback(n_slides, emitted):
+    async def on_slide(index, slide):
+        emitted.append((index, slide["title"]))
+
+    return asyncio.run(
+        smart_generation.generate_smart_presentation(
+            content="Chart deck",
+            n_slides=n_slides,
+            language="English",
+            tone=None,
+            verbosity=None,
+            instructions=None,
+            include_title_slide=False,
+            include_table_of_contents=False,
+            on_slide=on_slide,
+        )
+    )
+
+
+def test_failing_slide_is_repaired_without_discarding_slides_behind_it(monkeypatch):
+    """Slide 6 of 8 fails in the stream. Slides 7-8 from that same stream must
+    be kept, only slide 6 regenerated, and no second deck call made."""
+    n_slides = 8
+    deck_calls, single_calls, repair_prompts = [], [], []
+
+    async def fake_render(html, *, check_eand_footer=False):
+        if 'data-slide-title="BAD"' in html:
+            raise HTTPException(status_code=400, detail="content is 90px too tall")
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        if _is_single_slide_call(messages):
+            (index,) = _requested_indices(messages, n_slides)
+            single_calls.append(index)
+            repair_prompts.append(str(messages[1].content))
+            # Finish after the stream so the held slides really had to wait.
+            await asyncio.sleep(0.05)
+            response = _slide_block(_smart_slide_html(title=f"Fixed {index}"))
+            return response, SimpleNamespace(model=model)
+        deck_calls.append(1)
+        response = "<!-- PRESENTATION_TITLE: Deck -->"
+        for index in _requested_indices(messages, n_slides):
+            title = "BAD" if index == 5 else f"Slide {index}"
+            response += _slide_block(_smart_slide_html(title=title))
+        await on_chunk(response)
+        return response, SimpleNamespace(model=model)
+
+    _patch_llm(monkeypatch, fake_stream, render=fake_render)
+    emitted = []
+    result = _generate_with_callback(n_slides, emitted)
+
+    assert len(deck_calls) == 1
+    assert single_calls == [5]
+    assert [slide["title"] for slide in result["slides"]] == [
+        "Slide 0", "Slide 1", "Slide 2", "Slide 3", "Slide 4",
+        "Fixed 5", "Slide 6", "Slide 7",
+    ]
+    # Emitted (and therefore persisted) strictly in order, even though slides
+    # 7-8 were validated before slide 6's repair finished.
+    assert [index for index, _ in emitted] == list(range(n_slides))
+    # The repair was briefed with the real failure and both neighbours.
+    assert "content is 90px too tall" in repair_prompts[0]
+    assert 'data-slide-title="Slide 4"' in repair_prompts[0]
+    assert 'data-slide-title="Slide 6"' in repair_prompts[0]
+    assert "slide 6 of 8" in repair_prompts[0]
+    assert result["title"] == "Deck"
+
+
+def test_hard_invalid_slide_is_repaired_too(monkeypatch):
+    """Hard validity failures (here: a chart canvas with no initializer) are
+    raised inside the parser. They must be reported, not end the stream."""
+    n_slides = 4
+    deck_calls = []
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        if _is_single_slide_call(messages):
+            (index,) = _requested_indices(messages, n_slides)
+            return _slide_block(_smart_slide_html(title=f"Fixed {index}")), None
+        deck_calls.append(1)
+        response = "<!-- PRESENTATION_TITLE: Deck -->"
+        for index in _requested_indices(messages, n_slides):
+            body = (
+                '<canvas id="chart-a1b2c3" width="600" height="300"></canvas>'
+                if index == 1
+                else "Content"
+            )
+            response += _slide_block(_smart_slide_html(title=f"Slide {index}", body=body))
+        await on_chunk(response)
+        return response, None
+
+    _patch_llm(monkeypatch, fake_stream)
+    result = _generate(n_slides)
+
+    assert len(deck_calls) == 1
+    assert [slide["title"] for slide in result["slides"]] == [
+        "Slide 0", "Fixed 1", "Slide 2", "Slide 3"
+    ]
+
+
+def test_exhausted_repairs_fall_back_to_a_continuation_from_the_gap(monkeypatch):
+    """A slide that is still hard-invalid after every repair (hard checks are
+    never waived) sends the deck back to a continuation from the contiguous
+    prefix, with the repair's last error as feedback."""
+    n_slides = 4
+    deck_prompts, single_calls = [], []
+    broken_body = '<canvas id="chart-a1b2c3" width="600" height="300"></canvas>'
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        if _is_single_slide_call(messages):
+            single_calls.append(_requested_indices(messages, n_slides)[0])
+            return _slide_block(_smart_slide_html(title="Still broken", body=broken_body)), None
+        deck_prompts.append(str(messages[1].content))
+        response = "<!-- PRESENTATION_TITLE: Deck -->"
+        for index in _requested_indices(messages, n_slides):
+            body = broken_body if (index == 2 and len(deck_prompts) == 1) else "Content"
+            response += _slide_block(_smart_slide_html(title=f"Slide {index}", body=body))
+        await on_chunk(response)
+        return response, None
+
+    _patch_llm(monkeypatch, fake_stream)
+    emitted = []
+    result = _generate_with_callback(n_slides, emitted)
+
+    assert single_calls == [2] * smart_generation.SMART_MAX_SLIDE_REPAIRS
+    assert len(deck_prompts) == 2
+    assert "Slides 1-2 are already accepted" in deck_prompts[1]
+    assert "missing its inline Chart.js" in deck_prompts[1]
+    assert len(result["slides"]) == n_slides
+    # Slide 4 from the first stream was beyond the gap: discarded and
+    # regenerated, never emitted twice.
+    assert [index for index, _ in emitted] == list(range(n_slides))
+
+
+def test_a_few_dropped_slides_are_backfilled_one_by_one(monkeypatch):
+    """Measured failure mode: "The model returned 8 slides instead of 10".
+    A short tail is topped up per slide instead of re-sending the deck."""
+    n_slides = 10
+    deck_calls, single_calls = [], []
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        if _is_single_slide_call(messages):
+            (index,) = _requested_indices(messages, n_slides)
+            single_calls.append(index)
+            return _slide_block(_smart_slide_html(title=f"Backfilled {index}")), None
+        deck_calls.append(1)
+        response = "<!-- PRESENTATION_TITLE: Deck -->"
+        for index in _requested_indices(messages, n_slides)[:8]:
+            response += _slide_block(_smart_slide_html(title=f"Slide {index}"))
+        await on_chunk(response)
+        return response, None
+
+    _patch_llm(monkeypatch, fake_stream)
+    result = _generate(n_slides)
+
+    assert len(deck_calls) == 1
+    assert sorted(single_calls) == [8, 9]
+    assert [slide["title"] for slide in result["slides"]][-2:] == [
+        "Backfilled 8", "Backfilled 9"
+    ]
+
+
+def test_a_long_missing_tail_uses_a_continuation_not_per_slide_calls(monkeypatch):
+    n_slides = 10
+    deck_calls, single_calls = [], []
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        if _is_single_slide_call(messages):
+            single_calls.append(1)
+            return _slide_block(_smart_slide_html()), None
+        deck_calls.append(1)
+        requested = _requested_indices(messages, n_slides)
+        if len(deck_calls) == 1:
+            requested = requested[:2]
+        response = "<!-- PRESENTATION_TITLE: Deck -->"
+        for index in requested:
+            response += _slide_block(_smart_slide_html(title=f"Slide {index}"))
+        await on_chunk(response)
+        return response, None
+
+    _patch_llm(monkeypatch, fake_stream)
+    result = _generate(n_slides)
+
+    assert len(deck_calls) == 2
+    assert single_calls == []
+    assert [slide["title"] for slide in result["slides"]] == [
+        f"Slide {index}" for index in range(n_slides)
+    ]
+
+
+def test_infra_failure_backs_off_and_is_not_fed_back_as_content_feedback(monkeypatch):
+    n_slides = 5
+    deck_prompts, sleeps = [], []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        deck_prompts.append(str(messages[1].content))
+        if len(deck_prompts) == 1:
+            raise ConnectionError("connection reset by peer")
+        response = "<!-- PRESENTATION_TITLE: Deck -->"
+        for index in _requested_indices(messages, n_slides):
+            response += _slide_block(_smart_slide_html(title=f"Slide {index}"))
+        await on_chunk(response)
+        return response, None
+
+    _patch_llm(monkeypatch, fake_stream)
+    monkeypatch.setattr(smart_generation.asyncio, "sleep", fake_sleep)
+    result = _generate(n_slides)
+
+    assert len(result["slides"]) == n_slides
+    assert sleeps == [smart_generation.SMART_INFRA_RETRY_BACKOFF_SECONDS[0]]
+    assert "connection reset" not in deck_prompts[1]
+    assert "failed validation" not in deck_prompts[1]
+
+
+def test_repairs_escalate_from_low_to_medium_reasoning_effort(monkeypatch):
+    n_slides = 3
+    efforts = {"deck": [], "repair": []}
+
+    async def always_too_tall(html, *, check_eand_footer=False):
+        if 'data-slide-title="STUCK"' in html:
+            raise HTTPException(status_code=400, detail="too tall")
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        kind = "repair" if _is_single_slide_call(messages) else "deck"
+        efforts[kind].append(kwargs["reasoning"].effort)
+        response = "<!-- PRESENTATION_TITLE: Deck -->"
+        for index in _requested_indices(messages, n_slides):
+            title = "STUCK" if index == 1 else f"Slide {index}"
+            response += _slide_block(_smart_slide_html(title=title))
+        if kind == "deck":
+            await on_chunk(response)
+        return response, None
+
+    _patch_llm(
+        monkeypatch,
+        fake_stream,
+        render=always_too_tall,
+        reasoning=(
+            ReasoningConfig(enabled=True, effort=ReasoningEffortValue.MEDIUM),
+            True,
+        ),
+    )
+    result = _generate(n_slides)
+
+    assert efforts["deck"] == [ReasoningEffortValue.MEDIUM]
+    assert efforts["repair"] == [
+        ReasoningEffortValue.LOW,
+        ReasoningEffortValue.MEDIUM,
+        ReasoningEffortValue.MEDIUM,
+    ]
+    # The third repair reached the render waiver rung and was accepted.
+    assert result["slides"][1]["title"] == "STUCK"
+
+
+def test_idle_timeout_turns_a_hung_stream_into_a_stalled_error():
+    async def hung_stream():
+        yield "first"
+        await asyncio.sleep(10)
+        yield "never"
+
+    async def consume():
+        seen = []
+        async for event in smart_generation._with_idle_timeout(hung_stream(), 0.05):
+            seen.append(event)
+        return seen
+
+    with pytest.raises(smart_generation.SmartStreamStalledError):
+        asyncio.run(consume())
+
+
+def test_infra_failures_are_told_apart_from_content_failures():
+    assert smart_generation._is_infra_failure(ConnectionError("reset"))
+    assert smart_generation._is_infra_failure(
+        smart_generation.SmartStreamStalledError("quiet")
+    )
+    assert smart_generation._is_infra_failure(HTTPException(status_code=429))
+    assert smart_generation._is_infra_failure(HTTPException(status_code=503))
+    assert not smart_generation._is_infra_failure(
+        HTTPException(status_code=400, detail="too tall")
+    )
