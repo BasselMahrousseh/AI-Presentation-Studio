@@ -544,7 +544,7 @@ SMART_PPTX_EXPORT_FIDELITY_PROMPT = """
 PPTX export fidelity (hard requirement):
 This deck may be exported to an editable .pptx file by a converter that reads
 each element's own resolved style and rebuilds it as a native PowerPoint
-shape. One pattern does not survive that conversion and must be avoided:
+shape. These patterns do not survive that conversion and must be avoided:
 - Never mix two different text styles (a different color, font size, or
   weight) on elements that share one continuous inline text flow, e.g. a
   bold/colored `<span>` for a number sitting inline next to or inside the same
@@ -559,6 +559,16 @@ shape. One pattern does not survive that conversion and must be avoided:
   stat callout ("48" in a large red font above or beside "teams expected" in
   smaller white text as two separate blocks) is safe; the same pairing
   written as one inline run of mixed-style text is not.
+- A PowerPoint shape has one outline for all four sides. Never give one box
+  borders that differ between sides in color, or a thicker accent side on a
+  box bordered all the way round (`border-l-[6px] border-[#E00600] border
+  border-black`, `border-t-4 border-x border-b`): the export draws the
+  thickest side all the way round or drops the borders. Give a bordered card
+  one uniform border and draw the accent stripe as its own element, e.g.
+  `<div class="flex border border-black"><div aria-hidden="true"
+  class="w-[6px] shrink-0 bg-[#E00600]"></div><div class="p-4">...</div>
+  </div>`, or use the accent side alone with no other borders
+  (`border-l-[6px] border-[#E00600]`).
 - Every exported shape's position is captured once from a single browser
   render and frozen — nothing in the exported file re-flows the way the live
   HTML does. Never set `font-family` to a custom Google/web font (e.g.

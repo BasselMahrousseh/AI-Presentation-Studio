@@ -640,6 +640,223 @@ def _find_eand_footer_furniture_collisions(root: _LayoutNode) -> list[str]:
     return issues
 
 
+# PPTX export turns each bordered box into one PowerPoint shape, and a shape
+# has a single outline (one width, one color) for all four sides. Verified
+# against real exports of the closed-source converter (presentation-export):
+# - bordered sides with different colors -> every border on the box is
+#   dropped (e.g. `border border-black border-l-[#E00600]`);
+# - all four sides bordered with different widths -> the widest side is drawn
+#   all the way round (e.g. `border-l-[6px] border border-black` became a
+#   6px frame).
+# Everything else exports faithfully: one uniform border, or one to three
+# same-colored sides (a divider, a lone accent rail) - even at mixed widths.
+_BORDER_SIDES = ("t", "r", "b", "l")
+_BORDER_AXIS_SIDES = {
+    "": _BORDER_SIDES,
+    "x": ("l", "r"),
+    "y": ("t", "b"),
+    "s": ("l",),
+    "e": ("r",),
+    "t": ("t",),
+    "r": ("r",),
+    "b": ("b",),
+    "l": ("l",),
+}
+_BORDER_WIDTH_CLASS = re.compile(
+    r"^border(?:-([xytrblse]))?(?:-(0|2|4|8|\[(\d+(?:\.\d+)?)px\]|px))?$"
+)
+_BORDER_COLOR_CLASS = re.compile(r"^border(?:-([xytrblse]))?-(.+)$")
+_BORDER_NON_COLOR_SUFFIXES = {
+    "solid",
+    "dashed",
+    "dotted",
+    "double",
+    "hidden",
+    "none",
+    "collapse",
+    "separate",
+}
+_BORDER_STYLE_SIDES = {
+    "border": _BORDER_SIDES,
+    "border-top": ("t",),
+    "border-right": ("r",),
+    "border-bottom": ("b",),
+    "border-left": ("l",),
+}
+_BORDER_KEYWORD_WIDTHS = {"thin": 1.0, "medium": 3.0, "thick": 5.0}
+_CSS_VALUE_TOKEN = re.compile(r"[^\s(]+(?:\([^)]*\))?")
+_NAMED_BORDER_COLORS = {"black": "#000000", "white": "#ffffff"}
+
+
+def _normalized_border_color(value: str) -> str:
+    color = value.strip().casefold()
+    if color.startswith("[") and color.endswith("]"):
+        color = color[1:-1]
+    color = _NAMED_BORDER_COLORS.get(color, color)
+    if re.fullmatch(r"#[0-9a-f]{3}", color):
+        color = "#" + "".join(character * 2 for character in color[1:])
+    return color
+
+
+def _css_border_width(token: str) -> Optional[float]:
+    token = token.casefold()
+    if token in _BORDER_KEYWORD_WIDTHS:
+        return _BORDER_KEYWORD_WIDTHS[token]
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(?:px)?", token)
+    return float(match.group(1)) if match else None
+
+
+def _four_side_values(tokens: list[str]) -> dict[str, str]:
+    """Expand a CSS 1-4 value list (top, right, bottom, left) per side."""
+    if not tokens:
+        return {}
+    top = tokens[0]
+    right = tokens[1] if len(tokens) > 1 else top
+    bottom = tokens[2] if len(tokens) > 2 else top
+    left = tokens[3] if len(tokens) > 3 else right
+    return {"t": top, "r": right, "b": bottom, "l": left}
+
+
+def _resolved_border_sides(
+    node: _LayoutNode,
+) -> Optional[dict[str, tuple[float, str]]]:
+    """Per-side (width, color) for a node's borders, from Tailwind classes and
+    then its inline style (which wins). None when borders are switched off.
+    Tailwind emits side utilities after axis utilities after all-side ones, so
+    the more specific class wins regardless of attribute order; two classes
+    at the same level (e.g. `border-[#E00600] border-black`) conflict equally
+    on every side, so they are kept together as one value."""
+    widths: dict[str, dict[int, list[float]]] = {side: {} for side in _BORDER_SIDES}
+    colors: dict[str, dict[int, list[str]]] = {side: {} for side in _BORDER_SIDES}
+    for raw_token in node.attrs.get("class", "").split():
+        if ":" in raw_token:
+            continue  # responsive/state variants are not the exported state
+        token = raw_token.lstrip("!")
+        if token in {"border-none", "border-hidden"}:
+            return None
+        width_match = _BORDER_WIDTH_CLASS.match(token)
+        if width_match:
+            axis = width_match.group(1) or ""
+            amount = width_match.group(2)
+            if amount is None or amount == "px":
+                width = 1.0
+            elif width_match.group(3) is not None:
+                width = float(width_match.group(3))
+            else:
+                width = float(amount)
+            level = 0 if not axis else (1 if axis in {"x", "y"} else 2)
+            for side in _BORDER_AXIS_SIDES[axis]:
+                widths[side].setdefault(level, []).append(width)
+            continue
+        color_match = _BORDER_COLOR_CLASS.match(token)
+        if not color_match:
+            continue
+        axis = color_match.group(1) or ""
+        suffix = color_match.group(2)
+        if suffix in _BORDER_NON_COLOR_SUFFIXES or suffix.startswith("spacing"):
+            continue
+        level = 0 if not axis else (1 if axis in {"x", "y"} else 2)
+        for side in _BORDER_AXIS_SIDES[axis]:
+            colors[side].setdefault(level, []).append(
+                _normalized_border_color(suffix)
+            )
+
+    resolved_widths = {
+        side: max(levels[max(levels)]) if levels else 0.0
+        for side, levels in widths.items()
+    }
+    resolved_colors = {
+        side: "|".join(sorted(set(levels[max(levels)]))) if levels else "currentcolor"
+        for side, levels in colors.items()
+    }
+
+    for declaration in node.attrs.get("style", "").split(";"):
+        name, _, value = declaration.partition(":")
+        name = name.strip().casefold()
+        value = value.strip()
+        if not name.startswith("border") or not value:
+            continue
+        tokens = _CSS_VALUE_TOKEN.findall(value)
+        if name in _BORDER_STYLE_SIDES:
+            width: Optional[float] = None
+            color = "currentcolor"
+            has_style = False
+            for token in tokens:
+                lowered = token.casefold()
+                if lowered in {"none", "hidden"}:
+                    width = 0.0
+                    has_style = True
+                elif lowered in _BORDER_NON_COLOR_SUFFIXES:
+                    has_style = True
+                elif (parsed := _css_border_width(token)) is not None:
+                    width = parsed if width is None else width
+                else:
+                    color = _normalized_border_color(token)
+            if width is None:
+                width = 3.0 if has_style else 0.0
+            for side in _BORDER_STYLE_SIDES[name]:
+                resolved_widths[side] = width
+                resolved_colors[side] = color
+        elif name == "border-width":
+            for side, token in _four_side_values(tokens).items():
+                parsed = _css_border_width(token)
+                if parsed is not None:
+                    resolved_widths[side] = parsed
+        elif name == "border-color":
+            for side, token in _four_side_values(tokens).items():
+                resolved_colors[side] = _normalized_border_color(token)
+        elif name == "border-style" and value.casefold() in {"none", "hidden"}:
+            return None
+        else:
+            side_match = re.fullmatch(
+                r"border-(top|right|bottom|left)-(width|color)", name
+            )
+            if side_match:
+                side = side_match.group(1)[0]
+                if side_match.group(2) == "width":
+                    parsed = _css_border_width(value)
+                    if parsed is not None:
+                        resolved_widths[side] = parsed
+                else:
+                    resolved_colors[side] = _normalized_border_color(value)
+
+    return {
+        side: (resolved_widths[side], resolved_colors[side]) for side in _BORDER_SIDES
+    }
+
+
+def _find_pptx_border_export_risks(root: _LayoutNode) -> list[str]:
+    """Flag the two border shapes the PPTX converter cannot reproduce (see
+    _BORDER_SIDES above). Checks every element, decorative ones included,
+    since a decorative frame exports exactly like a content card."""
+    for node in _walk(root):
+        sides = _resolved_border_sides(node)
+        if sides is None:
+            continue
+        bordered = {side: value for side, value in sides.items() if value[0] > 0}
+        if len(bordered) < 2:
+            continue
+        mixed_colors = len({color for _, color in bordered.values()}) > 1
+        mixed_widths = len(bordered) == 4 and (
+            len({width for width, _ in bordered.values()}) > 1
+        )
+        if mixed_colors or mixed_widths:
+            return [
+                "A box has borders on several sides with different widths or "
+                "colors (e.g. `border-l-[6px] border-[#E00600] border "
+                "border-black`). PowerPoint export gives a box one outline for "
+                "all four sides, so it draws the thickest side all the way "
+                "round or drops the borders entirely. Give the box one uniform "
+                "border (same width and color on every side) and draw the "
+                "accent as its own element, e.g. `<div class=\"flex border "
+                "border-black\"><div aria-hidden=\"true\" class=\"w-[6px] "
+                "shrink-0 bg-[#E00600]\"></div><div class=\"p-4\">...</div>"
+                "</div>` - or use the accent side's border alone (e.g. "
+                "`border-l-[6px] border-[#E00600]` with no other borders)."
+            ]
+    return []
+
+
 def inspect_smart_slide_layout(
     html: str, *, check_eand_footer: bool = False
 ) -> list[str]:
@@ -707,5 +924,6 @@ def inspect_smart_slide_layout(
     issues.extend(_find_shrink_marked_grid_overflow_risks(root))
     issues.extend(_find_fixed_height_card_text_overflow_risks(root))
     issues.extend(_find_stacked_list_overflow_risks(root))
+    issues.extend(_find_pptx_border_export_risks(root))
 
     return list(dict.fromkeys(issues))

@@ -150,6 +150,14 @@ folder map and full commands.
   still corrupted a real file). The only check that has ever caught this class of bug is a human opening
   the real exported file in real PowerPoint — budget for that explicitly before shipping any OOXML
   element change, especially anything chart-type-restricted like `dLblPos`.
+- **The PPTX converter gives each bordered box one outline (one width, one color for all four sides).**
+  Verified by real exports: sides with different border colors lose every border on that box, and a box
+  bordered all the way round with one thicker accent side (`border-l-[6px] ... border border-black`)
+  gets the thick width on all four sides. A uniform border, or 1-3 same-colored sides alone (dividers,
+  a lone rail), export faithfully. Guarded two ways: guidance in `SMART_PPTX_EXPORT_FIDELITY_PROMPT`
+  and a static check (`_find_pptx_border_export_risks` in `utils/smart_slide_layout.py`) that sends an
+  offending slide to per-slide repair. The accent-rail-as-its-own-element pattern (a `w-[6px]` child in
+  a uniformly bordered flex card) exports correctly.
 - **A backgrounded shell process "succeeding" doesn't mean it bound the port.** `nohup cmd &` returning
   cleanly only means the shell backgrounded it. Before trusting a dev-server restart for verification,
   confirm the new PID is actually listening (`lsof -i :PORT -sTCP:LISTEN`) and that its own startup log

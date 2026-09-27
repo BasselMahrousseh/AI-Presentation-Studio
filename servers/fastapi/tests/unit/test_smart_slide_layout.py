@@ -1,3 +1,4 @@
+import pytest
 from utils.smart_slide_layout import inspect_smart_slide_layout
 
 
@@ -354,3 +355,61 @@ def test_non_decorative_content_over_the_logo_area_is_not_flagged_by_this_guard(
 </section>
 """
     assert not _has_furniture_collision_issue(html, check_eand_footer=True)
+
+
+# Expected outcomes below come from real exports through presentation-export
+# (the converter source is not available), not from reading its behavior.
+def _has_border_export_issue(classes: str, style: str = "") -> bool:
+    html = (
+        '<section class="relative h-[720px] w-[1280px] overflow-hidden">'
+        f'<div class="{classes}" style="{style}"><p>Layer 01</p></div>'
+        "</section>"
+    )
+    return any("PowerPoint export" in issue for issue in inspect_smart_slide_layout(html))
+
+
+@pytest.mark.parametrize(
+    "classes",
+    [
+        # exported as a 6px frame on every side
+        "border-l-[6px] border-[#E00600] border-b border-r border-t border-black p-4",
+        "rounded-lg border border-l-4 border-[#E00600] p-4",
+        # exported with every border dropped
+        "border border-black border-l-[#E00600] p-4",
+        "border-t-4 border-[#E00600] border-x border-b border-x-black border-b-black",
+        "border-l-[6px] border-y border-l-[#E00600] border-y-black p-4",
+    ],
+)
+def test_borders_that_do_not_survive_pptx_export_are_flagged(classes):
+    assert _has_border_export_issue(classes)
+
+
+@pytest.mark.parametrize(
+    "classes",
+    [
+        "border border-black p-4",
+        "border-2 border-[#E00600] p-4",
+        "relative rounded-xl border border-black",
+        "flex border border-black",
+        "border-l-[6px] border-[#E00600] p-4",
+        "border-b border-black pb-4",
+        "border-x-2 border-[#E00600] p-4",
+        "border-l-[6px] border-t border-[#E00600] p-4",
+        "border-l-[6px] border-y border-[#E00600] p-4",
+        "border border-black border-[#000] p-4",
+        "border border-black hover:border-l-4 p-4",
+    ],
+)
+def test_borders_that_survive_pptx_export_are_not_flagged(classes):
+    assert not _has_border_export_issue(classes)
+
+
+def test_mixed_inline_style_borders_are_flagged():
+    assert _has_border_export_issue(
+        "p-4",
+        "border-left:6px solid #E00600;border-top:1px solid #000;"
+        "border-right:1px solid #000;border-bottom:1px solid #000",
+    )
+    assert not _has_border_export_issue(
+        "p-4", "border:1px solid rgba(0, 0, 0, 0.2);border-radius:8px"
+    )
