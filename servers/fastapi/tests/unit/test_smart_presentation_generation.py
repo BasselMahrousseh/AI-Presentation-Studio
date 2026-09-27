@@ -702,7 +702,56 @@ def test_smart_html_normalization_accepts_separated_positioned_content():
 
 def test_explicit_smart_slide_count_is_bounded():
     assert resolve_smart_slide_count(8) == 8
-    assert resolve_smart_slide_count(200) == 20
+    assert resolve_smart_slide_count(200) == smart_generation.MAX_SMART_SLIDE_COUNT == 40
+
+
+def test_generation_limit_matches_the_outline_limit():
+    """The bug this guards: generation used to cap at 20 while the outline
+    editor allowed 50, so an approved outline silently lost its tail."""
+    from constants.presentation import MAX_NUMBER_OF_SLIDES
+
+    assert smart_generation.MAX_SMART_SLIDE_COUNT == MAX_NUMBER_OF_SLIDES
+
+
+def test_fixed_eand_slides_no_longer_eat_into_an_explicit_count():
+    assert resolve_smart_slide_count(40, fixed_slide_count=2) == 40
+
+
+def test_approved_30_slide_eand_outline_keeps_every_item():
+    outline = "\n".join(f"Slide: {index}\nSection {index}" for index in range(1, 31))
+    count = asyncio.run(
+        determine_smart_slide_count(
+            content=outline,
+            instructions=None,
+            source_context="",
+            include_title_slide=False,
+            include_table_of_contents=False,
+            minimum_slide_count=1,
+            fixed_slide_count=2,
+        )
+    )
+    assert count == 30
+
+
+def test_long_decks_get_a_density_instruction_and_short_ones_do_not():
+    def prompt(n_slides):
+        return str(
+            get_smart_messages(
+                content="Deck",
+                n_slides=n_slides,
+                language="English",
+                tone=None,
+                verbosity=None,
+                instructions=None,
+                include_title_slide=False,
+                include_table_of_contents=False,
+                source_context="",
+                community_design_context="",
+            )[1].content
+        )
+
+    assert "LONG DECK" not in prompt(smart_generation.SMART_LONG_DECK_SLIDE_COUNT)
+    assert "LONG DECK: this deck has 40 slides" in prompt(40)
 
 
 def test_smart_slide_count_is_chosen_by_llm(monkeypatch):
@@ -848,6 +897,11 @@ def _requested_indices(messages, n_slides):
     )
     if single:
         return [int(single.group(1)) - 1]
+    chunk = re.search(
+        r"CHUNK MODE\s+Generate exactly \d+ slide blocks: slides (\d+)-(\d+) of", prompt
+    )
+    if chunk:
+        return list(range(int(chunk.group(1)) - 1, int(chunk.group(2))))
     remaining = int(re.search(r"Generate exactly (\d+)", prompt).group(1))
     return list(range(n_slides - remaining, n_slides))
 
@@ -2414,3 +2468,193 @@ def test_infra_failures_are_told_apart_from_content_failures():
     assert not smart_generation._is_infra_failure(
         HTTPException(status_code=400, detail="too tall")
     )
+
+
+# ---------------------------------------------------------------------------
+# Chunked generation for long outline-driven decks (> SMART_LONG_DECK_SLIDE_COUNT).
+# ---------------------------------------------------------------------------
+
+
+def _outline(n_slides):
+    return "Approved outline:\n\n" + "\n\n".join(
+        f"Slide: {index}\nSection {index}" for index in range(1, n_slides + 1)
+    )
+
+
+def _generate_outline_deck(n_slides, emitted, *, content=None):
+    async def on_slide(index, slide):
+        emitted.append(index)
+
+    return asyncio.run(
+        smart_generation.generate_smart_presentation(
+            content=content if content is not None else _outline(n_slides),
+            n_slides=n_slides,
+            language="English",
+            tone=None,
+            verbosity=None,
+            instructions=None,
+            include_title_slide=False,
+            include_table_of_contents=False,
+            on_slide=on_slide,
+        )
+    )
+
+
+def _is_chunk_call(messages):
+    return "CHUNK MODE" in str(messages[1].content)
+
+
+def test_long_outline_deck_is_generated_in_anchored_parallel_chunks(monkeypatch):
+    n_slides = 22
+    chunk_calls = []
+    chunk_one_may_finish = asyncio.Event()
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        assert _is_chunk_call(messages), "a long outline deck must not use one stream"
+        prompt = str(messages[1].content)
+        indices = _requested_indices(messages, n_slides)
+        chunk_calls.append(
+            {
+                "range": (indices[0], indices[-1] + 1),
+                "effort": kwargs["reasoning"].effort,
+                "title_marker": "Return the PRESENTATION_TITLE marker first" in prompt,
+                "anchored": 'data-slide-title="Slide 0"' in prompt
+                and "VISUAL SYSTEM DIGEST" in prompt,
+            }
+        )
+        if indices[0] != 0:
+            # A later chunk is running while chunk 1 is still streaming.
+            chunk_one_may_finish.set()
+        response = "<!-- PRESENTATION_TITLE: Long Deck -->" if indices[0] == 0 else ""
+        for position, index in enumerate(indices):
+            block = _slide_block(_smart_slide_html(title=f"Slide {index}"))
+            response += block
+            await on_chunk(("<!-- PRESENTATION_TITLE: Long Deck -->" if index == 0 else "") + block)
+            if indices[0] == 0 and position == 1:
+                await asyncio.wait_for(chunk_one_may_finish.wait(), 2)
+        return response, None
+
+    _patch_llm(
+        monkeypatch,
+        fake_stream,
+        reasoning=(
+            ReasoningConfig(enabled=True, effort=ReasoningEffortValue.MEDIUM),
+            True,
+        ),
+    )
+    emitted = []
+    result = _generate_outline_deck(n_slides, emitted)
+
+    ranges = sorted(call["range"] for call in chunk_calls)
+    assert ranges == [(0, 5), (5, 10), (10, 15), (15, 20), (20, 22)]
+    first = next(call for call in chunk_calls if call["range"] == (0, 5))
+    later = [call for call in chunk_calls if call["range"] != (0, 5)]
+    assert first["effort"] == ReasoningEffortValue.MEDIUM
+    assert first["title_marker"] and not first["anchored"]
+    assert all(call["effort"] == ReasoningEffortValue.LOW for call in later)
+    assert all(call["anchored"] and not call["title_marker"] for call in later)
+    assert [slide["title"] for slide in result["slides"]] == [
+        f"Slide {index}" for index in range(n_slides)
+    ]
+    assert emitted == list(range(n_slides))
+    assert result["title"] == "Long Deck"
+
+
+def test_chunk_concurrency_is_bounded(monkeypatch):
+    n_slides = 30
+    running = {"now": 0, "max": 0}
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        indices = _requested_indices(messages, n_slides)
+        later = indices[0] != 0
+        if later:
+            running["now"] += 1
+            running["max"] = max(running["max"], running["now"])
+        response = ""
+        for index in indices:
+            block = _slide_block(_smart_slide_html(title=f"Slide {index}"))
+            response += block
+            await on_chunk(block)
+        if later:
+            await asyncio.sleep(0.02)
+            running["now"] -= 1
+        return response, None
+
+    _patch_llm(monkeypatch, fake_stream)
+    monkeypatch.setenv(smart_generation.SMART_CHUNK_CONCURRENCY_ENV, "2")
+    result = _generate_outline_deck(n_slides, [])
+
+    assert len(result["slides"]) == n_slides
+    assert running["max"] == 2
+
+
+def test_a_chunk_whose_stream_dies_is_backfilled_slide_by_slide(monkeypatch):
+    n_slides = 22
+    single_calls = []
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        if _is_single_slide_call(messages):
+            (index,) = _requested_indices(messages, n_slides)
+            single_calls.append(index)
+            return _slide_block(_smart_slide_html(title=f"Backfilled {index}")), None
+        indices = _requested_indices(messages, n_slides)
+        if indices[0] == 10:
+            raise ConnectionError("connection reset by peer")
+        response = ""
+        for index in indices:
+            block = _slide_block(_smart_slide_html(title=f"Slide {index}"))
+            response += block
+            await on_chunk(block)
+        return response, None
+
+    _patch_llm(monkeypatch, fake_stream)
+    emitted = []
+    result = _generate_outline_deck(n_slides, emitted)
+
+    assert sorted(single_calls) == [10, 11, 12, 13, 14]
+    assert [slide["title"] for slide in result["slides"]][10:15] == [
+        f"Backfilled {index}" for index in range(10, 15)
+    ]
+    assert emitted == list(range(n_slides))
+
+
+@pytest.mark.parametrize(
+    "n_slides, use_outline",
+    ((smart_generation.SMART_LONG_DECK_SLIDE_COUNT, True), (22, False)),
+)
+def test_short_decks_and_decks_without_an_outline_use_one_stream(
+    monkeypatch, n_slides, use_outline
+):
+    calls = []
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        assert not _is_chunk_call(messages)
+        calls.append(1)
+        response = "<!-- PRESENTATION_TITLE: Deck -->"
+        for index in _requested_indices(messages, n_slides):
+            response += _slide_block(_smart_slide_html(title=f"Slide {index}"))
+        await on_chunk(response)
+        return response, None
+
+    _patch_llm(monkeypatch, fake_stream)
+    result = _generate_outline_deck(
+        n_slides, [], content=None if use_outline else "A topic with no slide plan"
+    )
+
+    assert calls == [1]
+    assert len(result["slides"]) == n_slides
+
+
+def test_style_digest_summarises_the_visual_system():
+    digest = smart_generation._style_digest(
+        [
+            '<section class="relative p-[48px] h-[720px]" style="font-family: Inter, Arial">'
+            '<h1 class="text-[36px] text-[#E00600] rounded-lg border-[#D9DEE7]">x</h1>'
+            '<p class="text-[16px] text-[#E00600]">y</p></section>'
+        ]
+    )
+    assert "Palette, most used first: #E00600, #D9DEE7" in digest
+    assert "text-[36px]" in digest and "text-[16px]" in digest
+    assert "rounded-lg" in digest
+    assert "Font family: Inter, Arial" in digest
+    assert "Root section padding: p-[48px]" in digest

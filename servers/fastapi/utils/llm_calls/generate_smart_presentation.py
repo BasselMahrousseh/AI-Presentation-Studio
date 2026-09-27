@@ -43,12 +43,38 @@ from utils.llm_utils import (
     stream_generate_events,
 )
 from utils.smart_slide_layout import inspect_smart_slide_layout
+from constants.presentation import MAX_NUMBER_OF_SLIDES
 from utils.smart_brand_templates import EAND_SMART_TEMPLATE_ID, get_smart_brand_prompt
 
 LOGGER = logging.getLogger(__name__)
 
 MIN_SMART_SLIDE_COUNT = 1
-MAX_SMART_SLIDE_COUNT = 20
+# Most content slides a Smart deck can have when the user decides the count
+# (an approved outline or an explicit number). Deliberately the same constant
+# as the outline editor's own limit: this used to be 20 while outlines allowed
+# 50, so an approved 30-slide e& outline silently lost items 19-30. Fixed
+# slides a brand template splices in (e&'s cover and thank-you) come on top.
+# Verified live at 40 slides: one stream, 136-165s, with per-slide repair.
+MAX_SMART_SLIDE_COUNT = MAX_NUMBER_OF_SLIDES
+# Ceiling when the model chooses the count itself (no outline structure),
+# counting any fixed slides. Kept at the pre-existing 20: a vague prompt
+# should not grow into a 40-slide deck.
+MAX_SMART_AUTO_SLIDE_COUNT = 20
+# Above this many slides one streamed response starts rationing effort -
+# measured: slides 10-30% lighter at 40 than the same outline as a short
+# deck - so long decks get an explicit density instruction.
+SMART_LONG_DECK_SLIDE_COUNT = 20
+# Outline-driven decks longer than SMART_LONG_DECK_SLIDE_COUNT are generated
+# in chunks: chunk 1 streams first and sets the visual system, then the rest
+# run in parallel, each anchored to chunk 1's first accepted slides. Measured
+# live: a 5-slide chunk writes full-density slides (a long single response
+# wrote 10-30% lighter ones, and a density instruction did not reliably fix
+# the empty lower area), with consistent style across chunks, no dropped
+# slides, and no rate-limit errors at 5 concurrent streams.
+SMART_CHUNK_SIZE = 5
+SMART_CHUNK_ANCHOR_SLIDES = 2
+SMART_CHUNK_CONCURRENCY = 4
+SMART_CHUNK_CONCURRENCY_ENV = "SMART_CHUNK_CONCURRENCY"
 SMART_GENERATION_MAX_ATTEMPTS = 8
 
 # How many times the *same* slide may be rejected (counting its original
@@ -672,7 +698,7 @@ SMART_SLIDE_COUNT_SCHEMA = {
         "n_slides": {
             "type": "integer",
             "minimum": MIN_SMART_SLIDE_COUNT,
-            "maximum": MAX_SMART_SLIDE_COUNT,
+            "maximum": MAX_SMART_AUTO_SLIDE_COUNT,
             "description": "Total number of slides, including title and table-of-contents slides.",
         },
     },
@@ -697,7 +723,7 @@ delivered deck naturally ends up larger than the number the user stated.
 Decide the right number of slides for a presentation.
 
 Return only the requested structured value. Choose a count from
-{MIN_SMART_SLIDE_COUNT} to {MAX_SMART_SLIDE_COUNT}, inclusive. Account for the
+{MIN_SMART_SLIDE_COUNT} to {MAX_SMART_AUTO_SLIDE_COUNT}, inclusive. Account for the
 topic's scope, the amount of useful source material, and the requested depth.
 {"The count includes title and table-of-contents slides when they are requested." if not fixed_slide_count else "The count is content slides only."}
 Prefer a concise deck for a narrow request and a longer deck only when each
@@ -706,10 +732,17 @@ slide has a distinct purpose. Do not use a fixed default count.
 
 
 def resolve_smart_slide_count(value: int, *, fixed_slide_count: int = 0) -> int:
-    """Apply the Smart deck safety limit to an explicit user-provided count.
-    `fixed_slide_count` reserves room so content + fixed slides never exceed
-    the overall cap (see determine_smart_slide_count)."""
-    return min(value, max(MAX_SMART_SLIDE_COUNT - max(fixed_slide_count, 0), 1))
+    """Apply the Smart deck limit to an explicit user-provided count of
+    content slides. Fixed template slides are added on top by the caller, so
+    `fixed_slide_count` no longer eats into the user's count - it is kept in
+    the signature for callers only."""
+    del fixed_slide_count
+    if value > MAX_SMART_SLIDE_COUNT:
+        LOGGER.warning(
+            "[smart-generation] requested %s content slides; capping at %s",
+            value, MAX_SMART_SLIDE_COUNT,
+        )
+    return min(value, MAX_SMART_SLIDE_COUNT)
 
 
 async def determine_smart_slide_count(
@@ -725,24 +758,24 @@ async def determine_smart_slide_count(
     """Ask the configured LLM to size an auto-count Smart presentation.
 
     Returns the number of slides the model itself will generate — i.e.
-    content slides only. `fixed_slide_count` (e.g. e&'s pre-built cover and
-    thank-you slides, spliced in outside the model's own output) is used only
-    to keep content + fixed slides within MAX_SMART_SLIDE_COUNT overall; the
-    caller is responsible for adding it back on top of this return value to
-    get the deck's true total slide count."""
+    content slides only. An explicit per-slide plan in the prompt (an
+    approved outline) is honoured up to MAX_SMART_SLIDE_COUNT content slides;
+    only a count the model chooses itself is held to MAX_SMART_AUTO_SLIDE_COUNT,
+    where `fixed_slide_count` (e.g. e&'s pre-built cover and thank-you slides)
+    is reserved out of that total. Either way the caller adds the fixed slides
+    back on top of this return value to get the deck's true total."""
     fixed_slide_count = max(fixed_slide_count, 0)
-    max_content_slide_count = max(MAX_SMART_SLIDE_COUNT - fixed_slide_count, 1)
-    minimum_slide_count = min(
-        max(minimum_slide_count, MIN_SMART_SLIDE_COUNT), max_content_slide_count
-    )
     explicit_content_slide_count = _get_explicit_content_slide_count(content)
     if explicit_content_slide_count:
         # A prompt that already supplies Slide 1 ... Slide N is an explicit
         # content plan — preserve every supplied section as-is.
-        return min(
-            max(explicit_content_slide_count, minimum_slide_count),
-            max_content_slide_count,
+        return resolve_smart_slide_count(
+            max(explicit_content_slide_count, minimum_slide_count, MIN_SMART_SLIDE_COUNT)
         )
+    max_content_slide_count = max(MAX_SMART_AUTO_SLIDE_COUNT - fixed_slide_count, 1)
+    minimum_slide_count = min(
+        max(minimum_slide_count, MIN_SMART_SLIDE_COUNT), max_content_slide_count
+    )
     response_schema = {
         **SMART_SLIDE_COUNT_SCHEMA,
         "properties": {
@@ -842,6 +875,24 @@ Exact HTML for the most recent accepted slides (visual continuity reference):
 """
 
 
+def _long_deck_density_note(n_slides: int) -> str:
+    """Measured: in one long response the model rations effort - at 40
+    slides it wrote 10-30% fewer words per slide than it did for the same
+    outline as a short deck, leaving the lower part of many later slides
+    empty. Short decks are unaffected and get no extra text."""
+    if n_slides <= SMART_LONG_DECK_SLIDE_COUNT:
+        return ""
+    return (
+        f"LONG DECK: this deck has {n_slides} slides. Give every slide the same "
+        "depth, density, and polish you would give it in a 10-slide deck - do "
+        "not make later slides thinner, sparser, or more generic to save effort. "
+        "Cover each slide's full outline content (typically 60-90 words of real "
+        "content across its components), use the slide's usable height rather "
+        "than leaving a large empty area, and use a chart, table, or diagram "
+        "wherever the content has numbers or comparisons.\n"
+    )
+
+
 def get_smart_messages(
     *,
     content: str,
@@ -860,6 +911,7 @@ def get_smart_messages(
     smart_template: Optional[str] = None,
     smart_brand_colors: Optional[list[str]] = None,
     slide_task: Optional[str] = None,
+    task_heading: Optional[str] = None,
 ) -> list[Message]:
     """`slide_task`, when given, replaces the whole-deck/continuation
     instructions with a single-slide task (see _slide_task_prompt) while
@@ -889,7 +941,7 @@ def get_smart_messages(
     )
     brand_context = get_smart_brand_prompt(smart_template, smart_brand_colors)
     if slide_task:
-        task_heading = "Generate one slide of an existing presentation."
+        task_heading = task_heading or "Generate one slide of an existing presentation."
         task_body = slide_task.strip()
     else:
         task_heading = (
@@ -899,6 +951,7 @@ def get_smart_messages(
         )
         task_body = (
             f"{count_instruction}\n"
+            f"{_long_deck_density_note(n_slides)}"
             f"Include title slide: {include_title_slide}\n"
             f"Include a visible table-of-contents slide: {include_table_of_contents}\n"
             f"{_continuation_prompt(completed_slides, retry_error)}"
@@ -1947,6 +2000,100 @@ def _slide_task_prompt(
     return "\n\n".join(parts)
 
 
+def _chunk_concurrency() -> int:
+    try:
+        value = int(os.getenv(SMART_CHUNK_CONCURRENCY_ENV, ""))
+    except ValueError:
+        return SMART_CHUNK_CONCURRENCY
+    return value if value > 0 else SMART_CHUNK_CONCURRENCY
+
+
+_DIGEST_HEX = re.compile(r"#[0-9a-fA-F]{6}\b")
+_DIGEST_TEXT_SIZE = re.compile(r"text-\[\d+px\]")
+_DIGEST_RADIUS = re.compile(r"\brounded(?:-[\w\[\]]+)?")
+_DIGEST_BORDER = re.compile(r"\bborder(?:-[\w\[\]#/]+)?")
+_DIGEST_FONT = re.compile(r"font-family:\s*([^;\"]+)")
+_DIGEST_PADDING = re.compile(r"\bp[xytblr]?-\[\d+px\]")
+_DIGEST_SECTION = re.compile(r"<section\b[^>]*>", re.IGNORECASE)
+
+
+def _style_digest(htmls: Sequence[str]) -> str:
+    """A deterministic summary of an accepted slide set's visual system, so a
+    chunk generated in parallel can match chunk 1 without seeing every slide.
+    Extracted from the HTML itself - no extra LLM call."""
+    joined = "\n".join(htmls)
+    sections = " ".join(_DIGEST_SECTION.findall(joined))
+
+    def most_common(pattern: re.Pattern[str], text: str, limit: int, *, upper: bool = False) -> str:
+        counts: dict[str, int] = {}
+        for match in pattern.findall(text):
+            key = match.strip().upper() if upper else match.strip()
+            counts[key] = counts.get(key, 0) + 1
+        ranked = sorted(counts, key=lambda key: -counts[key])[:limit]
+        return ", ".join(ranked) or "none"
+
+    return (
+        "VISUAL SYSTEM DIGEST (from this deck's accepted slides - match it):\n"
+        f"- Palette, most used first: {most_common(_DIGEST_HEX, joined, 8, upper=True)}\n"
+        f"- Text sizes in use: {most_common(_DIGEST_TEXT_SIZE, joined, 8)}\n"
+        f"- Corner radius classes: {most_common(_DIGEST_RADIUS, joined, 4)}\n"
+        f"- Border classes: {most_common(_DIGEST_BORDER, joined, 6)}\n"
+        f"- Font family: {most_common(_DIGEST_FONT, joined, 2)}\n"
+        f"- Root section padding: {most_common(_DIGEST_PADDING, sections, 4)}\n"
+    )
+
+
+def _chunk_task_prompt(
+    *,
+    start: int,
+    end: int,
+    n_slides: int,
+    include_title_marker: bool,
+    anchor_htmls: Sequence[str],
+    digest: str,
+    include_title_slide: bool,
+    include_table_of_contents: bool,
+) -> str:
+    """The variable part of one chunk's prompt in chunked generation."""
+    type_notes = [
+        f"Slide {index + 1}: "
+        + _required_slide_type_note(
+            index,
+            n_slides,
+            include_title_slide=include_title_slide,
+            include_table_of_contents=include_table_of_contents,
+        )
+        for index in range(start, end)
+    ]
+    parts = [
+        "CHUNK MODE",
+        f"Generate exactly {end - start} slide blocks: slides {start + 1}-{end} of "
+        f"{n_slides}. Every other slide is generated separately; return only these, "
+        "in order.",
+        f"The original prompt's per-slide outline sections for slides {start + 1}-{end} "
+        "are these slides' content - one outline section per slide, none skipped or merged.",
+        (
+            "Return the PRESENTATION_TITLE marker first, then the slide blocks."
+            if include_title_marker
+            else "Do not return a PRESENTATION_TITLE marker - only the slide blocks."
+        ),
+        "\n".join(type_notes),
+    ]
+    if anchor_htmls:
+        parts.append(digest.strip())
+        parts.append(
+            "Accepted slides from this deck (visual continuity reference - match "
+            "their palette, typography, density, and component style; vary the "
+            "composition):\n\n" + "\n\n".join(anchor_htmls)
+        )
+    else:
+        parts.append(
+            "These are the deck's first slides: they establish the visual system "
+            "every later slide will follow."
+        )
+    return "\n\n".join(parts)
+
+
 async def _validate_generated_slide(
     slide: dict[str, str],
     index: int,
@@ -2242,31 +2389,32 @@ async def generate_smart_presentation(
         await emit_ready()
         return None
 
-    for _attempt in range(SMART_GENERATION_MAX_ATTEMPTS):
-        base = len(accepted_slides)
-        if base >= n_slides:
-            return finished()
-        LOGGER.info(
-            "[smart-generation] attempt=%s/%s accepted_slides=%s",
-            _attempt + 1, SMART_GENERATION_MAX_ATTEMPTS, base,
-        )
-        messages = get_smart_messages(
-            **prompt_inputs,
-            completed_slides=accepted_slides,
-            retry_error=retry_error,
-        )
-        # Debug-only: the full prompt is tens of KB. Set LOG_LEVEL=DEBUG.
-        LOGGER.debug("[smart-generation] prompt messages=%s", messages)
-
-        # The parser only runs hard validity checks, and reports a failing
-        # block instead of raising, so the stream is never abandoned.
+    async def stream_range(
+        messages: list[Message],
+        start: int,
+        end: int,
+        *,
+        reasoning_config: ReasoningConfig | None,
+        primary: bool,
+        backfill_limit: int,
+        label: str,
+        on_accepted: Callable[[], None] | None = None,
+    ) -> tuple[Exception | None, dict[int, asyncio.Task[Optional[str]]]]:
+        """Stream slides [start, end) from one LLM call. A slide that fails
+        validation is repaired alone while the stream keeps going; slides are
+        emitted in index order via the shared `ready` buffer. `primary` marks
+        the call whose metrics are reported (parallel chunks stay silent so
+        the progress readout doesn't jump between streams). Returns the
+        stream's own error (None on success) and the repair tasks it started,
+        all already finished."""
+        nonlocal title, last_metrics
         parser = SmartSlideStreamParser(skip_layout_heuristics=True, yield_errors=True)
         streamed = 0
         repairs: dict[int, asyncio.Task[Optional[str]]] = {}
         streamed_response = ""
         streamed_thinking = ""
         model_supports_thinking = configured_thinking_support
-        attempt_started_at = time.perf_counter()
+        started_at = time.perf_counter()
         estimated_input_tokens = estimate_message_tokens(messages)
 
         def start_single_slide(
@@ -2280,14 +2428,16 @@ async def generate_smart_presentation(
             nonlocal streamed_response, streamed
             streamed_response += chunk
             for item in parser.feed(chunk):
-                index = base + streamed
+                index = start + streamed
                 streamed += 1
-                if index >= n_slides:
-                    if index == n_slides:
+                if index >= end:
+                    if index == end:
                         LOGGER.warning(
-                            "[smart-generation] ignoring slides beyond the requested %s",
-                            n_slides,
+                            "[smart-generation] %s: ignoring slides beyond slide %s",
+                            label, end,
                         )
+                    continue
+                if index < len(accepted_slides):
                     continue
                 if isinstance(item, SmartSlideBlockError):
                     failure = item.detail
@@ -2306,6 +2456,8 @@ async def generate_smart_presentation(
                         failure = str(exc.detail)
                     else:
                         ready[index] = slide
+                        if on_accepted is not None:
+                            on_accepted()
                         await emit_ready()
                         continue
                 LOGGER.info(
@@ -2323,7 +2475,7 @@ async def generate_smart_presentation(
         async def emit_estimated_metrics_periodically() -> None:
             while True:
                 await asyncio.sleep(SMART_GENERATION_METRICS_INTERVAL_SECONDS)
-                duration = max(time.perf_counter() - attempt_started_at, 1e-9)
+                duration = max(time.perf_counter() - started_at, 1e-9)
                 output_tokens = estimate_text_tokens(streamed_response)
                 thinking_tokens = (
                     estimate_thinking_tokens(streamed_thinking)
@@ -2348,10 +2500,11 @@ async def generate_smart_presentation(
 
         metrics_task = (
             asyncio.create_task(emit_estimated_metrics_periodically())
-            if on_metrics is not None
+            if primary and on_metrics is not None
             else None
         )
         stream_error: Exception | None = None
+        results: list[Any] = []
         try:
             try:
                 try:
@@ -2360,12 +2513,13 @@ async def generate_smart_presentation(
                         model,
                         messages,
                         handle_chunk,
-                        reasoning=reasoning,
+                        reasoning=reasoning_config,
                         on_thinking_chunk=handle_thinking_chunk,
                         model_supports_thinking=model_supports_thinking,
                     )
                     LOGGER.info(
-                        "[smart-generation] response_complete chars=%s metrics=%s",
+                        "[smart-generation] response_complete %s chars=%s metrics=%s",
+                        label,
                         len(response),
                         metrics,
                     )
@@ -2373,30 +2527,35 @@ async def generate_smart_presentation(
                     if metrics_task is not None:
                         metrics_task.cancel()
                         await asyncio.gather(metrics_task, return_exceptions=True)
-                last_metrics = metrics
-                if on_metrics is not None:
-                    await on_metrics(metrics)
+                if primary:
+                    last_metrics = metrics
+                    if on_metrics is not None:
+                        await on_metrics(metrics)
             except Exception as exc:
                 stream_error = exc
                 LOGGER.warning(
-                    "[smart-generation] stream_failed attempt=%s/%s streamed_slides=%s error=%r",
-                    _attempt + 1, SMART_GENERATION_MAX_ATTEMPTS, streamed, exc,
+                    "[smart-generation] stream_failed %s streamed_slides=%s error=%r",
+                    label, streamed, exc,
                 )
             title_match = SMART_DECK_TITLE_RE.search(parser.buffer)
             if not title and title_match is not None and title_match.group(1).strip():
                 title = title_match.group(1).strip()
 
             # A stream that stopped a few slides short is topped up one slide
-            # at a time instead of re-sending the whole deck prompt.
-            missing = list(range(min(base + streamed, n_slides), n_slides))
-            if missing and len(missing) <= SMART_BACKFILL_MAX_MISSING_SLIDES:
+            # at a time instead of re-sending the whole prompt.
+            missing = [
+                index
+                for index in range(min(start + streamed, end), end)
+                if index >= len(accepted_slides)
+            ]
+            if missing and len(missing) <= backfill_limit:
                 LOGGER.info(
-                    "[smart-generation] backfilling_missing_slides slides=%s",
-                    [index + 1 for index in missing],
+                    "[smart-generation] backfilling_missing_slides %s slides=%s",
+                    label, [index + 1 for index in missing],
                 )
                 for index in missing:
                     start_single_slide(index, failure=None, prior_failures=0)
-            results = await asyncio.gather(*repairs.values(), return_exceptions=True)
+            results = list(await asyncio.gather(*repairs.values(), return_exceptions=True))
         finally:
             for task in repairs.values():
                 if not task.done():
@@ -2404,6 +2563,142 @@ async def generate_smart_presentation(
         for result in results:
             if isinstance(result, BaseException):
                 raise result
+        LOGGER.info(
+            "[smart-generation] range_done %s slides=%s-%s elapsed=%.1fs",
+            label, start + 1, end, time.perf_counter() - started_at,
+        )
+        return stream_error, repairs
+
+    async def generate_in_chunks() -> None:
+        """Long outline-driven decks: chunk 1 streams first and sets the
+        visual system; once it has SMART_CHUNK_ANCHOR_SLIDES accepted slides,
+        the remaining chunks run in parallel, each anchored to them. Measured:
+        one long response writes 10-30% lighter slides (see
+        SMART_LONG_DECK_SLIDE_COUNT), 5-slide chunks write full-density ones."""
+        base = len(accepted_slides)
+        ranges = [
+            (chunk_start, min(chunk_start + SMART_CHUNK_SIZE, n_slides))
+            for chunk_start in range(base, n_slides, SMART_CHUNK_SIZE)
+        ]
+        later_reasoning = _repair_reasoning(reasoning, ReasoningEffortValue.LOW)
+        semaphore = asyncio.Semaphore(_chunk_concurrency())
+        anchors_ready = asyncio.Event()
+        chunk_one_accepted = 0
+
+        def count_anchor() -> None:
+            nonlocal chunk_one_accepted
+            chunk_one_accepted += 1
+            if chunk_one_accepted >= SMART_CHUNK_ANCHOR_SLIDES:
+                anchors_ready.set()
+
+        def known_slide_htmls() -> list[str]:
+            slides = [slide["html"] for slide in accepted_slides]
+            slides += [ready[index]["html"] for index in sorted(ready)]
+            return slides
+
+        async def run_chunk(chunk_range: tuple[int, int], *, first: bool) -> None:
+            chunk_start, chunk_end = chunk_range
+            label = f"chunk={chunk_start + 1}-{chunk_end}"
+            anchors = known_slide_htmls()
+            messages = get_smart_messages(
+                **prompt_inputs,
+                task_heading="Generate part of a presentation.",
+                slide_task=_chunk_task_prompt(
+                    start=chunk_start,
+                    end=chunk_end,
+                    n_slides=n_slides,
+                    include_title_marker=first and not title,
+                    anchor_htmls=anchors[:SMART_CHUNK_ANCHOR_SLIDES],
+                    digest=_style_digest(anchors) if anchors else "",
+                    **position_rules,
+                ),
+            )
+            await stream_range(
+                messages,
+                chunk_start,
+                chunk_end,
+                # Chunk 1 plans the deck's look at the deck's own effort;
+                # anchored chunks only follow it (measured at LOW: full
+                # density, consistent style).
+                reasoning_config=reasoning if not anchors else later_reasoning,
+                primary=first,
+                backfill_limit=SMART_CHUNK_SIZE,
+                label=label,
+                on_accepted=count_anchor if first else None,
+            )
+
+        async def run_later_chunk(chunk_range: tuple[int, int]) -> None:
+            async with semaphore:
+                await run_chunk(chunk_range, first=False)
+
+        LOGGER.info(
+            "[smart-generation] chunked_generation slides=%s chunks=%s size=%s concurrency=%s",
+            n_slides, len(ranges), SMART_CHUNK_SIZE, _chunk_concurrency(),
+        )
+        if base >= SMART_CHUNK_ANCHOR_SLIDES:
+            anchors_ready.set()
+        first_task = asyncio.create_task(run_chunk(ranges[0], first=True))
+        anchor_wait = asyncio.create_task(anchors_ready.wait())
+        later_tasks: list[asyncio.Task[None]] = []
+        try:
+            await asyncio.wait(
+                {first_task, anchor_wait}, return_when=asyncio.FIRST_COMPLETED
+            )
+            later_tasks = [
+                asyncio.create_task(run_later_chunk(chunk_range))
+                for chunk_range in ranges[1:]
+            ]
+            results = await asyncio.gather(
+                first_task, *later_tasks, return_exceptions=True
+            )
+        finally:
+            for task in (first_task, anchor_wait, *later_tasks):
+                if not task.done():
+                    task.cancel()
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
+    if (
+        n_slides > SMART_LONG_DECK_SLIDE_COUNT
+        and n_slides - len(accepted_slides) > SMART_CHUNK_SIZE
+        and _get_explicit_content_slide_count(content) is not None
+    ):
+        await generate_in_chunks()
+        if len(accepted_slides) >= n_slides:
+            return finished()
+        LOGGER.info(
+            "[smart-generation] chunked_generation_incomplete resume_at_slide=%s of=%s "
+            "discarded_after_gap=%s - continuing as one stream",
+            len(accepted_slides) + 1, n_slides, len(ready),
+        )
+        ready.clear()
+
+    for _attempt in range(SMART_GENERATION_MAX_ATTEMPTS):
+        base = len(accepted_slides)
+        if base >= n_slides:
+            return finished()
+        LOGGER.info(
+            "[smart-generation] attempt=%s/%s accepted_slides=%s",
+            _attempt + 1, SMART_GENERATION_MAX_ATTEMPTS, base,
+        )
+        messages = get_smart_messages(
+            **prompt_inputs,
+            completed_slides=accepted_slides,
+            retry_error=retry_error,
+        )
+        # Debug-only: the full prompt is tens of KB. Set LOG_LEVEL=DEBUG.
+        LOGGER.debug("[smart-generation] prompt messages=%s", messages)
+        attempt_started_at = time.perf_counter()
+        stream_error, repairs = await stream_range(
+            messages,
+            base,
+            n_slides,
+            reasoning_config=reasoning,
+            primary=True,
+            backfill_limit=SMART_BACKFILL_MAX_MISSING_SLIDES,
+            label="deck",
+        )
 
         if len(accepted_slides) >= n_slides:
             return finished()
