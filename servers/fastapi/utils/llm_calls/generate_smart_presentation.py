@@ -67,11 +67,14 @@ SMART_LONG_DECK_SLIDE_COUNT = 20
 # Outline-driven decks longer than SMART_LONG_DECK_SLIDE_COUNT are generated
 # in chunks: chunk 1 streams first and sets the visual system, then the rest
 # run in parallel, each anchored to chunk 1's first accepted slides. Measured
-# live: a 5-slide chunk writes full-density slides (a long single response
-# wrote 10-30% lighter ones, and a density instruction did not reliably fix
-# the empty lower area), with consistent style across chunks, no dropped
-# slides, and no rate-limit errors at 5 concurrent streams.
-SMART_CHUNK_SIZE = 5
+# live at 40 slides: a long single response wrote 10-30% lighter slides (a
+# density instruction did not reliably fix the empty lower area); chunked
+# runs wrote full-density slides with consistent style. 10-slide chunks beat
+# 5-slide ones: 92s vs 114-140s (all 3 later chunks fit in one parallel
+# round at SMART_CHUNK_CONCURRENCY=4), about half the input tokens (the rules
+# and outline are re-sent 4 times, not 8), and the same quality (86-88
+# words/slide vs 90-98, short decks ~72).
+SMART_CHUNK_SIZE = 10
 SMART_CHUNK_ANCHOR_SLIDES = 2
 SMART_CHUNK_CONCURRENCY = 4
 SMART_CHUNK_CONCURRENCY_ENV = "SMART_CHUNK_CONCURRENCY"

@@ -2545,10 +2545,12 @@ def test_long_outline_deck_is_generated_in_anchored_parallel_chunks(monkeypatch)
     emitted = []
     result = _generate_outline_deck(n_slides, emitted)
 
+    size = smart_generation.SMART_CHUNK_SIZE
+    expected = [(start, min(start + size, n_slides)) for start in range(0, n_slides, size)]
     ranges = sorted(call["range"] for call in chunk_calls)
-    assert ranges == [(0, 5), (5, 10), (10, 15), (15, 20), (20, 22)]
-    first = next(call for call in chunk_calls if call["range"] == (0, 5))
-    later = [call for call in chunk_calls if call["range"] != (0, 5)]
+    assert len(ranges) >= 3 and ranges == expected
+    first = next(call for call in chunk_calls if call["range"] == expected[0])
+    later = [call for call in chunk_calls if call["range"] != expected[0]]
     assert first["effort"] == ReasoningEffortValue.MEDIUM
     assert first["title_marker"] and not first["anchored"]
     assert all(call["effort"] == ReasoningEffortValue.LOW for call in later)
@@ -2561,7 +2563,7 @@ def test_long_outline_deck_is_generated_in_anchored_parallel_chunks(monkeypatch)
 
 
 def test_chunk_concurrency_is_bounded(monkeypatch):
-    n_slides = 30
+    n_slides = smart_generation.SMART_CHUNK_SIZE * 4
     running = {"now": 0, "max": 0}
 
     async def fake_stream(client, model, messages, on_chunk, **kwargs):
@@ -2589,7 +2591,9 @@ def test_chunk_concurrency_is_bounded(monkeypatch):
 
 
 def test_a_chunk_whose_stream_dies_is_backfilled_slide_by_slide(monkeypatch):
-    n_slides = 22
+    size = smart_generation.SMART_CHUNK_SIZE
+    n_slides = size * 3
+    dead = list(range(size, size * 2))
     single_calls = []
 
     async def fake_stream(client, model, messages, on_chunk, **kwargs):
@@ -2598,7 +2602,7 @@ def test_a_chunk_whose_stream_dies_is_backfilled_slide_by_slide(monkeypatch):
             single_calls.append(index)
             return _slide_block(_smart_slide_html(title=f"Backfilled {index}")), None
         indices = _requested_indices(messages, n_slides)
-        if indices[0] == 10:
+        if indices[0] == dead[0]:
             raise ConnectionError("connection reset by peer")
         response = ""
         for index in indices:
@@ -2611,9 +2615,9 @@ def test_a_chunk_whose_stream_dies_is_backfilled_slide_by_slide(monkeypatch):
     emitted = []
     result = _generate_outline_deck(n_slides, emitted)
 
-    assert sorted(single_calls) == [10, 11, 12, 13, 14]
-    assert [slide["title"] for slide in result["slides"]][10:15] == [
-        f"Backfilled {index}" for index in range(10, 15)
+    assert sorted(single_calls) == dead
+    assert [slide["title"] for slide in result["slides"]][dead[0]:dead[-1] + 1] == [
+        f"Backfilled {index}" for index in dead
     ]
     assert emitted == list(range(n_slides))
 

@@ -128,14 +128,15 @@ folder map and full commands.
   generation 20), which silently dropped the tail of an approved outline. Keep them equal, including the
   Workspace UI copy in `GenAI-Workspace-UI-Dev-A/src/features/studio/utils/presentationLimits.ts`. Only a
   count the model picks itself (no outline) stays capped at 20.
-- **Outline-driven decks over 20 slides are generated in parallel 5-slide chunks.** One long response
+- **Outline-driven decks over 20 slides are generated in parallel 10-slide chunks.** One long response
   rations effort (slides 10-30% lighter at 40, later slides leaving the bottom third empty); a density
   instruction alone raised word counts but did not fix the empty area. Chunking did: chunk 1 streams
-  first and sets the style, the rest run 4 at a time anchored to its first 2 slides plus a
-  `_style_digest`. Measured at 40 slides: 114-140s (single stream 136-189s), 90-98 words/slide vs 53-73,
-  consistent style. Cost: roughly 2x output tokens and ~6-10x input tokens (each chunk re-sends the
-  rules and outline), and the first slide can take ~15-30s. Decks of 20 or fewer, and decks without a
-  per-slide outline, still use one stream (with a density instruction above 20).
+  first and sets the style, the rest run in parallel (up to 4) anchored to its first 2 slides plus a
+  `_style_digest`. Measured at 40 slides: 10-slide chunks took 92s (single stream 136-189s, 5-slide
+  chunks 114-140s) at 86-88 words/slide (single stream 53-59, short decks ~72), with consistent style.
+  Cost vs one stream: ~2-4x input tokens (each chunk re-sends the rules and outline) and ~1.6x output.
+  Decks of 20 or fewer, and decks without a per-slide outline, still use one stream (with a density
+  instruction above 20).
 
 - **`docker-compose.yml`'s `KEY=${KEY:-}` pattern makes "unset" a real, present empty string**, which
   beats a `.env` file's real value under `load_dotenv(..., override=False)` (present-but-empty always
