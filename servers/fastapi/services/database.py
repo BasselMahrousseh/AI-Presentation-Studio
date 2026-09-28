@@ -5,31 +5,16 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     AsyncSession,
 )
-from sqlalchemy import event, or_
+from sqlalchemy import event
 from sqlalchemy.orm import Session, with_loader_criteria
 from sqlmodel import SQLModel
 
-from models.sql.async_task import AsyncTaskModel
-from models.sql.async_presentation_generation_status import (
-    AsyncPresentationGenerationTaskModel,
-)
 from models.sql.chat_history_message import ChatHistoryMessageModel
-from models.sql.font_upload import FontUpload
 from models.sql.generation_feedback import GenerationFeedback
 from models.sql.image_asset import ImageAsset
-from models.sql.key_value import KeyValueSqlModel
-from models.sql.ollama_pull_status import OllamaPullStatus
-from models.sql.presentation_layout_code import PresentationLayoutCodeModel
 from models.sql.presentation import PresentationModel
-from models.sql.template import TemplateModel
-from models.sql.template_create_info import TemplateCreateInfoModel
-from models.sql.template_v2 import TemplateV2
 from models.sql.slide import SlideModel
-from models.sql.webhook_subscription import WebhookSubscription
 from models.sql.user import User
-from models.sql.access_token import AccessToken
-from models.sql.provider_settings import ProviderSettings
-from models.sql.presenton_cloud_provider import PresentonCloudProvider
 from api.v1.auth.context import get_current_owner_id
 from utils.get_env import get_migrate_database_on_startup_env
 from utils.db_utils import get_database_url_and_connect_args, get_pool_kwargs
@@ -60,14 +45,8 @@ async_session_maker = async_sessionmaker(sql_engine, expire_on_commit=False)
 _STRICT_OWNER_MODELS = (
     PresentationModel,
     SlideModel,
-    PresentationLayoutCodeModel,
-    TemplateModel,
     ChatHistoryMessageModel,
     ImageAsset,
-    TemplateCreateInfoModel,
-    AsyncTaskModel,
-    AsyncPresentationGenerationTaskModel,
-    WebhookSubscription,
     GenerationFeedback,
 )
 
@@ -92,16 +71,6 @@ def _scope_owned_selects(execute_state) -> None:
                 include_aliases=True,
             )
         )
-    statement = statement.options(
-        with_loader_criteria(
-            TemplateV2,
-            lambda row: or_(
-                row.owner_id == owner_id,
-                (row.owner_id.is_(None) & row.is_default.is_(True)),
-            ),
-            include_aliases=True,
-        )
-    )
     execute_state.statement = statement
 
 
@@ -110,9 +79,8 @@ def _stamp_new_owned_rows(session, _flush_context, _instances) -> None:
     owner_id = get_current_owner_id()
     if owner_id is None:
         return
-    owner_models = _STRICT_OWNER_MODELS + (TemplateV2,)
     for instance in session.new:
-        if isinstance(instance, owner_models):
+        if isinstance(instance, _STRICT_OWNER_MODELS):
             instance.owner_id = owner_id
 
 
@@ -132,22 +100,9 @@ async def create_db_and_tables():
                     tables=[
                         PresentationModel.__table__,
                         SlideModel.__table__,
-                        KeyValueSqlModel.__table__,
-                        TemplateV2.__table__,
                         ChatHistoryMessageModel.__table__,
                         ImageAsset.__table__,
-                        FontUpload.__table__,
-                        PresentationLayoutCodeModel.__table__,
-                        TemplateCreateInfoModel.__table__,
-                        TemplateModel.__table__,
-                        WebhookSubscription.__table__,
-                        AsyncTaskModel.__table__,
-                        AsyncPresentationGenerationTaskModel.__table__,
-                        OllamaPullStatus.__table__,
                         User.__table__,
-                        AccessToken.__table__,
-                        ProviderSettings.__table__,
-                        PresentonCloudProvider.__table__,
                         GenerationFeedback.__table__,
                     ],
                 )

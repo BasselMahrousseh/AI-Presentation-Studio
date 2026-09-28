@@ -2,7 +2,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 
 import migrations
 
@@ -59,7 +59,7 @@ def test_upgrade_from_baseline_stamp_skips_existing_theme_column(tmp_path):
                 {"revision": migrations.LEGACY_BASELINE_REVISION},
             )
 
-        command.upgrade(_alembic_config(database_url), "head")
+        command.upgrade(_alembic_config(database_url), migrations.REVISION_SOURCE_PRESENTATION)
 
         with engine.connect() as connection:
             version = connection.execute(
@@ -90,7 +90,7 @@ def test_upgrade_from_baseline_stamp_skips_existing_theme_column(tmp_path):
                 )
             }
 
-        assert version == migrations.REVISION_HEAD
+        assert version == migrations.REVISION_SOURCE_PRESENTATION
         assert "theme" in columns
         assert "fonts" in columns
         assert "async_tasks" in tables
@@ -136,7 +136,7 @@ def test_upgrade_from_theme_stamp_skips_existing_template_create_infos_table(tmp
                 {"revision": migrations.REVISION_BEFORE_TEMPLATE_CREATE_INFO},
             )
 
-        command.upgrade(_alembic_config(database_url), "head")
+        command.upgrade(_alembic_config(database_url), migrations.REVISION_SOURCE_PRESENTATION)
 
         with engine.connect() as connection:
             version = connection.execute(
@@ -149,7 +149,7 @@ def test_upgrade_from_theme_stamp_skips_existing_template_create_infos_table(tmp
                 )
             }
 
-        assert version == migrations.REVISION_HEAD
+        assert version == migrations.REVISION_SOURCE_PRESENTATION
         assert "template_create_infos" in tables
     finally:
         engine.dispose()
@@ -186,7 +186,7 @@ def test_upgrade_from_template_stamp_skips_existing_chat_history_table(tmp_path)
                 {"revision": migrations.REVISION_TEMPLATE_CREATE_INFO},
             )
 
-        command.upgrade(_alembic_config(database_url), "head")
+        command.upgrade(_alembic_config(database_url), migrations.REVISION_SOURCE_PRESENTATION)
 
         with engine.connect() as connection:
             version = connection.execute(
@@ -209,7 +209,7 @@ def test_upgrade_from_template_stamp_skips_existing_chat_history_table(tmp_path)
                 for row in connection.execute(text("PRAGMA table_info(template_v2)"))
             }
 
-        assert version == migrations.REVISION_HEAD
+        assert version == migrations.REVISION_SOURCE_PRESENTATION
         assert {
             "ix_chat_history_messages_conversation_id",
             "ix_chat_history_messages_position",
@@ -322,7 +322,7 @@ def test_async_task_status_migration_maps_processing_to_pending(tmp_path):
                 {"revision": migrations.REVISION_ASYNC_TASKS},
             )
 
-        command.upgrade(_alembic_config(database_url), "head")
+        command.upgrade(_alembic_config(database_url), migrations.REVISION_SOURCE_PRESENTATION)
 
         with engine.connect() as connection:
             version = connection.execute(
@@ -334,7 +334,7 @@ def test_async_task_status_migration_maps_processing_to_pending(tmp_path):
                 ).all()
             )
 
-        assert version == migrations.REVISION_HEAD
+        assert version == migrations.REVISION_SOURCE_PRESENTATION
         assert statuses == {
             "task-completed": "completed",
             "task-pending": "pending",
@@ -633,7 +633,7 @@ def test_upgrade_from_font_uploads_revision_converts_template_v2_ids_to_strings(
                 {"revision": migrations.REVISION_FONT_UPLOADS},
             )
 
-        command.upgrade(_alembic_config(database_url), "head")
+        command.upgrade(_alembic_config(database_url), migrations.REVISION_SOURCE_PRESENTATION)
 
         with engine.connect() as connection:
             version = connection.execute(
@@ -662,7 +662,7 @@ def test_upgrade_from_font_uploads_revision_converts_template_v2_ids_to_strings(
                 for row in connection.execute(text("PRAGMA table_info(template_v2)"))
             }
 
-        assert version == migrations.REVISION_HEAD
+        assert version == migrations.REVISION_SOURCE_PRESENTATION
         assert stored_template_id == expected_template_id
         assert stored_chat_template_id == expected_template_id
         assert template_id_type == "VARCHAR"
@@ -798,7 +798,7 @@ def test_removed_intermediate_revision_upgrades_through_consolidated_migration(
 
         config = _alembic_config(database_url)
         migrations._repair_orphan_alembic_revision(config, database_url)
-        command.upgrade(config, "head")
+        command.upgrade(config, migrations.REVISION_SOURCE_PRESENTATION)
 
         with engine.connect() as connection:
             version = connection.execute(
@@ -809,7 +809,7 @@ def test_removed_intermediate_revision_upgrades_through_consolidated_migration(
                 for row in connection.execute(text("PRAGMA table_info(template_v2)"))
             }
 
-        assert version == migrations.REVISION_HEAD
+        assert version == migrations.REVISION_SOURCE_PRESENTATION
         assert {"description", "components", "assets"}.issubset(template_columns)
         assert "is_default" in template_columns
         assert "cluster_candidates" not in template_columns
@@ -977,7 +977,7 @@ def test_source_presentation_migration_adds_nullable_self_link(tmp_path):
         with engine.begin() as connection:
             insert(connection, "a" * 32)
 
-        command.upgrade(config, "head")
+        command.upgrade(config, migrations.REVISION_SOURCE_PRESENTATION)
 
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
@@ -985,7 +985,7 @@ def test_source_presentation_migration_adds_nullable_self_link(tmp_path):
                 text("SELECT source_presentation_id FROM presentations WHERE id = :id"),
                 {"id": "a" * 32},
             ).scalar_one()
-        assert version == migrations.REVISION_HEAD == migrations.REVISION_SOURCE_PRESENTATION
+        assert version == migrations.REVISION_SOURCE_PRESENTATION
         assert existing is None
         columns, foreign_keys, indexes = schema()
         assert "source_presentation_id" in columns
@@ -1009,11 +1009,49 @@ def test_source_presentation_migration_adds_nullable_self_link(tmp_path):
             connection.execute(
                 text("ALTER TABLE presentations ADD COLUMN source_presentation_id CHAR(32)")
             )
-        command.upgrade(config, "head")
+        command.upgrade(config, migrations.REVISION_SOURCE_PRESENTATION)
         columns, foreign_keys, indexes = schema()
         assert [fk for fk in foreign_keys if fk[1] == "source_presentation_id"] == [
             ("presentations", "source_presentation_id", "id", "SET NULL")
         ]
         assert "ix_presentations_source_presentation_id" in indexes
+    finally:
+        engine.dispose()
+
+
+def test_drop_standalone_tables_migration_keeps_decks_and_removes_dead_tables(tmp_path):
+    database_url = f"sqlite:///{tmp_path / 'drop.db'}"
+    config = _alembic_config(database_url)
+    command.upgrade(config, migrations.REVISION_SOURCE_PRESENTATION)
+
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO presentations (id, content, n_slides, language, version, "
+                    "created_at, updated_at, generation_mode, is_favorite) VALUES "
+                    "('11111111111111111111111111111111', 'kept', 1, 'en', 'v2-standard', "
+                    "'2026-01-01 00:00:00', '2026-01-01 00:00:00', 'smart', 0)"
+                )
+            )
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            inspector = inspect(connection)
+            tables = set(inspector.get_table_names())
+            chat_columns = {c["name"] for c in inspector.get_columns("chat_history_messages")}
+            kept = connection.execute(text("SELECT content FROM presentations")).scalars().all()
+            version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert {"template_v2", "access_tokens", "provider_settings", "async_tasks"}.isdisjoint(tables)
+        assert {"presentations", "slides", "user", "generation_feedback"} <= tables
+        assert "template_v2_id" not in chat_columns
+        assert kept == ["kept"]
+        assert version == migrations.REVISION_HEAD == migrations.REVISION_DROP_STANDALONE_TABLES
+
+        command.downgrade(config, migrations.REVISION_SOURCE_PRESENTATION)
+        with engine.connect() as connection:
+            inspector = inspect(connection)
+            assert "template_v2" in inspector.get_table_names()
+            assert "template_v2_id" in {c["name"] for c in inspector.get_columns("chat_history_messages")}
     finally:
         engine.dispose()
