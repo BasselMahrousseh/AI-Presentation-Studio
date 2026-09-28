@@ -5,7 +5,7 @@ import os
 import shutil
 from typing import Any, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,16 +24,11 @@ from models.sql.generation_feedback import GenerationFeedback
 from models.sql.user import User
 from models.sql.key_value import KeyValueSqlModel
 from services.database import get_async_session
-from services.provider_settings import get_provider_settings, save_provider_settings
-from services.presenton_cloud import get_presenton_provider, has_cloud_credentials
 from utils.get_env import (
     get_app_data_directory_env,
-    get_can_change_keys_env,
     get_temp_directory_env,
-    get_presenton_oauth_issuer,
     is_disable_auth_enabled,
 )
-from utils.user_config import update_env_with_user_config
 
 
 API_V1_ADMIN_ROUTER = APIRouter(prefix="/api/v1/admin", tags=["Admin"])
@@ -50,41 +45,6 @@ async def require_settings_admin(
         raise HTTPException(status_code=401, detail="Unauthorized")
     if not user.is_superuser:
         raise HTTPException(status_code=403, detail="Admin access required")
-
-
-def _ensure_settings_are_mutable() -> None:
-    if get_can_change_keys_env() == "false":
-        raise HTTPException(
-            status_code=403,
-            detail="You are not allowed to access this resource",
-        )
-
-
-@API_V1_ADMIN_ROUTER.get("/provider-settings")
-async def read_provider_settings(
-    _: None = Depends(require_settings_admin),
-    session: AsyncSession = Depends(get_async_session),
-) -> dict[str, Any]:
-    _ensure_settings_are_mutable()
-    settings = await get_provider_settings(session)
-    provider = await get_presenton_provider(session, get_presenton_oauth_issuer())
-    return {
-        **settings,
-        "PRESENTON_CONNECTED": has_cloud_credentials(provider),
-        "PRESENTON_EMAIL": provider.email if provider is not None else None,
-    }
-
-
-@API_V1_ADMIN_ROUTER.put("/provider-settings")
-async def update_provider_settings(
-    config: dict[str, Any] = Body(...),
-    _: None = Depends(require_settings_admin),
-    session: AsyncSession = Depends(get_async_session),
-) -> dict[str, Any]:
-    _ensure_settings_are_mutable()
-    saved = await save_provider_settings(session, config)
-    update_env_with_user_config()
-    return saved
 
 
 @API_V1_ADMIN_ROUTER.get("/users", response_model=list[PublicUser])

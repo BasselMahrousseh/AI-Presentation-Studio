@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
-from llmai.shared import ReasoningConfig, ReasoningEffortValue, WebSearchTool
+from llmai.shared import ReasoningConfig, ReasoningEffortValue
 from pydantic import ValidationError
 
 from enums.llm_provider import LLMProvider
@@ -135,53 +135,6 @@ def test_outline_schema_describes_audience_facing_content_only():
 
     assert "Audience-facing Markdown content and data" in content_schema["description"]
     assert "never slide-creation commands" in content_schema["description"]
-
-
-def test_generate_ppt_outline_default_openai_uses_native_search_tool(monkeypatch):
-    captured_kwargs = {}
-    captured_config_kwargs = {}
-
-    async def is_disconnected():
-        return False
-
-    async def fake_stream_generate_events(_client, **kwargs):
-        captured_kwargs.update(kwargs)
-        yield content_event('{"slides": [{"content": "## Current facts"}]}')
-
-    def fake_get_llm_config(**kwargs):
-        captured_config_kwargs.update(kwargs)
-        return {}
-
-    monkeypatch.setenv("LLM", "openai")
-    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "auto")
-
-    with patch.object(outline_module, "get_model", return_value="fake-model"), patch.object(
-        outline_module, "get_client", return_value=object()
-    ), patch.object(
-        outline_module,
-        "get_llm_config",
-        side_effect=fake_get_llm_config,
-    ), patch.object(
-        outline_module,
-        "get_generate_kwargs",
-        side_effect=lambda **kwargs: kwargs,
-    ), patch.object(
-        outline_module, "stream_generate_events", side_effect=fake_stream_generate_events
-    ):
-        _collect_async_chunks(
-            outline_module.generate_ppt_outline(
-                content="Who is the current PM of Nepal?",
-                n_slides=1,
-                language="English",
-                web_search=True,
-                disconnect_checker=is_disconnected,
-            )
-        )
-
-    assert captured_config_kwargs == {"use_openai_responses_api": True}
-    assert len(captured_kwargs["tools"]) == 1
-    assert isinstance(captured_kwargs["tools"][0], WebSearchTool)
-    assert captured_kwargs["disconnect_checker"] is is_disconnected
 
 
 def test_generate_ppt_outline_streams_json_chunks_and_keeps_schema_shape():
@@ -487,7 +440,7 @@ def test_presentation_outline_model_schema_validation_rejects_invalid_ai_payload
 def test_outline_reasoning_uses_high_effort_for_openai(monkeypatch):
     monkeypatch.setattr("utils.llm_reasoning.disable_thinking", lambda: False)
     monkeypatch.setattr(
-        "utils.llm_reasoning.get_llm_provider", lambda: LLMProvider.OPENAI
+        "utils.llm_reasoning.get_llm_provider", lambda: LLMProvider.AZURE
     )
     monkeypatch.setattr(
         "utils.llm_reasoning.llmai.supports_thinking",

@@ -6,16 +6,8 @@ from enums.web_search_provider import WebSearchProvider
 from utils import web_search
 
 
-def test_auto_uses_native_search_for_supported_llm(monkeypatch):
-    monkeypatch.setenv("LLM", LLMProvider.OPENAI.value)
-    monkeypatch.setenv("WEB_SEARCH_PROVIDER", WebSearchProvider.AUTO.value)
-
-    assert web_search.should_use_native_web_search() is True
-    assert web_search.should_expose_external_web_search_tool() is False
-
-
 def test_auto_reports_unavailable_without_configured_external_provider(monkeypatch):
-    monkeypatch.setenv("LLM", LLMProvider.OLLAMA.value)
+    monkeypatch.setenv("LLM", LLMProvider.AZURE.value)
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", WebSearchProvider.AUTO.value)
 
     assert web_search.should_use_native_web_search() is False
@@ -23,7 +15,7 @@ def test_auto_reports_unavailable_without_configured_external_provider(monkeypat
 
 
 def test_auto_still_hides_external_search_when_configured(monkeypatch):
-    monkeypatch.setenv("LLM", LLMProvider.OLLAMA.value)
+    monkeypatch.setenv("LLM", LLMProvider.AZURE.value)
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", WebSearchProvider.AUTO.value)
 
     assert web_search.should_use_native_web_search() is False
@@ -31,14 +23,14 @@ def test_auto_still_hides_external_search_when_configured(monkeypatch):
 
 
 def test_get_web_search_route_reports_unavailable_without_configured_external_provider(monkeypatch):
-    monkeypatch.setenv("LLM", LLMProvider.OLLAMA.value)
+    monkeypatch.setenv("LLM", LLMProvider.AZURE.value)
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", WebSearchProvider.AUTO.value)
 
     assert web_search.get_web_search_route() == ("unavailable", None)
 
 
 def test_explicit_external_search_overrides_native_llm(monkeypatch):
-    monkeypatch.setenv("LLM", LLMProvider.OPENAI.value)
+    monkeypatch.setenv("LLM", LLMProvider.AZURE.value)
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", WebSearchProvider.TAVILY.value)
 
     assert web_search.should_use_native_web_search() is False
@@ -67,7 +59,7 @@ def test_explicit_exa_search_is_supported(monkeypatch):
 
 
 def test_explicit_native_search_does_not_fallback_for_unsupported_llm(monkeypatch):
-    monkeypatch.setenv("LLM", LLMProvider.OLLAMA.value)
+    monkeypatch.setenv("LLM", LLMProvider.AZURE.value)
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", WebSearchProvider.NATIVE.value)
 
     assert web_search.should_use_native_web_search() is False
@@ -75,10 +67,10 @@ def test_explicit_native_search_does_not_fallback_for_unsupported_llm(monkeypatc
 
 
 def test_auto_does_not_expose_external_search_when_native_tools_are_unavailable(monkeypatch):
-    monkeypatch.setenv("LLM", LLMProvider.GOOGLE.value)
+    monkeypatch.setenv("LLM", LLMProvider.AZURE.value)
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", WebSearchProvider.AUTO.value)
 
-    assert web_search.should_use_native_web_search() is True
+    assert web_search.should_use_native_web_search() is False
     assert (
         web_search.should_expose_external_web_search_tool(
             native_search_available=False
@@ -129,7 +121,7 @@ def test_explicit_external_provider_is_not_replaced(monkeypatch):
 
 
 def test_web_search_route_reports_actual_external_provider(monkeypatch):
-    monkeypatch.setenv("LLM", LLMProvider.OPENAI.value)
+    monkeypatch.setenv("LLM", LLMProvider.AZURE.value)
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", WebSearchProvider.SEARXNG.value)
     monkeypatch.setenv("SEARXNG_BASE_URL", "http://127.0.0.1:8080")
 
@@ -137,13 +129,6 @@ def test_web_search_route_reports_actual_external_provider(monkeypatch):
         "external",
         WebSearchProvider.SEARXNG,
     )
-
-
-def test_web_search_route_reports_model_native(monkeypatch):
-    monkeypatch.setenv("LLM", LLMProvider.OPENAI.value)
-    monkeypatch.setenv("WEB_SEARCH_PROVIDER", WebSearchProvider.AUTO.value)
-
-    assert web_search.get_web_search_route() == ("native", None)
 
 
 def test_searxng_accepts_base_or_search_url(monkeypatch):

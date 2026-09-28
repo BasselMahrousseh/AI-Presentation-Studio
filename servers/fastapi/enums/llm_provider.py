@@ -2,19 +2,6 @@ from enum import Enum
 
 
 class LLMProvider(Enum):
-    OLLAMA = "ollama"
-    DEEPSEEK = "deepseek"
-    OPENAI = "openai"
-    GOOGLE = "google"
-    VERTEX = "vertex"
+    # Studio runs on Azure OpenAI only. The enum is kept so provider-aware helpers
+    # (llmai's reasoning support lookup, web-search routing) keep a typed value.
     AZURE = "azure"
-    BEDROCK = "bedrock"
-    OPENROUTER = "openrouter"
-    FIREWORKS = "fireworks"
-    TOGETHER = "together"
-    CEREBRAS = "cerebras"
-    ANTHROPIC = "anthropic"
-    LITELLM = "litellm"
-    LMSTUDIO = "lmstudio"
-    CUSTOM = "custom"
-    CODEX = "codex"

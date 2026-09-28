@@ -15,7 +15,7 @@ class FakeClient:
 
 
 def test_generate_web_search_query_returns_normalized_query(monkeypatch):
-    monkeypatch.setenv("LLM", "ollama")
+    monkeypatch.setenv("LLM", "azure")
     client = FakeClient({"query": "  latest   Nepal economy statistics 2026  "})
 
     query = asyncio.run(
@@ -33,7 +33,7 @@ def test_generate_web_search_query_returns_normalized_query(monkeypatch):
 
 
 def test_generate_web_search_query_returns_none_for_invalid_empty_result(monkeypatch):
-    monkeypatch.setenv("LLM", "ollama")
+    monkeypatch.setenv("LLM", "azure")
     client = FakeClient({"query": None})
 
     query = asyncio.run(

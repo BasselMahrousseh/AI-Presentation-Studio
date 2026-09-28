@@ -2,20 +2,18 @@ import asyncio
 
 import pytest
 
-from models.ollama_model_status import OllamaModelStatus
-from utils import model_availability
 from utils.model_availability import check_llm_and_image_provider_api_or_model_availability
 
 
-def _set_litellm_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CAN_CHANGE_KEYS", "false")
-    monkeypatch.setenv("LLM", "litellm")
-    monkeypatch.setenv("LITELLM_BASE_URL", "http://localhost:4000")
-    monkeypatch.setenv("LITELLM_MODEL", "test-model")
+def _set_azure_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM", "azure")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com")
 
 
 def test_skips_image_provider_when_generation_disabled(monkeypatch):
-    _set_litellm_env(monkeypatch)
+    _set_azure_env(monkeypatch)
     monkeypatch.setenv("DISABLE_IMAGE_GENERATION", "true")
     monkeypatch.delenv("IMAGE_PROVIDER", raising=False)
 
@@ -23,7 +21,7 @@ def test_skips_image_provider_when_generation_disabled(monkeypatch):
 
 
 def test_skips_invalid_image_provider_when_generation_disabled(monkeypatch):
-    _set_litellm_env(monkeypatch)
+    _set_azure_env(monkeypatch)
     monkeypatch.setenv("DISABLE_IMAGE_GENERATION", "true")
     monkeypatch.setenv("IMAGE_PROVIDER", "not-a-real-provider")
 
@@ -31,7 +29,7 @@ def test_skips_invalid_image_provider_when_generation_disabled(monkeypatch):
 
 
 def test_requires_image_provider_when_generation_enabled(monkeypatch):
-    _set_litellm_env(monkeypatch)
+    _set_azure_env(monkeypatch)
     monkeypatch.delenv("DISABLE_IMAGE_GENERATION", raising=False)
     monkeypatch.delenv("IMAGE_PROVIDER", raising=False)
 
@@ -39,60 +37,19 @@ def test_requires_image_provider_when_generation_enabled(monkeypatch):
         asyncio.run(check_llm_and_image_provider_api_or_model_availability())
 
 
-def test_ollama_requires_selected_model_to_already_be_available(monkeypatch):
-    monkeypatch.setenv("CAN_CHANGE_KEYS", "false")
-    monkeypatch.setenv("LLM", "ollama")
-    monkeypatch.setenv("OLLAMA_MODEL", "llama3:8b")
+def test_requires_azure_credentials(monkeypatch):
+    _set_azure_env(monkeypatch)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY")
     monkeypatch.setenv("DISABLE_IMAGE_GENERATION", "true")
 
-    async def list_models():
-        return []
-
-    monkeypatch.setattr(model_availability, "list_available_ollama_models", list_models)
-
-    with pytest.raises(Exception, match="not available in Ollama"):
+    with pytest.raises(Exception, match="Azure OpenAI API Key is not set"):
         asyncio.run(check_llm_and_image_provider_api_or_model_availability())
 
 
-def test_ollama_accepts_selected_available_model(monkeypatch):
-    monkeypatch.setenv("CAN_CHANGE_KEYS", "false")
-    monkeypatch.setenv("LLM", "ollama")
-    monkeypatch.setenv("OLLAMA_MODEL", "llama3:8b")
+def test_rejects_non_azure_provider(monkeypatch):
+    _set_azure_env(monkeypatch)
+    monkeypatch.setenv("LLM", "openai")
     monkeypatch.setenv("DISABLE_IMAGE_GENERATION", "true")
 
-    async def list_models():
-        return [
-            OllamaModelStatus(
-                name="llama3:8b",
-                size=1,
-                downloaded=1,
-                status="pulled",
-                done=True,
-            )
-        ]
-
-    monkeypatch.setattr(model_availability, "list_available_ollama_models", list_models)
-
-    asyncio.run(check_llm_and_image_provider_api_or_model_availability())
-
-
-def test_ollama_accepts_selected_available_experimental_model(monkeypatch):
-    monkeypatch.setenv("CAN_CHANGE_KEYS", "false")
-    monkeypatch.setenv("LLM", "ollama")
-    monkeypatch.setenv("OLLAMA_MODEL", "custom-local-model:latest")
-    monkeypatch.setenv("DISABLE_IMAGE_GENERATION", "true")
-
-    async def list_models():
-        return [
-            OllamaModelStatus(
-                name="custom-local-model:latest",
-                size=1,
-                downloaded=1,
-                status="pulled",
-                done=True,
-            )
-        ]
-
-    monkeypatch.setattr(model_availability, "list_available_ollama_models", list_models)
-
-    asyncio.run(check_llm_and_image_provider_api_or_model_availability())
+    with pytest.raises(Exception, match="Studio only supports azure"):
+        asyncio.run(check_llm_and_image_provider_api_or_model_availability())

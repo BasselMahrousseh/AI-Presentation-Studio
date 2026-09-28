@@ -813,7 +813,7 @@ async def determine_smart_slide_count(
     )
     context_excerpt = source_context.strip()[:20_000]
     response = await generate_structured_with_schema_retries(
-        get_client(config=get_llm_config(use_openai_responses_api=True)),
+        get_client(config=get_llm_config()),
         get_model(),
         messages=[
             SystemMessage(content=_smart_slide_count_system_prompt(fixed_slide_count)),
@@ -2147,7 +2147,7 @@ async def generate_smart_presentation(
     whole new deck call (a continuation from that prefix) is only made when a
     slide's repairs are exhausted, or the stream stopped with more than
     SMART_BACKFILL_MAX_MISSING_SLIDES slides still missing."""
-    client = get_client(config=get_llm_config(use_openai_responses_api=True))
+    client = get_client(config=get_llm_config())
     model = get_model()
     LOGGER.info(
         "[smart-generation] start model=%s slides=%s language=%s source_context=%s community_reference=%s smart_template=%s fonts=%s seeded_slides=%s",

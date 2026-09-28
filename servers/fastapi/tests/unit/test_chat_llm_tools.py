@@ -24,12 +24,10 @@ def _sample_function_tools() -> list[Tool]:
 @pytest.mark.parametrize(
     ("provider", "web_search_provider"),
     [
-        (LLMProvider.OPENAI, "auto"),
-        (LLMProvider.OPENAI, "native"),
-        (LLMProvider.ANTHROPIC, "auto"),
-        (LLMProvider.GOOGLE, "auto"),
-        (LLMProvider.VERTEX, "auto"),
-        (LLMProvider.CUSTOM, "searxng"),
+        (LLMProvider.AZURE, "auto"),
+        (LLMProvider.AZURE, "native"),
+        (LLMProvider.AZURE, "auto"),
+        (LLMProvider.AZURE, "searxng"),
     ],
 )
 def test_build_chat_llm_tools_returns_only_function_tools(
@@ -50,10 +48,10 @@ def test_build_chat_llm_tools_returns_only_function_tools(
 @pytest.mark.parametrize(
     ("provider", "web_search_provider"),
     [
-        (LLMProvider.OPENAI, "auto"),
-        (LLMProvider.OPENAI, "native"),
-        (LLMProvider.CUSTOM, "searxng"),
-        (LLMProvider.GOOGLE, "auto"),
+        (LLMProvider.AZURE, "auto"),
+        (LLMProvider.AZURE, "native"),
+        (LLMProvider.AZURE, "searxng"),
+        (LLMProvider.AZURE, "auto"),
     ],
 )
 def test_chat_tool_definitions_do_not_expose_web_search(

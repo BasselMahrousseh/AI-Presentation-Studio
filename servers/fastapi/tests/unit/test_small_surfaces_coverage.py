@@ -294,20 +294,6 @@ def test_handle_llm_client_exceptions(monkeypatch):
         GoogleAPIError(503, {})
     ).detail
 
-    from enums.llm_provider import LLMProvider
-
-    monkeypatch.setitem(
-        handle_llm_client_exceptions.__globals__,
-        "get_llm_provider",
-        lambda: LLMProvider.CODEX,
-    )
-    codex_auth = handle_llm_client_exceptions(
-        HTTPException(status_code=401, detail="expired")
-    )
-    assert codex_auth.status_code == 401
-    assert "CHATGPT_AUTH_REQUIRED:" in codex_auth.detail
-    assert codex_auth.headers == {"X-Presenton-Auth-Action": "codex-reauth"}
-
     generic = handle_llm_client_exceptions(ValueError("oops"))
     assert generic.detail.startswith("LLM API error")
 

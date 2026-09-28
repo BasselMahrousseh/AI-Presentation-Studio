@@ -15,8 +15,6 @@ from models.sql.presenton_cloud_provider import PresentonCloudProvider
 from models.sql.provider_settings import ProviderSettings
 from models.sql.user import User
 from services.database import get_async_session
-from services.presenton_cloud import store_presenton_credentials
-from utils.get_env import get_presenton_oauth_issuer
 
 
 def _build_client(tmp_path) -> tuple[TestClient, object]:
@@ -194,40 +192,3 @@ def test_database_rejects_a_second_primary_administrator(monkeypatch, tmp_path):
     asyncio.run(engine.dispose())
 
 
-def test_admin_provider_settings_include_safe_global_presenton_status(
-    monkeypatch, tmp_path
-):
-    monkeypatch.setenv("USER_CONFIG_PATH", str(tmp_path / "userConfig.json"))
-    monkeypatch.setenv("CAN_CHANGE_KEYS", "true")
-    client, engine = _build_client(tmp_path)
-    client.post(
-        "/api/v1/auth/setup",
-        json={"username": "admin", "password": "secret123"},
-    )
-    client.post(
-        "/api/v1/auth/login",
-        json={"username": "admin", "password": "secret123"},
-    )
-
-    async def seed_provider():
-        session_maker = async_sessionmaker(engine, expire_on_commit=False)
-        async with session_maker() as session:
-            await store_presenton_credentials(
-                session,
-                issuer=get_presenton_oauth_issuer(),
-                subject="cloud-admin",
-                email="cloud-admin@example.com",
-                access_token="user.jwt.signature",
-                expires_in=3600,
-            )
-
-    asyncio.run(seed_provider())
-    response = client.get("/api/v1/admin/provider-settings")
-
-    assert response.status_code == 200
-    assert response.json()["PRESENTON_CONNECTED"] is True
-    assert response.json()["PRESENTON_EMAIL"] == "cloud-admin@example.com"
-    assert "PRESENTON_SCOPES" not in response.json()
-    assert "PRESENTON_ACCESS_TOKEN" not in response.json()
-    assert "PRESENTON_REFRESH_TOKEN" not in response.json()
-    asyncio.run(engine.dispose())

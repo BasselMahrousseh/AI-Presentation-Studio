@@ -142,7 +142,7 @@ def test_smart_reasoning_uses_medium_effort_for_openai(monkeypatch):
     )
     monkeypatch.setattr(
         "utils.llm_reasoning.get_llm_provider",
-        lambda: LLMProvider.OPENAI,
+        lambda: LLMProvider.AZURE,
     )
     monkeypatch.setattr(
         "utils.llm_reasoning.llmai.supports_thinking",
@@ -196,7 +196,6 @@ def test_smart_stream_separates_thinking_and_reports_exact_usage(monkeypatch):
         "utils.llm_calls.generate_smart_presentation.stream_generate_events",
         fake_stream_generate_events,
     )
-    monkeypatch.setattr("utils.llm_utils.get_extra_body", lambda **_kwargs: None)
     content_chunks = []
     thinking_chunks = []
 

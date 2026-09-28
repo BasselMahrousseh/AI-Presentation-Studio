@@ -42,7 +42,7 @@ class StreamingClient:
 
 
 def test_regular_generation_keeps_existing_retry_behavior(monkeypatch):
-    monkeypatch.setenv("LLM", "ollama")
+    monkeypatch.setenv("LLM", "azure")
     client = RetryClient()
 
     with patch("utils.llm_utils.asyncio.sleep", new=AsyncMock()):
@@ -62,7 +62,7 @@ def test_regular_generation_keeps_existing_retry_behavior(monkeypatch):
 
 
 def test_disconnect_cancels_generation_without_retrying(monkeypatch):
-    monkeypatch.setenv("LLM", "ollama")
+    monkeypatch.setenv("LLM", "azure")
     client = StreamingClient()
 
     async def run():
@@ -89,7 +89,7 @@ def test_disconnect_cancels_generation_without_retrying(monkeypatch):
 
 
 def test_connected_request_uses_stream_completion_content(monkeypatch):
-    monkeypatch.setenv("LLM", "ollama")
+    monkeypatch.setenv("LLM", "azure")
 
     class CompletedClient:
         def __init__(self):
@@ -125,7 +125,7 @@ def test_connected_request_uses_stream_completion_content(monkeypatch):
 
 
 def test_connected_request_keeps_schema_validation_retries(monkeypatch):
-    monkeypatch.setenv("LLM", "ollama")
+    monkeypatch.setenv("LLM", "azure")
 
     class ValidationRetryClient:
         def __init__(self):

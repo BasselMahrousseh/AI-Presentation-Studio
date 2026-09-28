@@ -20,7 +20,6 @@ from llmai.shared import (
     normalize_content_parts,
 )
 
-from utils.llm_config import get_extra_body
 from utils.schema_utils import get_schema_validation_errors
 
 LOGGER = logging.getLogger(__name__)
@@ -123,10 +122,6 @@ def get_generate_kwargs(
         kwargs["response_format"] = response_format
     if reasoning is not None:
         kwargs["reasoning"] = reasoning
-
-    extra_body = get_extra_body(uses_tool_choice=bool(tools or response_format))
-    if extra_body:
-        kwargs["extra_body"] = extra_body
 
     return kwargs
 

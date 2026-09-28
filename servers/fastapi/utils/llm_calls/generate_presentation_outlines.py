@@ -306,7 +306,7 @@ async def generate_ppt_outline(
     use_search_tool = web_search and should_use_native_web_search()
     use_external_search = web_search and should_expose_external_web_search_tool()
     client = get_client(
-        config=get_llm_config(use_openai_responses_api=use_search_tool)
+        config=get_llm_config()
     )
     route_mode, actual_provider = get_web_search_route()
     actual_provider_name = (
