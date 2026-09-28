@@ -9,7 +9,6 @@ from services.chart_capture_store import sweep_stale_captures
 from services.table_capture_store import sweep_stale_captures as sweep_stale_table_captures
 from services.database import async_session_maker, create_db_and_tables, dispose_engines
 from services.provider_settings import migrate_provider_settings_from_file
-from templates.default_templates import import_default_templates_on_startup
 from utils.get_env import (
     get_app_data_directory_env,
     get_can_change_keys_env,
@@ -66,7 +65,6 @@ async def app_lifespan(_: FastAPI):
     await bootstrap_database_admin()
     async with async_session_maker() as session:
         await migrate_provider_settings_from_file(session)
-    await import_default_templates_on_startup()
     if get_can_change_keys_env() != "false":
         update_env_with_user_config()
     await check_llm_and_image_provider_api_or_model_availability()

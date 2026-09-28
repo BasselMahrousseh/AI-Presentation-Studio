@@ -130,45 +130,6 @@ class TempFileService:
 
         return file_path
 
-    def read_temp_file(self, file_path: str, binary: bool = True) -> Union[bytes, str]:
-        file_path = self.resolve_temp_path(file_path, must_exist=True)
-        base_dir = self._owner_base_dir_realpath()
-        if not (file_path == base_dir or file_path.startswith(f"{base_dir}{os.sep}")):
-            raise HTTPException(
-                status_code=400,
-                detail="File path must stay within the temp directory",
-            )
-        mode = "rb" if binary else "r"
-        with open(file_path, mode) as f:
-            return f.read()
-
-    async def update_temp_file_from_upload(self, file_path: str, upload_file) -> None:
-        if not isinstance(file_path, str) or not file_path.strip():
-            raise HTTPException(status_code=400, detail="Invalid file path")
-
-        base_dir = self._owner_base_dir_realpath()
-        normalized_path = os.path.realpath(os.path.abspath(file_path))
-        if not normalized_path.startswith(base_dir):
-            raise HTTPException(
-                status_code=400,
-                detail="File path must stay within the temp directory",
-            )
-        self._assert_within_base_dir(
-            normalized_path, "File path must stay within the temp directory"
-        )
-
-        with open(normalized_path, "wb") as f:
-            f.write(await upload_file.read())
-
-    def cleanup_temp_file(self, file_path: str):
-        try:
-            file_path = self.resolve_temp_path(file_path, must_exist=True)
-        except HTTPException as exc:
-            if exc.status_code == 404:
-                return
-            raise
-        os.remove(file_path)
-
     def _delete_dir_files(self, dir_path: str):
         dir_path = self.resolve_temp_path(dir_path, must_exist=True)
         for root, dirs, files in os.walk(dir_path, topdown=False):

@@ -7,9 +7,6 @@ from sqlalchemy import JSON, Column, DateTime, Enum as SAEnum, ForeignKey, Strin
 from sqlalchemy import false as sa_false
 from sqlmodel import Boolean, Field, SQLModel
 
-from models.presentation_outline_model import PresentationOutlineModel
-from models.presentation_structure_model import PresentationStructureModel
-from models.presentation_layout import PresentationLayoutModel
 from utils.datetime_utils import get_current_utc_datetime
 from api.v1.auth.context import get_current_owner_id
 
@@ -181,21 +178,3 @@ class PresentationModel(SQLModel, table=True):
             smart_brand_colors=copy.deepcopy(self.smart_brand_colors),
         )
 
-    def get_presentation_outline(self):
-        if not self.outlines:
-            return None
-        return PresentationOutlineModel(**self.outlines)
-
-    def get_layout(self):
-        return PresentationLayoutModel(**self.layout)
-
-    def set_layout(self, layout: PresentationLayoutModel):
-        self.layout = layout.model_dump()
-
-    def get_structure(self):
-        if not self.structure:
-            return None
-        return PresentationStructureModel(**self.structure)
-
-    def set_structure(self, structure: PresentationStructureModel):
-        self.structure = structure.model_dump()

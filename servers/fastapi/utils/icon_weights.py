@@ -24,10 +24,6 @@ def normalize_icon_type(value: Any) -> str:
     return normalize_icon_weight(value)
 
 
-def extract_icon_weight_from_settings(settings: Mapping[str, Any] | None) -> str:
-    return extract_icon_type_from_settings(settings)
-
-
 def _contains_icon_setting(settings: Mapping[str, Any]) -> bool:
     if "icon_type" in settings or "icon_weight" in settings:
         return True

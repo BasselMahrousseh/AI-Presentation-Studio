@@ -401,7 +401,7 @@ def _extracted_chart(**overrides):
 
 
 def test_classify_pptx_chart_flags_skips_fully_extracted_charts():
-    from templates.v2.models.elements import ChartType
+    from enums.chart_type import ChartType
 
     data = PptxStructuredData(charts=[_extracted_chart(chart_type=ChartType.BAR)])
 

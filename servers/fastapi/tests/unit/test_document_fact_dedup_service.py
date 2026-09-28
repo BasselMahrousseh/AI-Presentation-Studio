@@ -1,5 +1,5 @@
 import asyncio
-from typing import List, Tuple
+from typing import List
 
 import pytest
 

@@ -94,60 +94,6 @@ def test_chat_attachment_context_is_inserted_before_user_message():
     assert composed.startswith("UI context: selected slide")
 
 
-def test_chat_memory_resolves_template_layout_schemas():
-    presentation_id = uuid.uuid4()
-    template_layout = {
-        "layouts": [
-            {
-                "id": "intro",
-                "description": "Intro slide.",
-                "components": [
-                    {
-                        "id": "hero",
-                        "description": "Hero image component.",
-                        "elements": [
-                            {
-                                "type": "image",
-                                "decorative": False,
-                                "name": "photo",
-                                "data": "/app_data/images/photo.png",
-                                "is_icon": False,
-                            }
-                        ],
-                    }
-                ],
-            }
-        ]
-    }
-    presentation = PresentationModel(
-        id=presentation_id,
-        version=PresentationVersion.V1_STANDARD,
-        content="deck",
-        n_slides=1,
-        language="English",
-        title="Deck",
-        layout=template_layout,
-    )
-    memory = PresentationChatMemoryLayer(
-        _FakeSession(presentation),
-        presentation_id,
-    )
-
-    layouts = asyncio.run(memory.get_available_layouts())
-    schema = asyncio.run(memory.get_content_schema_from_layout_id("intro"))
-
-    assert layouts == [
-        {
-            "id": "intro",
-            "name": "intro",
-            "description": "Intro slide.",
-        }
-    ]
-    assert schema is not None
-    assert schema["required"] == ["hero"]
-    assert schema["properties"]["hero"]["required"] == ["photo"]
-
-
 def test_chat_memory_reads_presentation_source_documents():
     presentation_id = uuid.uuid4()
     temp_dir = TEMP_FILE_SERVICE.create_temp_dir(str(uuid.uuid4()))

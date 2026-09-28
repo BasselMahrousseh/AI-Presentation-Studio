@@ -131,13 +131,9 @@ def test_smart_stream_reads_only_surviving_files(env, tmp_path, monkeypatch):
         loaded["dedup_paths"] = file_paths
         raise StopAfterDocuments()
 
-    async def no_references(_ids):
-        return []
-
     monkeypatch.setattr(presentation_endpoints, "async_session_maker", env.maker)
     monkeypatch.setattr(presentation_endpoints, "DocumentsLoader", FakeLoader)
     monkeypatch.setattr(presentation_endpoints, "build_deduplicated_context", fake_dedup)
-    monkeypatch.setattr(presentation_endpoints, "load_community_references", no_references)
 
     async def run():
         response = await presentation_endpoints._stream_smart_presentation(deck)

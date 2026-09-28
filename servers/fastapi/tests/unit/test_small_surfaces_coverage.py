@@ -11,11 +11,7 @@ import pytest
 from fastapi import HTTPException
 from openai import APIError as OpenAIAPIError
 
-from models.api_error_model import APIErrorModel
 from models.image_prompt import ImagePrompt
-from models.presentation_outline_model import PresentationOutlineModel, SlideOutlineModel
-from models.presentation_structure_model import PresentationStructureModel
-from models.sql.presentation import PresentationModel, PresentationVersion
 from models.sql.slide import SlideModel
 from models.sse_response import (
     SSECompleteResponse,
@@ -25,22 +21,12 @@ from models.sse_response import (
     SSEResponse,
 )
 from services.chat.conversation_store import ChatConversationStore
-from services.concurrent_service import ConcurrentService
 from services.export_task_service import EXPORT_TASK_SERVICE
-from templates.presentation_layout import PresentationLayoutModel, SlideLayoutModel
 from utils import ocr_language
 from utils.datetime_utils import get_current_utc_datetime
 from utils.export_utils import export_presentation
 from utils.file_utils import (
-    get_file_ext_or_none,
     get_file_name_with_random_uuid,
-    get_original_file_name,
-    replace_file_name,
-    set_file_ext,
-)
-from utils.get_dynamic_models import (
-    get_presentation_outline_model_with_n_slides,
-    get_presentation_structure_model_with_n_slides,
 )
 from utils.image_provider import (
     get_selected_image_provider,
@@ -83,19 +69,6 @@ def _parse_sse_frame(blob: str) -> tuple[str, dict]:
     return event, json.loads(raw_data)
 
 
-def _outline_layout_structure_payloads() -> tuple[dict, dict, dict]:
-    layout_payload = PresentationLayoutModel(
-        name="n",
-        ordered=True,
-        slides=[SlideLayoutModel(id="z", json_schema={"title": "t"})],
-    ).model_dump(mode="json")
-    structure_payload = PresentationStructureModel(slides=[0]).model_dump(mode="json")
-    outline = PresentationOutlineModel(
-        slides=[SlideOutlineModel(content="## Hello")]
-    ).model_dump(mode="json")
-    return outline, layout_payload, structure_payload
-
-
 def test_get_current_utc_datetime_is_timezone_aware():
     dt = get_current_utc_datetime()
     assert dt.tzinfo is not None
@@ -124,19 +97,6 @@ def test_image_prompt_with_theme_formats_prompt():
     p = ImagePrompt(prompt="lake", theme_prompt="muted colors")
     assert p.get_image_prompt(with_theme=False) == "lake"
     assert p.get_image_prompt(with_theme=True) == "lake, muted colors"
-
-
-@pytest.mark.parametrize(
-    ("exc", "status", "substr"),
-    [
-        (HTTPException(status_code=418, detail="teapot"), 418, "teapot"),
-        (RuntimeError("boom"), 500, "boom"),
-    ],
-)
-def test_api_error_model_from_exception(exc: Exception, status: int, substr: str):
-    model = APIErrorModel.from_exception(exc)
-    assert model.status_code == status
-    assert substr in model.detail
 
 
 def test_slide_model_get_new_slide_branches():
@@ -208,89 +168,6 @@ def test_safe_sse_stream_converts_late_exception_to_error_frame():
     assert data == {"type": "error", "detail": "Stream failed"}
 
 
-@pytest.mark.parametrize("theme", [{}, None])
-def test_presentation_model_get_new_and_typed_getters(theme):
-    outline, layout_payload, structure_payload = _outline_layout_structure_payloads()
-    p = PresentationModel(
-        id=uuid.uuid4(),
-        version=PresentationVersion.V1_STANDARD,
-        content="c",
-        n_slides=1,
-        language="English",
-        title="Title",
-        outlines=outline,
-        layout=layout_payload,
-        structure=structure_payload,
-        theme=theme,
-        fonts={"heading": "Inter"},
-        web_search=True,
-    )
-    new_presentation = p.get_new_presentation()
-    assert p.version == PresentationVersion.V1_STANDARD
-    assert new_presentation.version == PresentationVersion.V1_STANDARD
-    assert new_presentation.content == "c"
-    assert new_presentation.theme == theme
-    assert new_presentation.fonts == {"heading": "Inter"}
-    assert new_presentation.web_search is True
-    assert isinstance(p.get_presentation_outline(), PresentationOutlineModel)
-    assert isinstance(p.get_layout(), PresentationLayoutModel)
-    assert isinstance(p.get_structure(), PresentationStructureModel)
-
-
-def test_presentation_model_set_layout_updates_stored_dict():
-    _, layout_payload, _ = _outline_layout_structure_payloads()
-    p = PresentationModel(
-        id=uuid.uuid4(),
-        version=PresentationVersion.V1_STANDARD,
-        content="c",
-        n_slides=1,
-        language="English",
-        title="Title",
-        outlines=None,
-        layout=layout_payload,
-        structure=None,
-    )
-    refreshed_layout = PresentationLayoutModel(
-        name="n3",
-        ordered=False,
-        slides=[SlideLayoutModel(id="q", json_schema={"title": "t3"})],
-    )
-    p.set_layout(refreshed_layout)
-    assert p.layout["name"] == "n3"
-
-
-def test_presentation_model_missing_outline_and_structure_returns_none():
-    ghost = PresentationModel(
-        id=uuid.uuid4(),
-        version=PresentationVersion.V1_STANDARD,
-        content="c",
-        n_slides=0,
-        language="English",
-        outlines=None,
-        layout=None,
-        structure=None,
-    )
-    assert ghost.get_presentation_outline() is None
-    assert ghost.get_structure() is None
-
-
-def test_presentation_model_set_structure_updates_slides():
-    _, _, structure_payload = _outline_layout_structure_payloads()
-    p = PresentationModel(
-        id=uuid.uuid4(),
-        version=PresentationVersion.V1_STANDARD,
-        content="c",
-        n_slides=1,
-        language="English",
-        title="Title",
-        outlines=None,
-        layout=None,
-        structure=structure_payload,
-    )
-    p.set_structure(PresentationStructureModel(slides=[0, 1]))
-    assert p.structure["slides"] == [0, 1]
-
-
 def test_chat_conversation_store_ensure_conversation_id():
     store = ChatConversationStore(sql_session=None)  # type: ignore[arg-type]
     nid = asyncio.run(store.ensure_conversation_id(None))
@@ -350,18 +227,6 @@ def test_get_selected_image_provider_invalid_env_raises(monkeypatch):
     monkeypatch.setenv("IMAGE_PROVIDER", "not-a-real-provider")
     with pytest.raises(ValueError):
         get_selected_image_provider()
-
-
-def test_dynamic_outline_and_structure_factories_validate():
-    long_text = "x" * 100
-    OutlineCls = get_presentation_outline_model_with_n_slides(1)
-    outline = OutlineCls(slides=[{"content": long_text}])
-
-    StructureCls = get_presentation_structure_model_with_n_slides(3)
-    structure = StructureCls(slides=[0, 1, 2])
-
-    assert outline.slides[0].content == long_text
-    assert structure.slides == [0, 1, 2]
 
 
 @pytest.mark.parametrize(
@@ -447,26 +312,6 @@ def test_handle_llm_client_exceptions(monkeypatch):
     assert generic.detail.startswith("LLM API error")
 
 
-def test_concurrent_service_runs_tasks(monkeypatch):
-    mock_sleep = AsyncMock()
-    monkeypatch.setattr(asyncio, "sleep", mock_sleep)
-
-    svc = ConcurrentService()
-    touched = []
-
-    async def work():
-        touched.append(1)
-
-    async def runner():
-        svc.run_task(None, work)
-        svc.run_task(3, work)
-        await asyncio.gather(*list(svc._background_tasks))
-
-    asyncio.run(runner())
-    assert len(touched) == 2
-    mock_sleep.assert_awaited_once_with(3)
-
-
 def test_export_includes_optional_fastapi_param():
     async def runner():
         fake_result = MagicMock(path="/exports/deck.pdf")
@@ -522,33 +367,6 @@ def test_export_task_output_permissions_are_readable(tmp_path):
     assert stat.S_IMODE(output_path.stat().st_mode) == 0o644
 
 
-def test_replace_and_extension_helpers():
-    assert replace_file_name("deck.pptx", "outline") == "outline.pptx"
-    assert replace_file_name("readme", "out") == "out"
-    replaced = replace_file_name("note.txt", "fixed")
-    assert replaced == "fixed.txt"
-    randomized = replace_file_name("note.txt", f"note----{uuid.uuid4()}")
-    assert randomized.endswith(".txt") and "----" in randomized
-    assert (
-        get_original_file_name(os.path.join("ignored", randomized)) == "note.txt"
-    )
-
-
-def test_get_file_ext_or_none():
-    assert get_file_ext_or_none("photo.PNG") == ".PNG"
-    assert get_file_ext_or_none("readme") == ""
-
-
-def test_get_file_ext_or_none_truncated_extension_tuple(monkeypatch):
-    monkeypatch.setattr(os.path, "splitext", lambda _: ("base",))
-    assert get_file_ext_or_none("base") is None
-
-
-def test_set_file_ext_monkey_patch():
-    assert set_file_ext("/tmp/with.txt", ".md").endswith(".md")
-    assert set_file_ext("/tmp/plain", ".md").endswith(".md")
-
-
 def test_get_file_name_with_random_uuid_variants():
     from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -560,22 +378,6 @@ def test_get_file_name_with_random_uuid_variants():
     assert disk_path_out.endswith(".pdf") and "----" in disk_path_out
 
     assert "----" in get_file_name_with_random_uuid(io.BytesIO(b"z"))
-
-
-def test_presentation_layout_model_surface():
-    layout = PresentationLayoutModel(
-        name="demo",
-        slides=[
-            SlideLayoutModel(id="sid", json_schema={"title": "From schema"}, description="d"),
-        ],
-    )
-    assert "From schema" in layout.to_string()
-    with_schema = layout.to_string(with_schema=True)
-    assert '"title": "From schema"' in with_schema
-    assert layout.to_presentation_structure().slides == [0]
-    assert layout.get_slide_layout_index("sid") == 0
-    with pytest.raises(HTTPException):
-        layout.get_slide_layout_index("missing")
 
 
 @pytest.mark.parametrize(

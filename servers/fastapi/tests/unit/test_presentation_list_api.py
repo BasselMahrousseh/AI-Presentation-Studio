@@ -38,23 +38,7 @@ def _compile_statement(statement: Any) -> str:
     )
 
 
-def test_get_all_presentations_filters_by_version():
-    session = _CapturingAsyncSession()
-
-    response = asyncio.run(
-        presentation_endpoint.get_all_presentations(
-            version=PresentationVersion.V2_STANDARD,
-            sql_session=session,
-        )
-    )
-
-    assert response == []
-    compiled = _compile_statement(session.executed_statement)
-    assert "WHERE presentations.version = 'v2-standard'" in compiled
-    assert "ORDER BY presentations.created_at DESC" in compiled
-
-
-def test_get_all_presentations_omits_version_filter_by_default():
+def test_get_all_presentations_lists_only_smart_decks():
     session = _CapturingAsyncSession()
 
     response = asyncio.run(
@@ -65,6 +49,8 @@ def test_get_all_presentations_omits_version_filter_by_default():
 
     assert response == []
     compiled = _compile_statement(session.executed_statement)
+    # Outline drafts and legacy TemplateV2 decks are "standard" rows and are not listed.
+    assert "presentations.generation_mode = 'smart'" in compiled
     assert "presentations.version =" not in compiled
     assert "ORDER BY presentations.created_at DESC" in compiled
 
@@ -85,7 +71,6 @@ def test_get_all_presentations_can_skip_slide_preview_join():
 
     response = asyncio.run(
         presentation_endpoint.get_all_presentations(
-            version=PresentationVersion.V1_STANDARD,
             include_slides=False,
             sql_session=session,
         )
@@ -97,7 +82,7 @@ def test_get_all_presentations_can_skip_slide_preview_join():
     assert response[0].slides == []
     assert response[0].fonts == {"Inter": "https://example.com/inter.css"}
     compiled = _compile_statement(session.executed_statement)
-    assert "WHERE presentations.version = 'v1-standard'" in compiled
+    assert "presentations.generation_mode = 'smart'" in compiled
     assert "JOIN slides" not in compiled
     assert "ORDER BY presentations.created_at DESC" in compiled
 

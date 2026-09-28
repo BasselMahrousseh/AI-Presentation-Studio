@@ -82,33 +82,27 @@ def test_chat_tool_parse_args_repairs_fenced_jsonish_payload():
     ) == {"index": 0, "includeFullContent": True}
 
 
-def test_chat_tools_expose_only_v2_tool_names():
+def test_standard_chat_tools_are_outline_only():
+    # "standard" presentations are the outline step's drafts; decks are always Smart.
     assert [tool.name for tool in ChatTools(Mock()).get_tool_definitions()] == [
         "addOutline",
         "updateOutline",
         "deleteOutline",
-        "addNewSlide",
-        "addNewSlideLayout",
-        "getAvailableLayouts",
-        "getAvailableBlocks",
-        "getContentSchemaFromLayoutId",
-        "getTemplateSummary",
+        "readSourceDocuments",
+    ]
+
+
+def test_smart_chat_tools_edit_html_slides():
+    memory = Mock()
+    memory.presentation_type = "smart"
+    assert [tool.name for tool in ChatTools(memory).get_tool_definitions()] == [
+        "getSmartPresentationContext",
         "readSourceDocuments",
         "searchSlide",
         "getSlideAtIndex",
-        "saveSlide",
-        "updateSlide",
-        "deleteSlide",
-        "addElement",
-        "updateElement",
-        "deleteElement",
-        "addComponent",
-        "createComponent",
-        "updateComponent",
-        "deleteComponent",
-        "getPresentationTheme",
-        "setPresentationTheme",
         "generateAssets",
+        "saveSlide",
+        "deleteSlide",
     ]
 
 

@@ -5,14 +5,14 @@ import posixpath
 import re
 import zipfile
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 from xml.etree import ElementTree
 
 import openpyxl
 from openpyxl.utils import range_boundaries
 
 from models.pptx_chart_data import ExtractedChart, ExtractedChartSeries, PptxStructuredData
-from templates.v2.models.elements import ChartType
+from enums.chart_type import ChartType
 
 LOGGER = logging.getLogger(__name__)
 

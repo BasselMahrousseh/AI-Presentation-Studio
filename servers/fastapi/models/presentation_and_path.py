@@ -7,5 +7,3 @@ class PresentationAndPath(BaseModel):
     path: str
 
 
-class PresentationPathAndEditPath(PresentationAndPath):
-    edit_path: str

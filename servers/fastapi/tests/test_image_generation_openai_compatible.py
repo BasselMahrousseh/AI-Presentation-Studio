@@ -1,6 +1,6 @@
 import pytest
 import os
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
+from unittest.mock import Mock, patch, AsyncMock
 from services.image_generation_service import ImageGenerationService
 
 

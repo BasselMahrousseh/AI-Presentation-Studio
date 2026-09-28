@@ -11,13 +11,6 @@ from PIL import Image
 import utils.llm_calls.generate_smart_presentation as smart_generation
 
 from enums.llm_provider import LLMProvider
-from services.community_presentations import (
-    CommunityPresentationReference,
-    build_community_design_context,
-    list_community_presentations,
-    merge_reference_fonts,
-    normalize_community_ids,
-)
 from utils.llm_calls.generate_smart_presentation import (
     SMART_DECK_SYSTEM_PROMPT,
     SmartSlideStreamParser,
@@ -26,7 +19,6 @@ from utils.llm_calls.generate_smart_presentation import (
     get_smart_messages,
     get_smart_reasoning_config,
     normalize_smart_slide_html,
-    parse_smart_presentation_html,
     resolve_smart_slide_count,
 )
 
@@ -62,35 +54,6 @@ def test_smart_slide_stream_parser_emits_delimited_slides_incrementally():
 
     slides = list(parser.feed(second_slide[80:] + "<!-- SLIDE_END -->"))
     assert [slide["title"] for slide in slides] == ["Two"]
-
-
-def test_smart_deck_parser_uses_cloud_delimiters_and_validates_count():
-    response = (
-        "<!-- PRESENTATION_TITLE: Deck -->"
-        "<!-- SLIDE_START -->"
-        + _smart_slide_html("Cover", "title")
-        + "<!-- SLIDE_END -->"
-        "<!-- SLIDE_START -->"
-        + _smart_slide_html("Agenda", "toc")
-        + "<!-- SLIDE_END -->"
-    )
-
-    title, slides = parse_smart_presentation_html(
-        response,
-        expected_slide_count=2,
-        include_title_slide=True,
-        include_table_of_contents=True,
-    )
-
-    assert title == "Deck"
-    assert [slide["title"] for slide in slides] == ["Cover", "Agenda"]
-    with pytest.raises(HTTPException):
-        parse_smart_presentation_html(
-            response,
-            expected_slide_count=3,
-            include_title_slide=True,
-            include_table_of_contents=True,
-        )
 
 
 def test_smart_prompt_matches_cloud_one_shot_method_without_speaker_notes():
@@ -263,74 +226,6 @@ def test_smart_stream_separates_thinking_and_reports_exact_usage(monkeypatch):
     assert metrics.thinking_tokens == 5
     assert metrics.thinking_tokens_estimated is False
     assert metrics.supports_thinking is True
-
-
-def test_normalize_community_ids_preserves_order_and_deduplicates():
-    assert normalize_community_ids([7, 3, 7]) == [7, 3]
-
-
-def test_normalize_community_ids_rejects_invalid_and_excess_references():
-    with pytest.raises(HTTPException):
-        normalize_community_ids([0])
-    with pytest.raises(HTTPException):
-        normalize_community_ids([1, 2, 3, 4])
-
-
-def test_community_context_is_style_only_and_round_robins_decks():
-    references = [
-        CommunityPresentationReference(
-            id=2,
-            title="Editorial",
-            slides=("<section>first-a</section>", "<section>second-a</section>"),
-            fonts={"Inter": "inter.css"},
-        ),
-        CommunityPresentationReference(
-            id=9,
-            title="Minimal",
-            slides=("<section>first-b</section>",),
-            fonts={"Inter": "ignored.css", "Manrope": "manrope.css"},
-        ),
-    ]
-
-    context = build_community_design_context(references)
-
-    assert "UNTRUSTED, STYLE ONLY" in context
-    assert context.index("first-a") < context.index("first-b") < context.index("second-a")
-    assert merge_reference_fonts(references) == {
-        "Inter": "inter.css",
-        "Manrope": "manrope.css",
-    }
-
-
-def test_community_list_forwards_filters(monkeypatch):
-    captured_params = None
-
-    async def fake_cloud_get(path, params=None):
-        nonlocal captured_params
-        captured_params = params
-        return {"results": []}
-
-    monkeypatch.setattr("services.community_presentations._cloud_get", fake_cloud_get)
-
-    asyncio.run(
-        list_community_presentations(
-            created_at_gt="2026-01-01T00:00:00.000Z",
-            views_gt=100,
-            likes_lt=50,
-            order_by="views",
-            order="desc",
-        )
-    )
-
-    assert captured_params == {
-        "page": 1,
-        "page_size": 8,
-        "order_by": "views",
-        "order": "desc",
-        "created_at_gt": "2026-01-01T00:00:00.000Z",
-        "views_gt": 100,
-        "likes_lt": 50,
-    }
 
 
 def test_smart_html_normalization_removes_executable_markup():
@@ -537,37 +432,6 @@ def test_smart_html_normalization_rejects_bare_datalabels_shorthand():
                 ),
             )
         )
-
-
-def test_smart_api_parser_returns_complete_chart_html():
-    chart_slide = _smart_slide_html(
-        "Metrics",
-        body=(
-            '<canvas id="chart-d4e5f6" width="600" height="300"></canvas>'
-            "<script>(() => { const canvas = "
-            "document.querySelector('#chart-d4e5f6'); "
-            "new Chart(canvas, {type: 'line', data: {labels: ['Q1'], "
-            "datasets: [{data: [10]}]}, options: {responsive: false, "
-            "animation: false}}); })();</script>"
-        ),
-    )
-    response = (
-        "<!-- PRESENTATION_TITLE: Metrics -->"
-        "<!-- SLIDE_START -->"
-        + chart_slide
-        + "<!-- SLIDE_END -->"
-    )
-
-    _, slides = parse_smart_presentation_html(
-        response,
-        expected_slide_count=1,
-        include_title_slide=False,
-        include_table_of_contents=False,
-    )
-
-    assert "<canvas" in slides[0]["html"]
-    assert "<script" in slides[0]["html"]
-    assert "new Chart" in slides[0]["html"]
 
 
 @pytest.mark.parametrize(
@@ -2102,42 +1966,6 @@ def test_stream_parser_skips_layout_heuristics_when_constructed_to():
     )
     slides = list(parser.feed(chunk))
     assert [slide["title"] for slide in slides] == ["Stuck"]
-
-
-def test_final_parse_honours_the_static_waiver_at_one_index():
-    """parse_smart_presentation_html re-parses the raw response after the
-    stream drains - without skip_layout_heuristics_at_index this would
-    silently re-reject the very slide the streaming loop just waived,
-    undoing rung 1 on the same attempt."""
-    stuck_html = _smart_slide_html(
-        title="Stuck", body=_static_heuristic_stalling_body()
-    )
-    clean_html = _smart_slide_html(title="Clean")
-    response = (
-        "<!-- PRESENTATION_TITLE: Deck -->"
-        "<!-- SLIDE_START -->" + stuck_html + "<!-- SLIDE_END -->"
-        "<!-- SLIDE_START -->" + clean_html + "<!-- SLIDE_END -->"
-    )
-    common = dict(
-        expected_slide_count=2,
-        include_title_slide=False,
-        include_table_of_contents=False,
-    )
-
-    with pytest.raises(HTTPException, match="overflow or overlap risks"):
-        parse_smart_presentation_html(response, **common)
-
-    # Waived at the wrong index (1, "Clean") - the actually-stuck slide at
-    # index 0 still raises.
-    with pytest.raises(HTTPException, match="overflow or overlap risks"):
-        parse_smart_presentation_html(
-            response, **common, skip_layout_heuristics_at_index=1
-        )
-
-    _, slides = parse_smart_presentation_html(
-        response, **common, skip_layout_heuristics_at_index=0
-    )
-    assert [slide["title"] for slide in slides] == ["Stuck", "Clean"]
 
 
 def test_pptx_export_fidelity_prompt_forbids_custom_web_fonts_with_no_reference():

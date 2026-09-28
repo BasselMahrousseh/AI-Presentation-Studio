@@ -10,7 +10,7 @@ import jwt
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
@@ -178,7 +178,7 @@ def _make_deck(env, owner_id, title="t"):
         async with env.maker() as s:
             p = PresentationModel(
                 id=uuid.uuid4(), owner_id=owner_id, version=PresentationVersion.V2_STANDARD,
-                content="c", n_slides=1, language="en", title=title,
+                content="c", n_slides=1, language="en", title=title, generation_mode="smart",
                 created_at=dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc),
                 updated_at=dt.datetime(2026, 1, 2, tzinfo=dt.timezone.utc),
             )

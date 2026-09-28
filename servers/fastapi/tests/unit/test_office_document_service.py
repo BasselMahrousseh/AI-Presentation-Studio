@@ -10,7 +10,7 @@ from services.office_document_service import (
     extract_office_document_text,
     extract_pptx_structured_data,
 )
-from templates.v2.models.elements import ChartType
+from enums.chart_type import ChartType
 
 _CHART_NS = (
     'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" '

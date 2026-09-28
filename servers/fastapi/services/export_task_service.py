@@ -13,7 +13,7 @@ from typing import Any, Literal, Mapping
 from urllib.parse import unquote, urlparse
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from services.liteparse_service import _command_str, _snippet
 from api.v1.auth.context import get_current_owner_id
@@ -145,32 +145,11 @@ def _windows_hidden_subprocess_kwargs() -> dict[str, object]:
     return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-class PptxToHtmlDocument(BaseModel):
-    slides: list[str]
-    font_css: str = ""
-    width: float
-    height: float
-    images_dir: str
-    fonts_dir: str
-
-
-class PptxToJsonDocument(BaseModel):
-    layouts: list[dict[str, Any]]
-
-
 class PresentationExportTaskResult(BaseModel):
     path: str
 
 
 class HtmlToImageTaskResult(BaseModel):
-    path: str
-
-
-class HtmlToImagesTaskResult(BaseModel):
-    paths: list[str]
-
-
-class JsonToImageTaskResult(BaseModel):
     path: str
 
 
@@ -634,38 +613,6 @@ class ExportTaskService:
             path=output_path,
         )
 
-    async def convert_pptx_to_html(
-        self, pptx_path: str, get_fonts: bool = False
-    ) -> PptxToHtmlDocument:
-        if not os.path.isfile(pptx_path):
-            raise HTTPException(status_code=400, detail=f"PPTX not found: {pptx_path}")
-
-        try:
-            response_data = await self._run_task(
-                {
-                    "type": "pptx-to-html",
-                    "pptx_path": pptx_path,
-                    "get_fonts": get_fonts,
-                },
-                "PPTX-to-HTML export task did not produce a response file",
-            )
-
-            output_path = self._resolve_output_path(response_data)
-            with open(output_path, "r", encoding="utf-8") as output_file:
-                output_data = json.load(output_file)
-            output_data = self._scope_conversion_artifacts(
-                output_path,
-                output_data,
-                "pptx-to-html",
-            )
-
-            return PptxToHtmlDocument(**output_data)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail="PPTX-to-HTML export produced invalid JSON output",
-            ) from exc
-
     async def render_html_to_image(
         self,
         html: str,
@@ -696,142 +643,6 @@ class ExportTaskService:
 
         return HtmlToImageTaskResult(path=output_path)
 
-    async def render_json_to_image(
-        self,
-        data: list[dict[str, Any]],
-        width: int,
-        height: int,
-        fonts: Mapping[str, str] | None = None,
-    ) -> JsonToImageTaskResult:
-        if width <= 0 or height <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="JSON-to-image dimensions must be positive",
-            )
-
-        task_payload: dict[str, Any] = {
-            "type": "json-to-image",
-            "data": _localize_json_image_assets(data),
-            "width": width,
-            "height": height,
-        }
-        if fonts:
-            task_payload["fonts"] = dict(fonts)
-
-        response_data = await self._run_task(
-            task_payload,
-            "JSON-to-image export task did not produce a response file",
-        )
-
-        output_path = self._resolve_output_path(response_data)
-        self._ensure_output_readable(output_path)
-
-        return JsonToImageTaskResult(path=output_path)
-
-    async def render_htmls_to_images(
-        self,
-        htmls: list[str],
-        width: int,
-        height: int,
-    ) -> HtmlToImagesTaskResult:
-        if not htmls:
-            raise HTTPException(
-                status_code=400,
-                detail="At least one HTML document is required",
-            )
-        if width <= 0 or height <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="HTML-to-image dimensions must be positive",
-            )
-
-        try:
-            response_data = await self._run_task(
-                {
-                    "type": "html-to-images",
-                    "htmls": htmls,
-                    "width": width,
-                    "height": height,
-                },
-                "HTML-to-images export task did not produce a response file",
-            )
-        except HTTPException as exc:
-            if "Invalid task type" in str(exc.detail):
-                LOGGER.warning(
-                    "[export_runtime] html-to-images is unavailable; "
-                    "falling back to one task per HTML document"
-                )
-            elif exc.status_code == 500:
-                LOGGER.warning(
-                    "[export_runtime] html-to-images failed; "
-                    "falling back to one task per HTML document. detail=%s",
-                    exc.detail,
-                )
-            else:
-                raise
-            results = [
-                await self.render_html_to_image(html, width, height) for html in htmls
-            ]
-            return HtmlToImagesTaskResult(paths=[result.path for result in results])
-
-        raw_paths = response_data.get("file_paths")
-        if not isinstance(raw_paths, list) or len(raw_paths) != len(htmls):
-            raise HTTPException(
-                status_code=500,
-                detail="HTML-to-images export task produced invalid output",
-            )
-
-        output_paths = [
-            self._resolve_output_path({"file_path": raw_path}) for raw_path in raw_paths
-        ]
-        for output_path in output_paths:
-            self._ensure_output_readable(output_path)
-
-        return HtmlToImagesTaskResult(paths=output_paths)
-
-    async def convert_pptx_to_json(
-        self,
-        pptx_path: str,
-        *,
-        slide_concurrency: int | None = None,
-    ) -> PptxToJsonDocument:
-        if not os.path.isfile(pptx_path):
-            raise HTTPException(status_code=400, detail=f"PPTX not found: {pptx_path}")
-
-        task_payload: dict[str, Any] = {
-            "type": "pptx-to-json",
-            "pptx_path": pptx_path,
-        }
-        if slide_concurrency is not None:
-            task_payload["slide_concurrency"] = slide_concurrency
-
-        try:
-            response_data = await self._run_task(
-                task_payload,
-                "PPTX-to-JSON export task did not produce a response file",
-            )
-
-            output_path = self._resolve_output_path(response_data)
-            with open(output_path, "r", encoding="utf-8") as output_file:
-                output_data = json.load(output_file)
-            output_data = self._scope_conversion_artifacts(
-                output_path,
-                output_data,
-                "pptx-to-json",
-            )
-
-            return PptxToJsonDocument(**output_data)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail="PPTX-to-JSON export produced invalid JSON output",
-            ) from exc
-        except ValidationError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail="PPTX-to-JSON export produced invalid output",
-            ) from exc
-
     @staticmethod
     def _move_export_to_owner(output_path: str) -> str:
         if get_current_owner_id() is None:
@@ -857,61 +668,6 @@ class ExportTaskService:
         if resolved_output != os.path.realpath(destination):
             os.replace(output_path, destination)
         return destination
-
-    @staticmethod
-    def _scope_conversion_artifacts(
-        output_path: str,
-        output_data: Any,
-        root_name: Literal["pptx-to-html", "pptx-to-json"],
-    ) -> Any:
-        owner_id = get_current_owner_id()
-        if owner_id is None:
-            return output_data
-
-        source_dir = os.path.realpath(os.path.dirname(output_path))
-        session_id = os.path.basename(source_dir)
-        app_data = get_app_data_directory_env()
-        if not app_data:
-            raise HTTPException(
-                status_code=500,
-                detail="APP_DATA_DIRECTORY is required for conversion artifacts",
-            )
-        source_root = os.path.realpath(os.path.join(app_data, root_name))
-        owner_root = os.path.realpath(
-            os.path.join(source_root, "users", str(owner_id))
-        )
-        source_parent = os.path.dirname(source_dir)
-        if source_parent not in {source_root, owner_root} or session_id == "users":
-            raise HTTPException(
-                status_code=500,
-                detail="Conversion task returned an output outside its asset directory",
-            )
-        target_dir = os.path.join(
-            owner_root,
-            session_id,
-        )
-        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
-        if os.path.realpath(target_dir) != source_dir:
-            shutil.move(source_dir, target_dir)
-
-        source_url = f"/app_data/{root_name}/{session_id}"
-        target_url = (
-            f"/app_data/{root_name}/users/{owner_id}/{session_id}"
-        )
-
-        def rewrite(value: Any) -> Any:
-            if isinstance(value, str):
-                return value.replace(source_dir, target_dir).replace(
-                    source_url,
-                    target_url,
-                )
-            if isinstance(value, list):
-                return [rewrite(item) for item in value]
-            if isinstance(value, dict):
-                return {key: rewrite(item) for key, item in value.items()}
-            return value
-
-        return rewrite(output_data)
 
 def sys_platform() -> str:
     if os.name == "nt":

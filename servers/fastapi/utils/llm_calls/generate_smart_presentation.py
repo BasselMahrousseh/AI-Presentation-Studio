@@ -1772,54 +1772,6 @@ class SmartSlideBlockError:
         self.title = title
 
 
-def parse_smart_presentation_html(
-    response: str,
-    *,
-    expected_slide_count: int,
-    include_title_slide: bool,
-    include_table_of_contents: bool,
-    start_index: int = 0,
-    skip_layout_heuristics_at_index: int | None = None,
-) -> tuple[str, list[dict[str, str]]]:
-    candidate = _FENCE_PATTERN.sub("", response).strip()
-    title_match = SMART_DECK_TITLE_RE.search(candidate)
-    if title_match is None or not title_match.group(1).strip():
-        raise HTTPException(status_code=400, detail="The Smart deck title marker is missing")
-    starts = len(re.findall(r"<!--\s*SLIDE_START\s*-->", candidate, re.IGNORECASE))
-    ends = len(re.findall(r"<!--\s*SLIDE_END\s*-->", candidate, re.IGNORECASE))
-    blocks = [match.group(1).strip() for match in SMART_SLIDE_BLOCK_RE.finditer(candidate)]
-    if starts != ends or len(blocks) != starts:
-        raise HTTPException(status_code=400, detail="The Smart slide delimiters are unmatched")
-    if len(blocks) != expected_slide_count:
-        raise HTTPException(
-            status_code=400,
-            detail=f"The model returned {len(blocks)} slides instead of {expected_slide_count}",
-        )
-    # skip_layout_heuristics_at_index mirrors, for this final re-parse of the
-    # whole raw response, the same single-position waiver the streaming loop
-    # already applied while consuming the response chunk by chunk. Without
-    # this, a slide the stream deliberately waived would be re-rejected here
-    # moments later, on the very same attempt, undoing the waiver entirely.
-    slides = [
-        _slide_from_html(
-            block,
-            start_index + index,
-            skip_layout_heuristics=(
-                start_index + index == skip_layout_heuristics_at_index
-            ),
-        )
-        for index, block in enumerate(blocks)
-    ]
-    for index, slide in enumerate(slides, start=start_index):
-        _validate_slide_position(
-            slide,
-            index,
-            include_title_slide=include_title_slide,
-            include_table_of_contents=include_table_of_contents,
-        )
-    return title_match.group(1).strip(), slides
-
-
 class SmartStreamStalledError(Exception):
     """The LLM stream produced no event for SMART_STREAM_IDLE_TIMEOUT_SECONDS.
     An infrastructure failure, not a content one - never fed back to the

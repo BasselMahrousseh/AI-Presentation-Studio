@@ -1,4 +1,3 @@
-from typing import Any
 
 from fastapi import HTTPException
 from openai import APIError as OpenAIAPIError
@@ -72,15 +71,3 @@ def normalize_image_generation_error(error: Exception) -> HTTPException:
     )
 
 
-def image_generation_warning(error: Exception) -> dict[str, Any]:
-    normalized = normalize_image_generation_error(error)
-    code = (
-        _openai_error_code(error)
-        if isinstance(error, OpenAIAPIError)
-        else getattr(error, "provider_code", None)
-    )
-    return {
-        "status_code": normalized.status_code,
-        "detail": str(normalized.detail),
-        "code": code,
-    }

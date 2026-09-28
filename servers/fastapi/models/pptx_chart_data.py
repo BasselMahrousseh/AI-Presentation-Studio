@@ -2,7 +2,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel
 
-from templates.v2.models.elements import ChartType
+from enums.chart_type import ChartType
 
 
 class ExtractedChartSeries(BaseModel):

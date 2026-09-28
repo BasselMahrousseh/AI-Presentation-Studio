@@ -234,10 +234,6 @@ def _resolve_allowed_absolute_file(path: str) -> Optional[str]:
     return _existing_file_within(path, static_root)
 
 
-def resolve_image_path_to_filesystem(path_or_url: str) -> Optional[str]:
-    return resolve_app_path_to_filesystem(path_or_url)
-
-
 def get_images_directory():
     return _owned_directory("images")
 
@@ -245,5 +241,3 @@ def get_images_directory():
 def get_exports_directory():
     return _owned_directory("exports")
 
-def get_uploads_directory():
-    return _owned_directory("uploads")
