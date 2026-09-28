@@ -72,3 +72,6 @@ benchmark/
 
 # local dev runtime data
 servers/fastapi/.runtime-smart/
+
+# Studio backend config (Azure OpenAI, image settings) is committed deliberately.
+!servers/fastapi/.env
