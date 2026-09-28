@@ -1,6 +1,6 @@
 import os
 from typing import Annotated, List, Optional
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, HTTPException, UploadFile
 
 from constants.documents import UPLOAD_ACCEPTED_FILE_TYPES
 from models.decomposed_file_info import DecomposedFileInfo
@@ -77,14 +77,3 @@ async def decompose_files(
         )
 
     return response
-
-
-@FILES_ROUTER.post("/update")
-async def update_files(
-    file_path: Annotated[str, Body()],
-    file: Annotated[UploadFile, File()],
-):
-    validate_files(file, False, False, 100, UPLOAD_ACCEPTED_FILE_TYPES)
-    await TEMP_FILE_SERVICE.update_temp_file_from_upload(file_path, file)
-
-    return {"message": "File updated successfully"}

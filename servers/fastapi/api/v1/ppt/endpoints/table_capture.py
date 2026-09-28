@@ -6,9 +6,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from api.v1.ppt.endpoints.chart_capture import _validate_pptx_export_path
 from services import table_capture_store
-from services.pptx_native_table_service import upgrade_flattened_tables_to_native
 
 LOGGER = logging.getLogger(__name__)
 
@@ -87,40 +85,4 @@ async def report_table_capture(payload: TableCaptureReportRequest) -> dict:
         )
     except Exception:
         LOGGER.exception("table_capture: failed to store reported table capture")
-    return {"success": True}
-
-
-class TableUpgradeRequest(BaseModel):
-    token: str
-    presentation_id: uuid.UUID
-    pptx_path: str
-
-
-@TABLE_CAPTURE_ROUTER.post("/upgrade-tables")
-async def upgrade_tables(payload: TableUpgradeRequest) -> dict:
-    """
-    Runs the native-table upgrade pass on an already-produced .pptx file.
-
-    Used by the Next.js-side bundled export path
-    (lib/run-bundled-presentation-export.ts), which spawns the export bundle
-    directly for the interactive "Export PPTX" button and never goes through
-    export_presentation()/export_utils.py - that FastAPI-side flow is a
-    separate caller used for generate-and-export-in-one-request endpoints.
-    Both ultimately call the same upgrade_flattened_tables_to_native(), kept
-    here so python-pptx table-building logic lives in exactly one place.
-
-    Must run strictly after the equivalent chart upgrade for the same file
-    has already completed and saved (see the table-export plan's Design
-    Decision 3) - both callers of this endpoint enforce that ordering.
-
-    Best-effort: any failure here leaves the pptx with its flattened table
-    images, which is the safe, already-working fallback.
-    """
-    real_path = _validate_pptx_export_path(payload.pptx_path)
-    try:
-        await upgrade_flattened_tables_to_native(
-            real_path, payload.token, payload.presentation_id
-        )
-    except Exception:
-        LOGGER.exception("table_capture: upgrade_tables endpoint failed")
     return {"success": True}

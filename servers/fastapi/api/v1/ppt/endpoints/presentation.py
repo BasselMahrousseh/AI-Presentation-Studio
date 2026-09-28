@@ -1,11 +1,9 @@
 import asyncio
 import copy
-from datetime import datetime
 import json
 import logging
 import random
 import re
-import traceback
 from typing import Annotated, Any, List, Literal, Optional
 from fastapi import (
     APIRouter,
@@ -21,11 +19,7 @@ from sqlalchemy import delete, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from constants.presentation import MAX_NUMBER_OF_SLIDES
-from enums.async_task_status import AsyncTaskStatus
-from enums.webhook_event import WebhookEvent
-from models.api_error_model import APIErrorModel
-from models.presentation_and_path import PresentationAndPath, PresentationPathAndEditPath
-from models.presentation_from_template import EditPresentationRequest
+from models.presentation_and_path import PresentationAndPath
 from models.presentation_outline_model import (
     PresentationOutlineModel,
     SlideOutlineModel,
@@ -40,19 +34,13 @@ from services.document_fact_dedup_service import build_deduplicated_context
 from services.documents_loader import DocumentsLoader
 from services.chat.slide_ui_helpers import _normalize_generated_image_fit
 from services.temp_file_service import TEMP_FILE_SERVICE
-from services.webhook_service import WebhookService
 from services.image_generation_service import ImageGenerationService
 from services.mem0_presentation_memory_service import (
     MEM0_PRESENTATION_MEMORY_SERVICE,
 )
 from utils.asset_directory_utils import filesystem_export_path_to_app_data_url
-from utils.dict_utils import deep_update
 from utils.export_utils import export_presentation
 from utils.llm_utils import DisconnectChecker
-from utils.llm_calls.generate_presentation_outlines import (
-    generate_ppt_outline,
-    get_messages as get_outline_messages,
-)
 from models.sql.slide import SlideModel
 from models.sse_response import (
     SSECompleteResponse,
@@ -63,10 +51,8 @@ from models.sse_response import (
 
 from services.database import get_async_session
 from services.database import async_session_maker
-from services.concurrent_service import CONCURRENT_SERVICE
 from models.sql.presentation import PresentationModel, PresentationVersion
 from models.sql.template_v2 import TemplateV2
-from models.sql.async_task import AsyncTaskModel
 from utils.asset_directory_utils import get_images_directory
 from utils.llm_calls.generate_presentation_structure import (
     generate_presentation_structure,
@@ -80,18 +66,15 @@ from utils.ppt_utils import (
 )
 from utils.outline_utils import (
     get_images_for_slides_from_outline,
-    get_no_of_outlines_to_generate_for_n_slides,
     get_no_of_toc_required_for_n_outlines,
     get_presentation_outline_model_with_toc,
-    get_presentation_title_from_presentation_outline,
 )
-from utils.outline_limits import normalize_outline_payload
 from utils.process_slides import (
     process_slide_add_placeholder_assets,
     process_slide_and_fetch_assets,
 )
 from utils.icon_weights import DEFAULT_ICON_TYPE, extract_icon_type_from_settings
-from utils.llm_utils import TextGenerationMetrics, message_content_to_text
+from utils.llm_utils import TextGenerationMetrics
 from utils.sse import safe_sse_stream
 from api.v1.auth.config import SESSION_COOKIE_NAME
 from utils.web_search import get_selected_web_search_provider, get_web_search_route
@@ -1669,53 +1652,6 @@ async def create_presentation(
     return presentation
 
 
-@PRESENTATION_ROUTER.post(
-    "/create/blank",
-    response_model=PresentationWithSlides,
-    status_code=201,
-)
-async def create_blank_presentation(
-    sql_session: AsyncSession = Depends(get_async_session),
-):
-    presentation_id = uuid.uuid4()
-    presentation = PresentationModel(
-        id=presentation_id,
-        version=PresentationVersion.V2_STANDARD,
-        content="",
-        n_slides=1,
-        language="English",
-        title="Untitled Presentation",
-        layout=None,
-        fonts=None,
-        include_title_slide=False,
-    )
-    slide = SlideModel(
-        presentation=presentation_id,
-        layout_group=BLANK_PRESENTATION_LAYOUT_GROUP,
-        layout=BLANK_PRESENTATION_LAYOUT_ID,
-        index=0,
-        content={},
-        speaker_note="",
-        ui=_blank_presentation_slide_ui(),
-    )
-
-    sql_session.add(presentation)
-    sql_session.add(slide)
-    try:
-        await sql_session.commit()
-    except Exception:
-        await sql_session.rollback()
-        raise
-
-    await sql_session.refresh(presentation)
-    await sql_session.refresh(slide)
-
-    return PresentationWithSlides(
-        **_presentation_response_data(presentation),
-        slides=[slide],
-    )
-
-
 @PRESENTATION_ROUTER.post("/prepare", response_model=PresentationPrepareResponse)
 async def prepare_presentation(
     presentation_id: Annotated[uuid.UUID, Body()],
@@ -2673,101 +2609,6 @@ async def update_presentation_slide(
     await sql_session.refresh(stored_slide)
     return stored_slide
 
-
-
-@PRESENTATION_ROUTER.post("/edit", response_model=PresentationPathAndEditPath)
-async def edit_presentation_with_new_content(
-    request_http: Request,
-    data: Annotated[EditPresentationRequest, Body()],
-    sql_session: AsyncSession = Depends(get_async_session),
-):
-    presentation = await sql_session.get(PresentationModel, data.presentation_id)
-    if not presentation:
-        raise HTTPException(status_code=404, detail="Presentation not found")
-
-    slides = await sql_session.scalars(
-        select(SlideModel).where(SlideModel.presentation == data.presentation_id)
-    )
-
-    new_slides = []
-    slides_to_delete = []
-    for each_slide in slides:
-        updated_content = None
-        new_slide_data = list(
-            filter(lambda x: x.index == each_slide.index, data.slides)
-        )
-        if new_slide_data:
-            updated_content = deep_update(each_slide.content, new_slide_data[0].content)
-            new_slide = each_slide.get_new_slide(presentation.id, updated_content)
-            _hydrate_template_slide_ui(new_slide, presentation.layout)
-            new_slides.append(new_slide)
-            slides_to_delete.append(each_slide.id)
-
-    await sql_session.execute(
-        delete(SlideModel).where(
-            SlideModel.id.in_(slides_to_delete),
-            SlideModel.owner_id == get_current_owner_id(),
-        )
-    )
-
-    sql_session.add_all(new_slides)
-    await sql_session.commit()
-
-    presentation_and_path = await export_presentation(
-        presentation.id,
-        presentation.title or str(uuid.uuid4()),
-        data.export_as,
-        cookie_header=_build_export_cookie_header(request_http),
-    )
-
-    return PresentationPathAndEditPath(
-        **presentation_and_path.model_dump(),
-        edit_path=f"/presentation?id={presentation.id}",
-    )
-
-
-@PRESENTATION_ROUTER.post("/derive", response_model=PresentationPathAndEditPath)
-async def derive_presentation_from_existing_one(
-    request_http: Request,
-    data: Annotated[EditPresentationRequest, Body()],
-    sql_session: AsyncSession = Depends(get_async_session),
-):
-    presentation = await sql_session.get(PresentationModel, data.presentation_id)
-    if not presentation:
-        raise HTTPException(status_code=404, detail="Presentation not found")
-
-    slides = await sql_session.scalars(
-        select(SlideModel).where(SlideModel.presentation == data.presentation_id)
-    )
-
-    new_presentation = presentation.get_new_presentation()
-    new_slides = []
-    for each_slide in slides:
-        updated_content = None
-        new_slide_data = list(
-            filter(lambda x: x.index == each_slide.index, data.slides)
-        )
-        if new_slide_data:
-            updated_content = deep_update(each_slide.content, new_slide_data[0].content)
-        new_slide = each_slide.get_new_slide(new_presentation.id, updated_content)
-        _hydrate_template_slide_ui(new_slide, new_presentation.layout)
-        new_slides.append(new_slide)
-
-    sql_session.add(new_presentation)
-    sql_session.add_all(new_slides)
-    await sql_session.commit()
-
-    presentation_and_path = await export_presentation(
-        new_presentation.id,
-        new_presentation.title or str(uuid.uuid4()),
-        data.export_as,
-        cookie_header=_build_export_cookie_header(request_http),
-    )
-
-    return PresentationPathAndEditPath(
-        **presentation_and_path.model_dump(),
-        edit_path=f"/presentation?id={new_presentation.id}",
-    )
 
 
 class ExportPresentationRequest(BaseModel):
