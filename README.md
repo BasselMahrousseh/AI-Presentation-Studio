@@ -1,192 +1,98 @@
-# e& Presentation Studio
+# e& Presentation Studio — backend
 
-An AI presentation workspace built on Presenton. Create an editable slide deck from a brief, then export it to PowerPoint. Alongside regular Smart Mode, the app provides a dedicated **e& Smart Mode** that applies the supplied e& corporate design without asking the model to recreate it.
+The presentation-generation backend behind **Presentation Studio** in GenAI-Workspace. It turns a brief
+or source documents into a reviewed outline, then into an editable Smart (HTML) slide deck, and exports
+it to PowerPoint or PDF. Two deck styles are offered: **Standard** (the model designs freely) and the
+**e& template** (fixed e& cover, footer and thank-you slide around generated content).
 
-**This repo is now consumed primarily as a backend/feature inside GenAI-Workspace**, not as a standalone app for end users. Studio's FastAPI (`servers/fastapi`) is the real API surface; its generation/outline/editor screens are ported into and served from the separate `GenAI-Workspace-UI` repo (see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §8 for the full integration). The setup below runs Studio's own `servers/nextjs` frontend directly — still needed for local development, for the screens deliberately never ported (`/theme`, `/community`, `/settings`, `/admin`, Custom Template Studio, `/upload`), and as the source-of-truth dev surface the Workspace copy of shared render/export code is synced from.
+There is no UI in this repo. Every Studio screen lives in the Workspace UI (`GenAI-Workspace-UI`,
+`src/features/studio`), which calls this FastAPI server. Architecture, the full route list and the auth
+model are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); working notes are in [`CLAUDE.md`](CLAUDE.md).
 
-## Features
-
-- Generate presentations from a short prompt, source documents, or web research.
-- Edit generated slides in the browser and export finished decks.
-- Use **Generate presentation** for regular Smart Mode, or **Generate with e& template** for the separate branded workflow.
-- Preserve the e& title artwork, logo, footer, confidentiality labels, gradient, and thank-you slide as fixed application assets rather than model-generated content.
-
-## e& Smart Mode
-
-The e& button creates a fixed deck structure:
-
-| Position | Source | Result |
-| --- | --- | --- |
-| 1 | Fixed title slide | Supplied e& title design, populated with the generated deck title. |
-| 2-4 | AI | Smart Mode content constrained above the fixed e& footer. |
-| 5 | Fixed thank-you slide | Supplied e& thank-you design. |
-
-The default request contains five slides, so the model creates three middle content slides. The e& flow requires at least three slides: title, content, and thank-you. Normal Smart Mode remains unchanged.
+## Layout
 
 ```text
-servers/fastapi/utils/smart_brand_templates.py       Brand shells and fixed slides
-servers/nextjs/public/smart-templates/eand/          Supplied e& image assets
-servers/nextjs/app/generation/GenerationPageClient.tsx  "Generate e& deck" button
+servers/fastapi/        FastAPI API + database (SQLite by default, Postgres/MySQL via DATABASE_URL)
+servers/fastapi/.env    Backend config (Azure OpenAI, image settings, service key)
+presentation-export/    Downloaded PPTX/PDF export runtime (gitignored; see below)
+resources/              LiteParse document-extraction runner
+Dockerfile              FastAPI-only production image
 ```
 
-## Project structure
+## Run locally (with the Workspace)
 
-```text
-servers/
-|- nextjs/       Next.js 16 + React frontend (port 3000)
-`- fastapi/      FastAPI generation API and database (port 8000)
+From the GenAI-Workspace folder:
 
-presentation-export/  HTML-to-PPTX export support
-templates/            Presentation template definitions
+```bash
+./run_studio.sh 2>&1 | tee /tmp/studio-dev.log     # Studio backend on :8011
+cd GenAI-Workspace-Dev && venv/bin/python run_all.py  # Workspace backend :8000 + UI :3000
 ```
 
-## Local setup (Windows)
+Then use Studio at http://localhost:3000. Studio does not auto-reload: restart `run_studio.sh` after
+backend changes. Its log lines are prefixed `[studio-api]`.
 
-### Prerequisites
+First-time setup of this checkout:
 
-- Node.js 20+
-- Python 3.11
-- Git
-- An OpenAI API key or another supported LLM-provider configuration
-
-### 1. Configure FastAPI
-
-Create or update `servers/fastapi/.env`. Do not commit this file.
-
-```dotenv
-OPENAI_API_KEY=your_key_here
-OPENAI_MODEL=gpt-4.1
-APP_DATA_DIRECTORY=app_data
+```bash
+npm install --omit=dev --ignore-scripts        # LiteParse + sharp, used by the backend
+npm run sync:presentation-export               # download and patch the export runtime
+cd servers/fastapi && uv sync --locked --dev   # Python dependencies
 ```
 
-### 2. Start the backend
+## Configuration
 
-From the repository root:
+`servers/fastapi/.env` (real environment variables take precedence):
 
-```powershell
-cd servers\fastapi
-uv sync --group dev
-.\.venv\Scripts\Activate.ps1
-uv run python server.py --port 8000  
-```
-
-`uv sync --group dev` installs the locked Python dependencies and creates `.venv`. If needed, install uv with `pip install uv`. Keep this terminal running.
-
-### 3. Configure the Next.js runtime
-
-Create `servers/nextjs/.env.local`. Next.js loads this file when it starts, so restart `npm run dev` after adding or changing it.
-
-```dotenv
-# Local development only. Do not use DISABLE_AUTH in a shared deployment.
-DISABLE_AUTH=true
-CAN_CHANGE_KEYS=false
-FAST_API_INTERNAL_URL=http://127.0.0.1:8000
-NEXT_PUBLIC_FAST_API=http://127.0.0.1:8000
-NEXT_PUBLIC_URL=http://127.0.0.1:3000
-
-# Use absolute paths on Windows. The converter is required for PPTX export.
-BUILT_PYTHON_MODULE_PATH=C:/path/to/convert-win32-x64.exe
-APP_DATA_DIRECTORY=C:/path/to/project/servers/fastapi/app_data
-TEMP_DIRECTORY=C:/path/to/project/servers/fastapi/app_data/temp
-```
-
-Keep `CAN_CHANGE_KEYS` aligned with FastAPI. When it is `false`, the frontend does not request editable provider settings; a direct `/api/user-config` request correctly returns `403`.
-
-### 4. Install the document-extraction runtime
-
-PDF and document uploads use LiteParse through a small Node.js runner. Install the root runtime dependencies from the repository root:
-
-```powershell
-npm install --omit=dev --ignore-scripts
-```
-
-The runner is stored at `resources/document-extraction/liteparse_runner.mjs` and FastAPI detects it automatically. Restart FastAPI after installing dependencies or changing its environment.
-
-This same root install is also required for the `presentation-export/` bundle's `sharp` dependency — skip it and PPTX/PDF export fails with `Cannot find module 'sharp'`.
-
-### 5. Install the PPTX export runtime
-
-From the repository root, download the pinned presentation-export package:
-
-```powershell
-node scripts\sync-presentation-export.cjs
-```
-
-Verify a previously installed runtime with:
-
-```powershell
-node scripts\sync-presentation-export.cjs --check-only
-```
-
-The export route reports `presentation-export runtime is not available` when this step has not been completed. On Windows, also ensure `BUILT_PYTHON_MODULE_PATH` points to an existing `convert-win32-x64.exe`.
-
-### 6. Start the frontend
-
-Open another terminal from the repository root:
-
-```powershell
-cd servers\nextjs
-npm install
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000). The custom frontend calls FastAPI at `http://127.0.0.1:8000`, so both services must be running.
-
-## How the e& template is protected
-
-The frontend sends `smart_template: "eand"` only when the e& button is used. The backend validates that template ID, reserves the fixed title and thank-you positions, gives the model a content safe-area contract, and applies the fixed footer only after generated HTML has been validated. The source PPTX, converted JSON, and fixed brand markup are not sent to the model.
-
-To change supplied artwork, replace the corresponding files under `servers/nextjs/public/smart-templates/eand/` without changing their filenames. If the layout changes too, update `servers/fastapi/utils/smart_brand_templates.py`. Generate a new deck afterwards; saved decks are not changed retroactively.
-
-## Database migrations
-
-Run this after pulling backend schema changes:
-
-```powershell
-cd servers\fastapi
-$env:APP_DATA_DIRECTORY = "app_data"
-.\.venv\Scripts\python.exe -m alembic upgrade head
-```
-
-The e& workflow stores `smart_template` on a presentation. If the API reports that this column does not exist, the migration was run against a different database directory. Run the command above from this clone and restart FastAPI.
-
-## Docker
-
-```powershell
-docker compose up --build development
-```
-
-Set LLM variables such as `OPENAI_API_KEY` and `OPENAI_MODEL` before starting Docker. The development service uses port 5001 by default and persists state under `app_data/`.
+| Variable | Purpose |
+| --- | --- |
+| `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_MODEL` | The only LLM provider. `LLM` may be unset or `azure`. |
+| `DISABLE_IMAGE_GENERATION` | `true` uses placeholders; otherwise `IMAGE_PROVIDER` and its key are required. |
+| `STUDIO_SERVICE_API_KEY` | Key the Workspace backend authenticates with (its `PRESENTATION_STUDIO_API_KEY`). |
+| `WORKSPACE_JWT_SECRET` | Verifies Workspace users' JWTs. Required unless `DISABLE_AUTH=true` (local dev only). |
+| `NEXT_PUBLIC_URL` | Workspace UI origin; export renders its `/pdf-maker` page. |
+| `APP_DATA_DIRECTORY`, `DATABASE_URL`, `MIGRATE_DATABASE_ON_STARTUP` | Storage and migrations. |
 
 ## Tests
 
-```powershell
-# Focused e& and Smart Mode backend tests
-cd servers\fastapi
-.\.venv\Scripts\python.exe -m pytest tests/unit/test_smart_brand_templates.py tests/unit/test_smart_presentation_generation.py
-
-# Frontend linting
-cd ..\nextjs
-npm run lint
-
-# Repository-level template converter tests (from repository root)
-npm test
+```bash
+cd servers/fastapi && uv run --locked python -m pytest -q
 ```
+
+`tests/unit/test_route_contract.py` pins the exact routes the Workspace uses. `./test-local.sh` runs the
+same checks as CI.
+
+## Database migrations
+
+Alembic, run on startup when `MIGRATE_DATABASE_ON_STARTUP=true`, or by hand:
+
+```bash
+cd servers/fastapi && APP_DATA_DIRECTORY=app_data uv run alembic upgrade head
+```
+
+## Docker
+
+```bash
+docker build -t presentation-studio .
+docker run -p 8000:8000 --env-file servers/fastapi/.env -e NEXT_PUBLIC_URL=https://<workspace-host> presentation-studio
+```
+
+## The e& template
+
+`smart_template: "eand"` makes the backend reserve the fixed title and thank-you positions, give the model
+a content safe-area contract, and apply the fixed footer after the generated HTML is validated. The fixed
+brand markup is never sent to the model. Layout lives in `servers/fastapi/utils/smart_brand_templates.py`;
+the artwork is served by the Workspace UI (`public/smart-templates/eand/`).
 
 ## Troubleshooting
 
 | Problem | Check |
 | --- | --- |
-| Generation cannot start | FastAPI must be running at `127.0.0.1:8000`. |
-| `smart_template` database-column error | Run the migration with `APP_DATA_DIRECTORY=app_data`, then restart FastAPI. |
-| An old deck has no e& title/footer/closing slide | Generate a new deck; brand slides are applied during generation. |
-| e& artwork does not load | Verify `servers/nextjs/public/smart-templates/eand/` and restart Next.js after asset changes. |
-| Model/API error | Check the API key and model values in `servers/fastapi/.env`. |
-| `/api/user-config` returns `403` | Set the same `CAN_CHANGE_KEYS` value in `servers/nextjs/.env.local` and `servers/fastapi/.env`, then restart both services. A `403` is expected when the value is `false`. |
-| `LiteParse runner not found` when uploading a PDF | Run `npm install --omit=dev --ignore-scripts` from the repository root, confirm `resources/document-extraction/liteparse_runner.mjs` exists, then restart FastAPI. |
-| `presentation-export runtime is not available` or PPTX export returns `500` | From the repository root, run `node scripts\\sync-presentation-export.cjs`; then verify the Windows converter configured by `BUILT_PYTHON_MODULE_PATH` exists. |
-| Editing or regenerating a slide reports `socket hang up` | The failure is in FastAPI's LLM-backed `/api/v1/ppt/slide/edit-html` request. Check the FastAPI terminal traceback, then verify its provider endpoint, deployment/model name, and API credential. |
+| Startup fails with an Azure OpenAI error | Azure variables in `servers/fastapi/.env`. |
+| Workspace calls return `401` | `WORKSPACE_JWT_SECRET` must equal the Workspace's effective JWT secret. |
+| Chat hand-off returns `401`/`403` | `STUDIO_SERVICE_API_KEY` must equal the Workspace's `PRESENTATION_STUDIO_API_KEY`. |
+| `LiteParse runner not found` on upload | Run `npm install --omit=dev --ignore-scripts` from the repo root. |
+| Export returns `500` / runtime missing | Run `npm run sync:presentation-export`; check `BUILT_PYTHON_MODULE_PATH` and that `NEXT_PUBLIC_URL` reaches the Workspace UI. |
 
 ## License
 
-See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Based on Presenton. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

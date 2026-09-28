@@ -1,405 +1,168 @@
 # AI Presentation Studio — Architecture Reference
 
-Distilled from the live codebase (`studio-dev`, worktree of `AI-Presentation-Studio`, branch
-`feature/workspace-identity`), `SDD-AI-Presentation-Studio_v1.0.md`, and `STUDIO_IN_WORKSPACE_STATUS.md`.
-Written as the standalone architecture reference — read this first. `CLAUDE.md` is a short, current
-working-notes file (business context, durable lessons, genuinely open items) kept separately; it no
-longer carries a chronological session log — full historical detail for any resolved item is in git
-history (`git log -- CLAUDE.md`), not duplicated here or there.
+The standalone architecture reference for this repo — read this first. `CLAUDE.md` is the short
+working-notes file (business context, durable lessons, open items). Full history for anything removed or
+resolved is in git (`git log -- docs/ARCHITECTURE.md CLAUDE.md`).
 
 ## 1. What this project is
 
-An internal e& (Etisalat) fork of **Presenton**, an open-source AI presentation generator
-(`package.json` name is still `presenton`). It replaces employees generating decks with
-whatever external consumer AI tool they personally prefer, which leaked internal content (strategy
-docs, financials, customer data) to third parties with no audit trail. Hard constraint: **all LLM
-inference stays inside an e&-contracted Azure OpenAI tenant** — no consumer/hosted API may see user
-content. Success is measured on accuracy (faithful to source material), security (content stays
-in-tenant, access is attributable), and cost — none of which is currently instrumented in production
-(no eval harness, no audit log, no token/cost accounting).
+The presentation-generation **backend behind the "Presentation Studio" feature of GenAI-Workspace**.
+It started as an internal e& (Etisalat) fork of **Presenton**, an open-source AI presentation generator.
+It replaces employees generating decks with whatever consumer AI tool they prefer, which leaked internal
+content with no audit trail. Hard constraint: **all LLM inference stays inside an e&-contracted Azure
+OpenAI tenant.** Success is measured on accuracy, security and cost (none instrumented in production yet).
 
-**This repo is no longer a standalone product — it is the generation engine behind a feature inside
-GenAI-Workspace, and that is the intended end state, not a temporary migration step.** End users reach
-Studio's generation, outline, and slide-editing screens through Workspace's own shell/theme/login, at
-`/app/studio/*` in the `GenAI-Workspace-UI` repo — not by visiting this repo's `servers/nextjs` app
-directly. What stays in *this* repo going forward: the FastAPI backend (`servers/fastapi`, the real API
-surface Workspace calls into), and `servers/nextjs` as the source-of-truth dev/build surface for the
-render/export code Workspace's own copy is kept in sync with, plus the handful of screens deliberately
-never ported (`/theme`, `/community`, `/settings`, `/admin`, Custom Template Studio, `/upload` — see
-§8). Studio's own Next.js frontend is not the product surface anymore; new work on the end-user
-generation/outline/editor screens belongs in `GenAI-Workspace-UI`, porting back into this repo's
-`servers/nextjs` only where it's shared render/export code (§8's sync mechanism).
+End users never talk to this repo directly. Every Studio screen (new deck, outline review, editor, chat,
+export, dashboard) lives in the Workspace UI (`GenAI-Workspace-UI`, `src/features/studio`, served at
+`/app/studio/*`), which calls this FastAPI server. The Workspace backend (orchestrator) also calls it to
+create a deck from a Workspace chat.
 
-On top of the inherited Presenton base, the team layers e&-specific work: a branded **"e& Smart
-Mode"** generation template plus the Workspace integration described in §8.
+**September 2026 cleanup.** Everything outside that flow was deleted: the standalone Next.js UI
+(`servers/nextjs`), the Docker/nginx/`start.js` single-container stack, the TemplateV2 "standard" deck
+pipeline and bundled templates, Studio's local login/API tokens/user management, every LLM provider
+except Azure OpenAI, runtime key switching (`userConfig.json`, provider settings), Presenton Cloud,
+Codex OAuth, Ollama, themes, fonts, community decks, webhooks, the MCP server, stock image search, and
+the dead database tables (Alembic `d5f7b9c1e3a4`). `tests/unit/test_route_contract.py` now pins the exact
+route list below; the Workspace UI's matching TemplateV2 editor was removed in the same pass.
 
-## 2. Tech stack & repo layout
+## 2. Layout
 
 ```
-AI-Presentation-Studio/
-├── servers/
-│   ├── nextjs/        Next.js 16 + React 19 frontend        (port 3000)
-│   └── fastapi/        FastAPI backend + SQLite/Postgres DB   (port 8000)
-├── presentation-export/  Gitignored, downloaded prebuilt Node/Puppeteer bundle — PPTX/PDF renderer
-├── templates/            Bundled legacy TemplateV2 layout JSON (seeded into DB on startup, see §3)
-├── resources/             LiteParse document-extraction runner
-├── docker-compose.yml     production / production-gpu / development / development-gpu services
-├── nginx.conf             Reverse proxy config used inside the Docker image
-├── SDD-AI-Presentation-Studio_v1.0.md   Full solution design audit (architecture, data model, risk register)
-└── CLAUDE.md               Short working-notes file — business context, durable lessons, open items
+studio-dev/ (worktree of AI-Presentation-Studio, branch feature/workspace-identity -> Dev-Backend)
+├── servers/fastapi/        FastAPI backend + SQLite/Postgres (the whole product)
+│   └── .env                Committed backend config: Azure OpenAI, image settings, service key
+├── presentation-export/    Gitignored prebuilt Node/Puppeteer bundle + PPTX converter (see §6)
+├── resources/document-extraction/   LiteParse runner (Node) used to read uploaded documents
+├── scripts/sync-presentation-export.cjs   Downloads/patches the export bundle
+├── package.json            Node deps the backend shells out to (LiteParse, sharp)
+└── Dockerfile              FastAPI-only image (Python + Node + Chromium)
 ```
 
-Two servers only; the browser talks to both through one Next.js "Proxy" (`servers/nextjs/proxy.ts`,
-Next 16's rename of middleware):
-
-```
-Browser
-  │
-  ▼
-Next.js (servers/nextjs, :3000)
-  │  proxy.ts rewrites /api/v1/* and /api/v2/* → FastAPI (NextResponse.rewrite)
-  │  SSE stream paths instead hit dedicated Route Handlers that pipe the FastAPI
-  │  response through untouched (rewrite() buffers streams, breaking real-time SSE)
-  ▼
-FastAPI (servers/fastapi, :8000)
-  │  SQLite (dev) / Postgres or MySQL (via DATABASE_URL, prod-capable, untested in this fork's own deployments)
-  ▼
-presentation-export/ (Puppeteer bundle, spawned as a subprocess, renders /pdf-maker headlessly)
-```
-
-In Docker, **nginx runs inside the container** (`start.js` + `nginx.conf`) and reverse-proxies the
-host-facing port to Next.js (:3000) and FastAPI (:8000); it also handles `/api/v1/auth/verify`-based
-image auth (`auth_request`) for `/app_data/images|uploads/...`.
+Locally, `run_studio.sh` (GenAI-Workspace root) starts FastAPI on :8011; the Workspace runs on :3000 and
+proxies browser calls to it (`GenAI-Workspace-UI/src/lib/studio-proxy.ts`). In the container the app
+listens on :8000 (`CMD python server.py --host 0.0.0.0 --port 8000`).
 
 ## 3. Content model — Smart HTML
 
-The real, live content path is **Smart HTML**: the LLM outputs a raw Tailwind `<section>` fragment
-per slide directly, rendered via `SmartHtmlSlide.tsx` — an iframe + browser-side Tailwind JIT runtime
-(`lib/tailwind-browser.ts`). For reasoning models, generation is typically one LLM call that "thinks"
-silently, then emits all slides in a fast burst (`_stream_smart_presentation`, `?type=smart`). The e&
-brand template (`smart_brand_templates.py`) is hardcoded literal HTML spliced around LLM-generated
-content. Editing happens via the in-editor AI chat rewriting raw HTML (the feature exists but its
-toggle button is commented out in `PresentationHeader.tsx`, so it's currently undiscoverable) or via
-`POST /api/v1/ppt/slide/edit-html`, a prompt-driven single-slide regeneration used by the slide action
-bar's "Regenerate Slide" button and the AI chat's tool-calling edits.
+Every deck is a **Smart** deck: the LLM writes each slide as a Tailwind `<section>` HTML fragment
+(`slides.html_content`). Generation is `_stream_smart_presentation` in `api/v1/ppt/endpoints/presentation.py`
+calling `utils/llm_calls/generate_smart_presentation.py`: one streamed call for up to 20 slides,
+parallel 10-slide chunks for longer outline-driven decks, per-slide repair for slides that fail the
+render-based layout check (`utils/smart_slide_layout.py`, rendered in headless Chromium through
+`presentation-export`). The e& brand template (`utils/smart_brand_templates.py`) splices a fixed cover and
+thank-you slide around the generated content.
 
-The codebase also carries a second, older structured slide model ("TemplateV2" — JSON content + a
-schema-constrained UI element tree, a Konva canvas editor) inherited from upstream Presenton. It's
-real, working code, but essentially unused in the live e&-configured app: the dashboard's main
-generation entry (`/generation`) never invokes it, and it's reachable only through the secondary
-`/upload` page's mode toggle. Not covered further here — treat it as legacy surface area, not part of
-the product's real generation path.
+A `generation_mode="standard"` presentation row is the **outline draft**: `/generation` creates it, the
+outline is generated and reviewed on it, then "Generate Standard" (Smart, no e& template) or "Generate
+e& deck" creates a new Smart presentation from the approved outline (`source_presentation_id` links the
+two for feedback). Legacy TemplateV2 decks still in a database are left untouched but are no longer
+listed or opened.
 
 ## 4. Backend — FastAPI (`servers/fastapi`)
 
-### 4.1 Bootstrap
+### 4.1 Startup
 
-`api/main.py`: loads `.env` (`load_dotenv(..., override=False)` — an already-set OS/Docker env var
-always wins over the file), initializes Sentry if configured, mounts all routers, then mounts
-`/app_data` (user files) and `/static` (fonts/vendor JS/CSS) as `StaticFiles`. `api/lifespan.py` runs
-Alembic-adjacent startup checks (LLM provider configured, image provider configured unless disabled,
-bootstrap-admin check).
+`api/main.py` loads `servers/fastapi/.env` (`override=False`: real env vars win), mounts the routers,
+`/app_data` (user files) and `/static` (icons, vendor JS). `api/lifespan.py` runs Alembic when
+`MIGRATE_DATABASE_ON_STARTUP=true`, creates missing tables, and fails fast if Azure OpenAI or (unless
+`DISABLE_IMAGE_GENERATION`) the image provider is not configured. LLM calls go through `llmai` with an
+`AzureOpenAIClientConfig` (Responses API) from `utils/llm_config.py`; any `LLM` value other than `azure`
+is rejected.
 
-### 4.2 Router map
+### 4.2 Routes (the complete list — enforced by `test_route_contract.py`)
 
-All PPT-domain routers are mounted under `/api/v1/ppt` via `api/v1/ppt/router.py`; auth, admin,
-webhook, mock, and async-task routers are top-level.
-
-| Prefix | Router file | Purpose |
-|---|---|---|
-| `/api/v1/auth` | `api/v1/auth/router.py` | Session status, login/logout/setup, LDAP-adjacent identity, nginx `auth_request` target |
-| `/api/v1/admin` | `api/v1/admin/router.py` | Provider settings, user management, feedback export |
-| `/api/v1/webhook` | `api/v1/webhook/router.py` | Webhook subscribe/unsubscribe |
-| `/api/v1/mock` | `api/v1/mock/router.py` | Test/mock endpoints |
-| `/api/v1/async-tasks` (approx.) | `api/v1/async_tasks/router.py` | Generic async task polling (genuinely used by template creation) |
-| `/api/v1/ppt/files` | `files.py` | Upload/decompose/update source documents |
-| `/api/v1/ppt/fonts` | `fonts.py` | Custom font upload/list/delete |
-| `/api/v1/ppt/outlines` | `outlines.py` | Outline CRUD + SSE outline generation |
-| `/api/v1/ppt/slide` | `slide.py` | Single-slide edit (`/edit-html` for Smart HTML; `/edit` for the legacy TemplateV2 path) |
-| `/api/v1/ppt/images` | `images.py` | Search/generate/upload/list/delete images |
-| `/api/v1/ppt/icons` | `icons.py` | Icon search |
-| `/api/v1/ppt/ollama`, `/openai`, `/anthropic`, `/google` | provider-availability probes for local/cloud LLM providers |
-| `/api/v1/ppt/codex/auth` | `codex_auth.py` | OAuth device-code flow for a Codex-branded provider |
-| `/api/v1/ppt/presentation` | `presentation.py` | **Core**: create/prepare/stream/edit/derive/export/list/delete presentations |
-| `/api/v1/ppt/presentation/export` | `chart_capture.py`, `table_capture.py` | Native-chart/table capture + PPTX upgrade endpoints |
-| `/api/v1/ppt/themes`, `/theme` | `theme.py`, `theme_generate.py` | Saved themes CRUD, AI theme generation |
-| `/api/v1/ppt/chat` | `chat.py` | AI chat sidebar — history, message, SSE message stream |
-| `/api/v1/ppt/template` | `template.py` | Custom Template Studio (create/edit/list/delete templates from an uploaded PPTX) |
-| `/api/v1/ppt/community/presentations` | `community.py` | Community/shared deck browsing |
-| `/api/v1/ppt/feedback` | `feedback.py` | Thumbs up/down generation feedback (outline + deck stage) |
-
-### 4.3 Key endpoints (not exhaustive — see routers above for the full surface)
-
-| Method | Path | Notes |
-|---|---|---|
-| `POST` | `/api/v1/ppt/presentation/create` | Creates a presentation row; entry point for both generation modes |
-| `POST` | `/api/v1/ppt/presentation/prepare` | Prepares generation (template selection, slide count resolution) |
-| `GET` | `/api/v1/ppt/presentation/stream/{id}` | **SSE.** Streams slide-burst (Smart, the live path) or slide-by-slide (legacy TemplateV2) generation. `?type=standard|smart` |
-| `GET` | `/api/v1/ppt/outlines/stream/{id}` | **SSE.** Streams outline generation; also runs `detect_explicit_slide_count()` (see §9.1 for a fixed idempotency bug here) |
-| `PUT` | `/api/v1/ppt/outlines/{id}` | Update outline |
-| `POST` | `/api/v1/ppt/outlines/{id}/quality-flags/acknowledge` | Acknowledge a document-extraction quality flag before generating |
-| `PATCH` | `/api/v1/ppt/presentation/update` | Update presentation metadata |
-| `PATCH` | `/api/v1/ppt/presentation/slide_update` | Update a single slide record |
-| `PATCH` | `/api/v1/ppt/presentation/{id}/favorite` | Star/unstar (Workspace dashboard feature) |
-| `POST` | `/api/v1/ppt/presentation/edit` | Generate-and-export in one request (also used for re-export after edits) |
-| `POST` | `/api/v1/ppt/presentation/derive` | Derive a new deck from an existing one |
-| `POST` | `/api/v1/ppt/presentation/{id}/export` | Export by id |
-| `POST` | `/api/v1/ppt/slide/edit-html` | Single-slide prompt-driven regeneration (Smart HTML) |
-| `POST` | `/api/v1/ppt/presentation/export/chart-capture`, `/upgrade-charts` | Native PPTX chart pipeline (see §6) |
-| `POST` | `/api/v1/ppt/presentation/export/table-capture`, `/upgrade-tables` | Native PPTX table pipeline (see §6) |
-| `POST` | `/api/v1/ppt/chat/message`, `/message/stream` | AI chat — single response / SSE |
-| `GET`/`PUT` | `/api/v1/ppt/feedback/{id}[/{stage}]` | Thumbs up/down; 409 on a stale generation id |
-| `GET` | `/api/v1/admin/feedback[?format=csv]` | Admin feedback export |
-| `GET` | `/api/v1/auth/status`, `/llm-status`, `/verify` | Session/LLM-config status; `/verify` is nginx's `auth_request` target |
-| `POST` | `/api/v1/auth/setup`, `/login`, `/logout` | Local auth flows |
-
-**Removed** (were confirmed dead, not wired to any frontend caller, and deleted in a repo-cleanup
-pass): `POST /presentation/generate`, `/generate/async`, `GET /status/{id}`, and their supporting
-`GeneratePresentationRequest` model. The live generation path is `prepare` + `stream/{id}`.
-
-**`/api/v2/ppt/presentation/*`** is not a second FastAPI router — it's proxied straight through to an
-external **Presenton Cloud** service by `services/presenton_cloud_proxy.py` (`generate-html/init`,
-`update`, `stream/`), reached only when the `presenton` OAuth/cloud LLM provider is selected.
-
-### 4.4 Auth model
-
-Session cookie (`presenton_session`) + `sk-presenton-*` API-key bearer tokens, one role bit
-(`is_superuser`). `DISABLE_AUTH=true` bypasses auth entirely and `/auth/status` hardcodes
-`username: "electron", role: "admin"` (a generic single-user bypass, not tied to the now-removed
-Electron app). A parallel **Workspace JWT** bridge (`api/v1/auth/workspace_jwt.py`, HS256, claims
-`sub`/`name`/`email`/`iat`/`exp`, no `iss`/`aud`) lets the GenAI-Workspace shell's own login token
-authenticate directly against Studio — users are matched on a new `user.external_subject`, never
-username, and Workspace users are never admins (see §8).
-
-### 4.5 Async jobs
-
-`AsyncTaskModel` is genuinely used for template creation (polled by the frontend). The equivalent
-wrapper for presentation generation was the now-removed `/generate/async` family above.
-
-## 5. Frontend — Next.js (`servers/nextjs`)
-
-Next.js 16.3.2 / React 19, App Router. `app/DashboardShell.tsx` wraps the authenticated app.
-
-### 5.1 Live, reachable routes
-
-| Route | Purpose |
+| Flow | Routes (`/api/v1/ppt` unless shown) |
 |---|---|
-| `/` | Dashboard (`DashboardPage`) — real app home |
-| `/generation` | **Primary** generation entry (linked from dashboard's "Create with AI"). Two buttons, both Smart mode under the hood — see §7 for the label mismatch |
-| `/upload` | **Secondary**, independent generation entry with a mode toggle that also exposes the legacy TemplateV2 path (see §3). Reachable from onboarding, the outline page's empty state, the community page, and the editor's error-recovery fallback — not dead despite not being on the main dashboard CTA |
-| `/outline` | Outline review/edit, mandatory step before slide generation from `/generation` |
-| `/presentation?id=` | Slide editor (Smart HTML iframe editor) |
-| `/custom-template`, `/template-preview` | Template Studio |
-| `/community`, `/theme`, `/settings` | Community browsing, theming, settings (incl. embedded `AdminPanel` tab) |
-| `/templates` | Reachable only programmatically after custom-template creation; its sidebar nav links are disabled no-ops |
-| `/admin` | No in-app links; reachable only by typing the URL (same `AdminPanel` also embeds in `/settings`) |
-| `(export)/pdf-maker` | Headless render target only — never linked, used exclusively by the export pipeline (Puppeteer navigates here) |
-| `/generate`, `/dashboard` | Legacy-URL redirect shims to `/generation` and `/` respectively |
+| New deck | `POST /files/upload`, `POST /files/decompose`, `POST /template/extract-color-palette`, `POST /presentation/create` |
+| Outline | `GET /outlines/stream/{id}` (SSE), `GET`/`PUT /outlines/{id}`, `POST /outlines/{id}/quality-flags/acknowledge` |
+| Deck + editor | `GET /presentation/stream/{id}` (SSE, Smart only), `GET /presentation/{id}`, `PATCH /presentation/update`, `PATCH /presentation/slide_update`, `POST /slide/edit-html`, `GET /icons/search` |
+| Dashboard | `GET /presentation/all` (Smart decks only), `DELETE /presentation/{id}`, `POST /presentation/{id}/duplicate`, `PATCH /presentation/{id}/favorite` |
+| Images | `POST /images/upload`, `GET /images/uploaded`, `GET /images/generated`, `GET /images/generate`, `DELETE /images/{id}` |
+| Chat | `GET /chat/conversations`, `GET /chat/history`, `DELETE /chat/conversation`, `POST /chat/message/stream` (SSE) |
+| Feedback | `GET /feedback/{id}`, `PUT /feedback/{id}/{stage}`, `GET /api/v1/admin/feedback[?format=csv]` |
+| Export | `POST /presentation/{id}/export`, `POST /presentation/export/chart-capture`, `POST /presentation/export/table-capture` |
 
-### 5.2 Removed dead/orphaned code (inherited from upstream Presenton)
+Chat: a "standard" (outline-draft) presentation gets outline-only tools and prompt
+(`services/chat/prompts.py`); a Smart deck gets the HTML-slide tools. The Workspace currently mounts the
+chat only on the outline page (see `CLAUDE.md` open items).
 
-`app/frontend/` (a whole alternate prototype dashboard, hardcoded `127.0.0.1:8000`, zero inbound
-links), `/documents-preview`, `components/DashboardNav.tsx`, and the Next.js API routes
-`api/github-stars`, `api/has-required-key`, `api/templates` (non-`v1`), `api/upload-image` were all
-confirmed dead (zero inbound references) and deleted in a repo-cleanup pass. If similarly
-name-plausible code is ever found under these paths again, it isn't a revert — check `git log` for
-context before assuming it's meant to come back.
+### 4.3 Auth (`api/middlewares.py`, `api/v1/auth/principal.py`)
 
-### 5.3 SSE handling
+Studio has no accounts of its own. A request is authenticated by one of:
 
-`proxy.ts`'s `NextResponse.rewrite()` silently buffers SSE responses. The three real stream paths
-(`/api/v1/ppt/presentation/stream/`, `/api/v2/ppt/presentation/stream/`,
-`/api/v1/ppt/outlines/stream/`) are excluded and instead hit dedicated Route Handlers
-(`app/api/v1/.../stream/[id]/route.ts`, via `lib/sse-proxy.ts`) that pipe the FastAPI response
-through untouched. Any new SSE endpoint needs the same treatment.
+- **Workspace JWT** (HS256, `WORKSPACE_JWT_SECRET`), as `Authorization: Bearer` or the `studio_token`
+  cookie the Workspace proxy mirrors for `<img>`/EventSource. Users map to `user.external_subject`
+  (created on first use) and are never admins; every query is owner-scoped (`services/database.py`).
+- **Service key** (`STUDIO_SERVICE_API_KEY`, constant-time compare) — the Workspace orchestrator's
+  `PRESENTATION_STUDIO_API_KEY`. With `X-On-Behalf-Of: <subject>` it acts as that user (deck creation
+  from chat). Without it, it may only call `/api/v1/admin/*` (the feedback export); anything else is 403.
 
-### 5.4 Export — two independent implementations, know which one ran
+`DISABLE_AUTH=true` (local dev only) skips auth; rows then have a null owner. The export renderer can
+only send a cookie, so a bearer caller's Workspace JWT is handed to it as `studio_token=<jwt>`.
+Chart/table capture sinks are unauthenticated by design (server-minted uuid4 tokens, `sendBeacon`).
 
-- **FastAPI-driven**: `services/export_task_service.py`, used by `/edit`, `/derive`, and the main
-  generate flow (`utils/export_utils.py::export_presentation()`).
-- **Editor-button-driven**: the interactive "Export PPTX"/"Export PDF" buttons
-  (`PresentationHeader.tsx`) go through a **completely separate** Next.js route
-  (`app/api/export-presentation/route.ts` → `lib/run-bundled-presentation-export.ts`), which spawns
-  the Puppeteer bundle directly from the Next.js process and never touches FastAPI.
+## 5. Where the UI lives
 
-Both point at the same headless `/pdf-maker` page and the same `presentation-export/` bundle, but a
-fix to one does nothing for the other unless applied to both.
+`GenAI-Workspace-UI/src/features/studio`. Its Smart slide renderers (`SmartHtmlSlide`,
+`SmartHtmlEditor`, the export page's `SmartHtmlPdfSlide`) inject sanitized HTML into the page and share
+one Tailwind browser runtime; arbitrary-value utilities are written inline on injection
+(`lib/smart-slide-arbitrary-styles.ts`). Previews used to be sandboxed iframes, which Chrome blocked from
+loading the runtimes from a local-network origin (unstyled slides while streaming, blank thumbnails).
+Those files used to be synced from this repo's Next.js app; that sync is retired and the Workspace copies
+are the originals now.
 
 ## 6. Export pipeline — PPTX/PDF, native charts & tables
 
-Neither server renders PPTX/PDF itself. Both shell out to `presentation-export/` — a gitignored,
-downloaded, **patched** (via `scripts/sync-presentation-export.cjs`'s `KNOWN_BUNDLE_PATCHES`) Node
-bundle built on Puppeteer, which navigates headlessly to `/pdf-maker` and converts the rendered page.
-A `threading.BoundedSemaphore` caps concurrent Chromium spawns per process
-(`EXPORT_TASK_MAX_CONCURRENCY`, default 3, FastAPI side; `EXPORT_BUNDLE_MAX_CONCURRENCY`, default 2,
-Next.js side — independent budgets, combined ceiling is their sum).
+`POST /presentation/{id}/export` → `utils/export_utils.py::export_presentation()` →
+`services/export_task_service.py` runs `node presentation-export/index.cjs <task.json>`. That bundle
+(Puppeteer inside; gitignored, downloaded and patched by `scripts/sync-presentation-export.cjs`) opens the
+**Workspace UI's** `/pdf-maker` page (`NEXT_PUBLIC_URL` must be the Workspace origin) in headless Chromium
+and prints it (PDF) or hands it to the closed-source converter `presentation-export/py/convert-*`
+(`BUILT_PYTHON_MODULE_PATH`) for PPTX. A semaphore caps Chromium spawns (`EXPORT_TASK_MAX_CONCURRENCY`,
+default 3).
 
-**Native chart export** (`services/pptx_native_chart_service.py`): a post-export pass swaps flattened
-chart images for real, editable PPTX chart objects, driven by chart data captured live from the
-resolved Chart.js instance on the export page (`lib/chart-export-capture.ts`, via
-`navigator.sendBeacon` — a plain `fetch()` from inside `/pdf-maker` hangs Puppeteer's
-`networkidle0` wait). Covers bar/horizontal-bar/stacked-bar/horizontal-stacked-bar/line/area/pie/
-donut/radar; scatter/polar-area/bubble intentionally stay flattened images (no faithful PPTX
-equivalent). Per-series colors, data labels, font, and axis order all carry through.
+**Native charts and tables** (`services/pptx_native_chart_service.py`, `pptx_native_table_service.py`):
+the export page captures live Chart.js and table data via `navigator.sendBeacon` to
+`/export/chart-capture` and `/export/table-capture`; a post-pass swaps the flattened images for real,
+editable PPTX objects. Scatter/polar-area/bubble charts stay images.
 
-**Native table export** (`services/pptx_native_table_service.py`): the same capture/match/swap
-pattern, independent token/store/endpoint pipeline from the chart one
-(`table_capture_store.py`, `/export/table-capture` + `/export/upgrade-tables`). No custom per-cell
-border color in v1 initially (python-pptx has no API for it) — since extended to bottom-border-only
-via hand-authored OOXML, after explicit user sign-off given the corruption risk (see below).
+**Standing lesson**: python-pptx does no OOXML schema validation, and Microsoft's documentation has been
+wrong for this format here before. Real "PowerPoint needs to repair this file" bugs were only ever
+caught by opening the exported file in real PowerPoint — do that before shipping any OOXML change.
 
-**Standing lesson baked into this codebase, worth repeating**: python-pptx performs essentially zero
-schema validation on OOXML it's asked to emit — several real "file needs repair, PowerPoint deletes
-the whole slide" corruption bugs were found only by a human opening the real exported file in real
-PowerPoint (e.g. `<c:dLblPos val="outEnd">` being legal on a pie chart but not a doughnut). Neither
-python-pptx accepting a value nor Microsoft's own documentation has proven reliable for this file
-format in this codebase's own history — real-PowerPoint verification is the only check that has ever
-caught it.
+## 7. Generation entry points
 
-## 7. Generation entry points — the label mismatch to know about
+`/generation` (Workspace) has two buttons, both Smart: **"Generate Standard"** (no `smart_template`,
+optionally restyled with the palette of an attached reference `.pptx`) and **"Generate e& deck"**
+(`smart_template: "eand"`). Both create the outline draft and open the outline page; the deck is created
+from the approved outline. The e& template reserves a fixed cover + thank-you slide
+(`EAND_FIXED_SLIDE_COUNT = 2`, on top of the content slides) and keeps content in a safe area above a
+fixed footer; the fixed brand markup is never sent to the model. The Workspace chat hand-off
+(orchestrator `presentation_studio.py`) creates the outline draft the same way.
 
-The live `/generation` page's two buttons are **both Smart mode** under the hood, despite their
-labels: **"Generate Standard"** sends no `smart_template` (plain Smart HTML, no e& branding);
-**"Generate e& deck"** sends `smart_template: "eand"`. "Standard" here does not mean the legacy
-TemplateV2 path (see §3) — it's still Smart HTML, just without e& branding. Clicking either button
-routes to `/outline?id=...&autostart=true` for mandatory outline review before slide generation —
-there is no more direct-stream shortcut from this page.
+## 8. Deployment
 
-The e& template reserves a fixed cover + thank-you slide (`EAND_FIXED_SLIDE_COUNT = 2`, *added on top*
-of the requested content-slide count) and constrains the model to a content safe-area above a fixed
-footer; the fixed brand markup is never sent to the model. If a `.pptx` is attached among source
-files for an e& generation, its real shape-fill colors are extracted and used instead of the default
-red/dark-blue/white/black palette.
+`Dockerfile` builds a FastAPI-only image: a uv-installed venv, the export bundle with sharp, LiteParse,
+Chromium and Noto fonts, and warmed FastEmbed caches. Required env: Azure OpenAI (`AZURE_OPENAI_*`),
+`WORKSPACE_JWT_SECRET`, `STUDIO_SERVICE_API_KEY`, `NEXT_PUBLIC_URL` (Workspace UI origin for
+`/pdf-maker`), `APP_DATA_DIRECTORY`, and `DATABASE_URL` for Postgres/MySQL (SQLite otherwise; every
+deployment so far has been SQLite). CI (`.github/workflows/test-all.yml`) runs the FastAPI test suite
+and verifies the export runtime.
 
-## 8. Studio ⇄ GenAI-Workspace integration — the current architecture, not a side effort
+## 9. History worth knowing
 
-Studio's user-facing screens (trimmed dashboard, `/generation`, `/outline`, the presentation editor
-incl. chat + export) already run **inside** the GenAI-Workspace shell UI, using Workspace's own
-shell/theme/login, for every phase that matters day-to-day (0–6 below are done and pushed). This is
-not a parallel or optional effort layered on top of "the real app" — it **is** what this project is
-now: Studio's FastAPI (+ a small headless renderer) is the backend, reached behind a same-origin
-proxy; GenAI-Workspace is the front door end users actually see. `/theme`, `/community`, `/settings`,
-`/admin`, templates, and `/upload` are explicitly **not** ported (out-of-scope for the integration,
-distinct from being dead in Studio itself) — they're the only reason to still run Studio's own
-Next.js frontend as a product surface at all, and only for whoever specifically needs those screens.
-
-| Phase | State |
-|---|---|
-| 0 Spikes | Mostly done; a couple items (real PPTX/PDF export live-check, Netskope-host check) deferred/skipped as unneeded |
-| 1 Studio backend (Workspace-JWT auth bridge) | **Done, tested** (1,242+ backend tests pass, live smoke passed), pushed to `Dev-Backend` |
-| 2 Workspace → Next 16 | **Done**, pushed to `Dev-A` |
-| 3 Headless renderer + shared slide-render code | **Done**, pushed to `Dev-Backend`. `STUDIO_RENDER_ONLY=true` flag (off by default) makes Studio's own Next app 404 everything except the renderer |
-| 4 Port screens into Workspace | **Done, pushed to `Dev-A`.** `/app/studio/*` routes, `src/app/api/studio/[...path]` proxy, asset-URL rewriting for `/app_data/...`. Superseded in part by the item below: the proxy no longer routes through Studio's own Next.js server at all |
-| 5 Trimmed dashboard | **Done, pushed to `Dev-A`.** All/Favorites tabs, sort, grid/list; Studio's sidebar/folders/trash/credits UI removed |
-| 6 Sidebar/chat handoff + orchestrator `X-On-Behalf-Of` | **Done, pushed** (`Dev-A` + the orchestrator repo's `Dev-A`) |
-| 7 Deployment/cutover | Was deferred; not independently re-verified as done — no `STUDIO_RENDER_ONLY` set anywhere in either repo, and neither `Dev-Backend` nor `Dev-A` is merged into its repo's main line yet |
-
-**Phases 0–6 are complete and pushed** (verified via `git rev-list`: `feature/workspace-identity` is
-0 commits ahead/behind `origin/Dev-Backend`; `Dev-A` is fully in sync with `origin/Dev-A`). A further,
-real, committed-and-pushed change beyond what Phase 4 originally described: **API calls and
-render/export now bypass Studio's own Next.js server entirely.** Workspace UI's
-`src/lib/studio-proxy.ts` calls Studio's FastAPI directly rather than through Studio's Next.js
-`proxy.ts` middleware (that middleware's `NextResponse.rewrite()` buffering was dropping long-running
-requests — a live PPTX export died with `ECONNRESET` through that layer while completing successfully
-on FastAPI's own side). Workspace UI also now hosts its own synced `/pdf-maker` route, and FastAPI's
-export pipeline (`export_utils.py`, via `NEXT_PUBLIC_URL`) targets that instead of Studio's own
-`/pdf-maker`. Net effect: **Studio's Next.js server is not required by the integrated flow at all
-today** — its functional role has shrunk to being the source of truth for the render/export code
-Workspace's copy is synced from, plus hosting the screens deliberately never ported (`/theme`,
-`/community`, `/settings`, `/admin`, Custom Template Studio, `/upload`). See
-`STUDIO_IN_WORKSPACE_STATUS.md`'s "Studio's own Next.js bypassed" section for the full detail.
-
-Standing decisions: the headless renderer stays in Studio; Studio trusts the Workspace JWT; decks are
-owned via the user's Workspace JWT; unattributed dev decks may be deleted; no PRs opened without the
-user asking. See `STUDIO_IN_WORKSPACE_STATUS.md` (GenAI-Workspace root) for the authoritative,
-continuously-updated status of this migration — this document covers Studio's own architecture, not
-the migration's day-to-day state.
-
-### Slide-render sync
-
-The editor (in Workspace) and the exporter (Studio's `/pdf-maker`, which the PPTX/PDF export
-screenshots) must draw slides identically, or an export won't match what the user saw. So Studio holds
-the one master copy of the slide-drawing code (the import closure of `app/(export)/pdf-maker/page.tsx`),
-and `scripts/slide-render/slide-render.mjs sync <workspace>/src/features/studio` copies it into
-Workspace. The rule is: edit in Studio, then sync. A lock file of hashes lets `check` (Studio) and
-`npm run verify:studio-render` (Workspace) catch drift.
-
-Two safeguards keep a sync from undoing Workspace-side fixes:
-
-- **`WORKSPACE_OWNED`** in `slide-render.mjs` lists shared files Workspace deliberately keeps its own
-  version of. They are not copied or deleted by `sync`, and Workspace's verifier only checks they exist.
-  Their Studio hashes stay in the lock, so `check` still reports a Studio-side change to one of them,
-  which must then be ported into Workspace's copy by hand. Current entries:
-  - `lib/smart-html-assets.ts`: Workspace serves the e& template artwork (`/smart-templates/...`) from
-    its own `public/` folder with its basePath; Studio fetches it from the backend.
-  - `components/runtime/TailwindBrowserRuntime.tsx`: Workspace defers loading the Tailwind browser
-    runtime until a slide editor needs it, because its `@property --tw-translate-*` registrations clash
-    with Workspace's own Tailwind build and break `translate` utilities app-wide.
-- **Edit protection.** `sync` refuses to run, before writing anything, if any copy it would overwrite or
-  delete was changed in Workspace since the last sync, and lists those files.
-
-**Future option (not built): remove the Workspace-owned exceptions.** Make Studio's copies of both files
-handle both hosts, for example an asset-base setting for where `/smart-templates/` lives, and a "defer
-runtime load" setting that Studio leaves off and Workspace turns on, each supplied by the host app like
-the existing host-owned modules. Then the two files become ordinary synced files again, `WORKSPACE_OWNED`
-can be emptied, and Studio-side changes to them reach Workspace automatically instead of by hand. Worth
-doing if either file starts changing often in Studio; it touches Studio's own editor and exporter, so it
-needs a Studio render/export check as well as a Workspace one.
-
-## 9. Current status summary
-
-### 9.1 Backend
-
-Extensively hardened across many sessions (full forensic detail per item is in git history —
-`git log -- CLAUDE.md` — this is a summary, not a substitute). Representative fixed-bug classes:
-- Silent env-precedence bugs in Docker (`KEY=${KEY:-}` making "unset" a real empty string, breaking
-  `LLM`/`AZURE_OPENAI_*`, `CAN_CHANGE_KEYS`, `DISABLE_IMAGE_GENERATION` in `docker compose` dev runs).
-- An outline-flag idempotency bug (`has_explicit_slide_structure` flipping to `false` on any repeat
-  stream call for the same presentation) — fixed by persisting the flag on its own column with a
-  data-driven backfill migration for pre-existing rows.
-- A held-open DB session across a multi-minute Smart-generation SSE stream (real connection-pool
-  exhaustion risk on Postgres/MySQL, latent since this fork has only ever run on SQLite in practice).
-- No concurrency cap on headless Chromium spawns, across two independent export code paths — fixed
-  with per-process semaphores.
-- Multiple real PPTX-corruption bugs in the native chart/table export pipeline (schema-illegal OOXML
-  values accepted silently by python-pptx, only caught by opening the file in real PowerPoint).
-- Several Smart-mode HTML overflow classes (vertical canvas overflow, horizontal/table overflow, a
-  CSS Grid/Flexbox min-width squeeze bug, a global unscoped `<table>` CSS rule leaking into
-  LLM-generated tables) — mostly fixed with real-render pixel checks plus deterministic inline-style
-  guards, not heuristics alone.
-
-Known **open** items (not fixed, tracked in `CLAUDE.md`): Smart-mode charts can render blank in the
-live editor during a fast multi-slide streaming burst (self-healing, root cause identified — no
-viewport culling on Smart-mode iframes); exported pie/donut legends can show blank squares for
-hollow/border-only swatch categories (suspected permanent closed-source-converter limitation);
-`/generation`'s "Generate Standard" button label is misleading — it's still Smart HTML, not the
-legacy TemplateV2 path (label-only issue); several past fixes still lack automated test coverage (SSE route handlers,
-`presentation_layout_resolver.py`, `pptx_color_extraction.py`).
-
-### 9.2 Frontend
-
-Functionally stable on the live route set (§5.1); a large amount of well-built upstream Presenton
-code is present but unreachable from the live e&-configured app (§5.2) — always grep for a route's
-literal path string before trusting a `page.tsx` found by name search. One app-wide 500 (a dangling
-import from an accidental file deletion in an earlier commit) was found and fixed by restoring the
-deleted component verbatim.
-
-### 9.3 Deployment
-
-`docker-compose.yml` defines `production`, `production-gpu`, `development`, `development-gpu`
-services, each building from `Dockerfile`/`Dockerfile.dev`. Default dev port is 5001
-(`docker compose up --build development`); native (non-Docker) dev runs Next.js on :3000 and FastAPI
-on :8000 directly. State persists under `app_data/`. `DATABASE_URL` supports Postgres/MySQL for
-production; every deployment this fork has actually run has been SQLite.
+- An outline-flag idempotency bug (`has_explicit_slide_structure` flipping to `false` on a repeat
+  stream) was fixed by persisting the flag in its own column with a data-driven backfill —
+  `BUG_REPORT_has_explicit_slide_structure_idempotency.md`.
+- A DB session held open across a multi-minute Smart stream (pool exhaustion risk on Postgres) was fixed
+  by opening short-lived sessions per unit of work in `stream_presentation`.
+- Several Smart-mode overflow classes (canvas, table, Grid/Flexbox min-width squeeze) are guarded by
+  real-render pixel checks plus deterministic inline-style guards, not heuristics alone.
+- Multiple PPTX-corruption bugs in the native chart/table export were found only in real PowerPoint.
 
 ## 10. Where to go deeper
 
-- `CLAUDE.md` (repo root) — short working-notes file: business context, durable lessons, and genuinely
-  open items. For exact root-cause traces, commit/test counts, and resolved-item reasoning from past
-  sessions, use `git log -- CLAUDE.md` — that detail is no longer duplicated in the file itself.
-- `SDD-AI-Presentation-Studio_v1.0.md` — the original full solution-design audit: architecture, data
-  model, security posture, risk register.
-- `STUDIO_IN_WORKSPACE_STATUS.md` (GenAI-Workspace repo root) — live status of the Workspace
-  migration described in §8.
-- `BUG_REPORT_has_explicit_slide_structure_idempotency.md` — standalone write-up of the bug summarized
-  in §9.1.
+- `CLAUDE.md` — business context, durable lessons, open items.
+- `STUDIO_IN_WORKSPACE_STATUS.md` (GenAI-Workspace folder root) — history of the migration into the
+  Workspace, including the September 2026 cleanup.
+- `BUG_REPORT_has_explicit_slide_structure_idempotency.md` — the bug summarized in §9.
