@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FASTAPI_DIR = REPO_ROOT / "servers" / "fastapi"
-NEXT_DIR = REPO_ROOT / "servers" / "nextjs"
+ROOT_NODE_MODULES = REPO_ROOT / "node_modules"
 NOTICE_PATH = REPO_ROOT / "NOTICE"
 
 PY_LICENSE_CANDIDATES = [
@@ -306,7 +306,7 @@ def main():
         print("Warning: Python venv not found. Set NOTICE_PYTHON_VENV or create servers/fastapi/.venv", file=sys.stderr)
 
     # Node scan
-    node_modules_dir = Path(args.node_modules or os.environ.get("NOTICE_NODE_MODULES") or (NEXT_DIR / "node_modules"))
+    node_modules_dir = Path(args.node_modules or os.environ.get("NOTICE_NODE_MODULES") or ROOT_NODE_MODULES)
     if node_modules_dir.exists():
         node_entries = scan_node_modules(node_modules_dir)
     else:

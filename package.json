@@ -1,14 +1,10 @@
 {
-  "name": "presenton",
+  "name": "presentation-studio-backend",
   "version": "0.9.7-beta",
   "presentationExportVersion": "v0.4.8",
   "type": "module",
-  "description": "Open-source AI presentation generator",
+  "description": "Node runtime dependencies for the Presentation Studio backend (document parsing and PPTX/PDF export)",
   "scripts": {
-    "test": "npm run test:template-converter && node --test scripts/package-metadata.test.mjs",
-    "convert:template": "node scripts/convert-template.mjs",
-    "convert:presentation-template": "node scripts/convert-presentation-template.mjs",
-    "test:template-converter": "node --test scripts/convert-template.test.mjs scripts/convert-presentation-template.test.mjs",
     "sync:presentation-export": "node scripts/sync-presentation-export.cjs",
     "sync:presentation-export:force": "node scripts/sync-presentation-export.cjs --force",
     "check:presentation-export": "node scripts/sync-presentation-export.cjs --check-only"

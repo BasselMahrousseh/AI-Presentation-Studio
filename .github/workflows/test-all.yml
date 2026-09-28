@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   test-repository-tools:
-    name: Test repository tooling
+    name: Verify presentation export runtime
     runs-on: ubuntu-latest
 
     steps:
@@ -27,9 +27,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Run repository tests
-        run: npm test
 
       - name: Install presentation export runtime
         run: npm run sync:presentation-export
@@ -73,39 +70,3 @@ jobs:
 
       - name: Run all pytest tests
         run: uv run --locked python -m pytest --verbose --tb=short
-
-  test-nextjs:
-    name: Test Next.js
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: servers/nextjs
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: servers/nextjs/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run Node.js tests
-        run: npm test
-
-      - name: Run ESLint
-        run: npm run lint
-
-      - name: Build application
-        env:
-          NEXT_PUBLIC_FAST_API: http://localhost:8000
-          NEXT_PUBLIC_URL: http://localhost:3000
-        run: npm run build
-
-      - name: Run Cypress component tests
-        run: npx cypress run --component --browser electron

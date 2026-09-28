@@ -88,35 +88,6 @@ def test_export_node_env_recreates_puppeteer_directories(monkeypatch, tmp_path):
     assert puppeteer_cache.is_dir()
 
 
-def test_electron_export_requires_pinned_chromium(monkeypatch, tmp_path):
-    monkeypatch.setenv("APP_DATA_DIRECTORY", str(tmp_path / "app-data"))
-    monkeypatch.setenv("TEMP_DIRECTORY", str(tmp_path / "temp"))
-    monkeypatch.setenv("PRESENTON_ELECTRON", "true")
-    monkeypatch.delenv("PUPPETEER_EXECUTABLE_PATH", raising=False)
-
-    service = ExportTaskService(timeout_seconds=10)
-
-    try:
-        service._build_node_env()
-        assert False, "Expected the Electron Chromium guard to reject a missing browser"
-    except HTTPException as exc:
-        assert exc.status_code == 500
-        assert "Refusing to download" in exc.detail
-
-
-def test_electron_export_preserves_valid_pinned_chromium(monkeypatch, tmp_path):
-    chromium = tmp_path / "chrome.exe"
-    chromium.write_bytes(b"chrome")
-    monkeypatch.setenv("APP_DATA_DIRECTORY", str(tmp_path / "app-data"))
-    monkeypatch.setenv("TEMP_DIRECTORY", str(tmp_path / "temp"))
-    monkeypatch.setenv("PRESENTON_ELECTRON", "true")
-    monkeypatch.setenv("PUPPETEER_EXECUTABLE_PATH", str(chromium))
-
-    env = ExportTaskService(timeout_seconds=10)._build_node_env()
-
-    assert env["PUPPETEER_EXECUTABLE_PATH"] == str(chromium)
-
-
 def test_export_output_path_accepts_file_path_key(monkeypatch, tmp_path):
     monkeypatch.setenv("TEMP_DIRECTORY", str(tmp_path))
     output_path = tmp_path / "preview.png"

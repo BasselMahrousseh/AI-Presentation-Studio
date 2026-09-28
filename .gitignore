@@ -69,3 +69,6 @@ chrome/
 # Claude-vs-app benchmark artifacts (generated .pptx files, renders, logs) —
 # large binary output, not source. See benchmark/scenarios.json for the setup.
 benchmark/
+
+# local dev runtime data
+servers/fastapi/.runtime-smart/

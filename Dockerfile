@@ -29,21 +29,6 @@ ENV HF_HOME=/root/.cache/huggingface \
 RUN /opt/venv/bin/python scripts/warm_fastembed_cache.py
 
 
-FROM node:20-bookworm-slim AS nextjs-builder
-
-WORKDIR /app/servers/nextjs
-
-ENV NEXT_TELEMETRY_DISABLED=1
-
-COPY servers/nextjs/package.json servers/nextjs/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci
-
-COPY servers/nextjs /app/servers/nextjs
-RUN npm run build \
-    && rm -rf .next-build/cache
-
-
 FROM node:20-bookworm-slim AS assets-builder
 
 WORKDIR /app
@@ -81,7 +66,7 @@ ARG TARGETARCH
 ARG CHROMIUM_VERSION=149.0.7827.196-1~deb13u1
 ARG CHROMIUM_SNAPSHOT=20260625T180000Z
 
-# LiteParse uses Node + @llamaindex/liteparse (same runner as Electron); OCR uses Tesseract.
+# LiteParse uses Node + @llamaindex/liteparse; OCR uses Tesseract. Node also runs presentation-export.
 ENV APP_DATA_DIRECTORY=/app_data \
     TEMP_DIRECTORY=/tmp/presenton \
     EXPORT_PACKAGE_ROOT=/app/presentation-export \
@@ -92,13 +77,12 @@ ENV APP_DATA_DIRECTORY=/app_data \
     PRESENTON_FASTEMBED_ICON_CACHE_DIR=/root/.cache/presenton/fastembed-icons \
     PATH="/opt/venv/bin:${PATH}" \
     NODE_ENV=production \
-    START_OLLAMA=false \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 RUN set -eux; \
     printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99snapshot; \
     printf 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/%s trixie-security main\n' "$CHROMIUM_SNAPSHOT" > /etc/apt/sources.list.d/chromium-snapshot.list; \
-    packages="ca-certificates curl nginx fontconfig imagemagick zstd \
+    packages="ca-certificates curl fontconfig imagemagick zstd \
     fonts-liberation fonts-noto-core fonts-noto-extra fonts-noto-mono fonts-noto-ui-core fonts-noto-ui-extra \
     fonts-noto-cjk fonts-noto-cjk-extra fonts-noto-color-emoji xdg-utils \
     libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
@@ -123,15 +107,14 @@ RUN find /usr/share/fonts -type f ! -iname 'Noto*' -delete \
     && find /usr/share/fonts -type d -empty -delete \
     && fc-cache -fsv
 
-RUN mkdir -p /app/scripts /app/servers/fastapi /app/servers/nextjs
-RUN mkdir -p /app_data/exports /app_data/images /app_data/uploads /app_data/fonts /app_data/templates /app_data/pptx-to-html /app_data/pptx-to-json \
+RUN mkdir -p /app/scripts /app/servers/fastapi
+RUN mkdir -p /app_data/exports /app_data/images /app_data/uploads /app_data/fonts \
     && chmod -R a+rX /app_data
 
 COPY --from=fastapi-builder /opt/venv /opt/venv
 COPY --from=fastapi-builder /app/servers/fastapi /app/servers/fastapi
 COPY --from=fastapi-builder /root/.cache/huggingface /root/.cache/huggingface
 COPY --from=fastapi-builder /root/.cache/presenton/fastembed-icons /root/.cache/presenton/fastembed-icons
-COPY templates /app/templates
 
 COPY --from=assets-builder /app/package.json /app/package.json
 COPY --from=assets-builder /app/document-extraction-liteparse /app/document-extraction-liteparse
@@ -150,14 +133,10 @@ RUN set -eux; \
     chmod +x "/app/presentation-export/py/convert-linux-${export_arch}"; \
     ls -lah /app/presentation-export/py
 
-COPY --from=nextjs-builder /app/servers/nextjs/.next-build/standalone/ /app/servers/nextjs/
-COPY --from=nextjs-builder /app/servers/nextjs/public /app/servers/nextjs/public
-COPY --from=nextjs-builder /app/servers/nextjs/.next-build/static /app/servers/nextjs/.next-build/static
+COPY LICENSE NOTICE ./
 
-COPY start.js LICENSE NOTICE ./
-COPY scripts/presenton-terminal-banner.mjs /app/scripts/presenton-terminal-banner.mjs
-COPY scripts/user-config-env.cjs /app/scripts/user-config-env.cjs
-COPY nginx.conf /etc/nginx/nginx.conf
-
-EXPOSE 80
-CMD ["node", "/app/start.js"]
+# Studio is an API-only backend behind the GenAI Workspace. NEXT_PUBLIC_URL must be the Workspace UI
+# origin: the export pipeline opens its /pdf-maker page in headless Chromium to render PPTX/PDF.
+WORKDIR /app/servers/fastapi
+EXPOSE 8000
+CMD ["python", "server.py", "--host", "0.0.0.0", "--port", "8000"]

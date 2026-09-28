@@ -32,7 +32,6 @@ run_check() {
 test_repository_tools() {
     cd "$SCRIPT_DIR" &&
         npm ci &&
-        npm test &&
         npm run sync:presentation-export &&
         npm run check:presentation-export
 }
@@ -49,17 +48,6 @@ test_fastapi() {
         uv run --locked python -m pytest --verbose --tb=short
 }
 
-test_nextjs() {
-    cd "$SCRIPT_DIR/servers/nextjs" &&
-        npm ci &&
-        npm test &&
-        npm run lint &&
-        NEXT_PUBLIC_FAST_API=http://localhost:8000 \
-            NEXT_PUBLIC_URL=http://localhost:3000 \
-            npm run build &&
-        npx cypress run --component --browser electron
-}
-
 for command in uv npm node; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo -e "${RED}Required command not found: ${command}${NC}"
@@ -70,9 +58,8 @@ done
 echo "Running the GitHub Actions checks locally from $SCRIPT_DIR"
 echo
 
-run_check "Repository tooling tests" test_repository_tools
+run_check "Presentation export runtime" test_repository_tools
 run_check "FastAPI pytest suite" test_fastapi
-run_check "Next.js tests, lint, build, and component tests" test_nextjs
 
 if [[ "$FAILED_CHECKS" -eq 0 ]]; then
     echo -e "${GREEN}All GitHub Actions checks passed.${NC}"

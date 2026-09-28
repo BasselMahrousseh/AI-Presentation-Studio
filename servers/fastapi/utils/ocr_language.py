@@ -1,9 +1,6 @@
 """
-Map presentation UI language strings (LanguageType enum values from Next.js) to
+Map presentation UI language strings (the language names the Workspace UI sends) to
 Tesseract / LiteParse OCR language codes (ISO 639-3 where applicable).
-
-Keep keys in sync with:
-servers/nextjs/app/(presentation-generator)/upload/type.ts → LanguageType
 """
 
 from __future__ import annotations

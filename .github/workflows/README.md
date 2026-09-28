@@ -2,15 +2,13 @@
 
 ## Test All Applications (`test-all.yml`)
 
-The test workflow runs on pushes and pull requests to `main`, and can also be
-started manually. It enforces the checks that exist in the current repository:
+Runs on pushes and pull requests to `main`, and can be started manually:
 
-- repository tooling: template-converter tests and bundled export verification;
+- presentation export runtime: downloads and verifies the bundled PPTX/PDF export runtime;
 - FastAPI: every pytest test using the Python version and locked dependencies
-  declared in `servers/fastapi`;
-- Next.js: all Node.js unit tests, ESLint, a production build, and Cypress
-  component tests.
+  declared in `servers/fastapi`.
 
+Studio has no frontend of its own any more: its UI lives in the GenAI Workspace UI.
 No test step is allowed to fail silently.
 
 ## Run the CI checks locally
@@ -20,9 +18,6 @@ Install Node.js 20+, npm, Python 3.11, and `uv`, then run:
 ```bash
 ./test-local.sh
 ```
-
-The script installs locked dependencies and runs the same commands as the
-GitHub Actions workflow.
 
 ## Run one test group
 
@@ -40,24 +35,10 @@ DISABLE_IMAGE_GENERATION=true \
 uv run --locked python -m pytest --verbose --tb=short
 ```
 
-### Next.js
-
-```bash
-cd servers/nextjs
-npm ci
-npm test
-npm run lint
-NEXT_PUBLIC_FAST_API=http://localhost:8000 \
-NEXT_PUBLIC_URL=http://localhost:3000 \
-npm run build
-npx cypress run --component --browser electron
-```
-
-### Repository tooling
+### Presentation export runtime
 
 ```bash
 npm ci
-npm test
 npm run sync:presentation-export
 npm run check:presentation-export
 ```

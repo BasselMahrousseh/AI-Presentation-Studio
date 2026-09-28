@@ -3,8 +3,6 @@
 
 node_modules
 **/node_modules
-**/.next
-**/.next-build
 **/.venv
 **/.pytest_cache
 **/__pycache__
@@ -19,18 +17,9 @@ servers/fastapi/tests
 servers/fastapi/presenton_backend.egg-info
 servers/fastapi/.python-version
 servers/fastapi/placeholder
-servers/nextjs/cypress
-servers/nextjs/cypress.config.ts
-servers/nextjs/README.md
-servers/nextjs/tsconfig.tsbuildinfo
-**/*.cy.ts
-**/*.cy.tsx
 
 servers/fastapi/tmp
 servers/fastapi/debug
 servers/fastapi/.venv
-
-servers/nextjs/node_modules
-servers/nextjs/.next
 
 container.db

@@ -347,20 +347,9 @@ class ExportTaskService:
         os.makedirs(puppeteer_cache_directory, exist_ok=True)
         env["PUPPETEER_CACHE_DIR"] = puppeteer_cache_directory
 
-        if env.get("PRESENTON_ELECTRON", "").lower() == "true":
-            chromium_executable = (env.get("PUPPETEER_EXECUTABLE_PATH") or "").strip()
-            if not chromium_executable or not os.path.isfile(chromium_executable):
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        "The pinned Electron Chromium runtime is unavailable. "
-                        "Refusing to download or launch a different browser version."
-                    ),
-                )
 
         # The export runtime consumes app-data paths relative to the page it is
-        # rendering. Docker intentionally leaves NEXT_PUBLIC_FAST_API unset so
-        # nginx remains the public origin; Electron supplies its dynamic origin.
+        # rendering.
         env["ASSETS_BASE_URL"] = "/app_data"
         env["BUILT_PYTHON_MODULE_PATH"] = self.converter_path
 
