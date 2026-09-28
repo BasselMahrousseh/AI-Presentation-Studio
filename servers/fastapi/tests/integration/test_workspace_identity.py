@@ -1,4 +1,4 @@
-"""Workspace JWT identity, on-behalf-of trust, favourites and the owner backfill."""
+"""Workspace JWT identity, the service key and on-behalf-of, favourites and the owner backfill."""
 import asyncio
 import datetime as dt
 import importlib.util
@@ -17,15 +17,13 @@ from sqlmodel import SQLModel
 import api.main  # noqa: F401  (registers every table on SQLModel.metadata)
 import api.middlewares as middlewares
 from fastapi import APIRouter
-from api.v1.auth.router import API_V1_AUTH_ROUTER
 from api.v1.ppt.endpoints.presentation import PRESENTATION_ROUTER
-from models.sql.access_token import AccessToken
 from models.sql.presentation import PresentationModel, PresentationVersion
 from models.sql.slide import SlideModel
-from models.sql.user import User
 from services.database import get_async_session
 
 SECRET = "workspace-shared-secret-for-tests-0123456789"
+SERVICE_KEY = "studio-service-key-for-tests"
 
 
 def _token(sub="alice", secret=SECRET, hours=8):
@@ -42,19 +40,16 @@ def _bearer(t):
 
 
 class Env:
-    def __init__(self, tmp_path, monkeypatch, *, seed_admin=True):
+    def __init__(self, tmp_path, monkeypatch):
         monkeypatch.delenv("DISABLE_AUTH", raising=False)
         monkeypatch.setenv("WORKSPACE_JWT_SECRET", SECRET)
-        monkeypatch.setenv("USER_CONFIG_PATH", str(tmp_path / "userConfig.json"))
+        monkeypatch.setenv("STUDIO_SERVICE_API_KEY", SERVICE_KEY)
         self.db = tmp_path / "t.db"
         SQLModel.metadata.create_all(create_engine(f"sqlite:///{self.db}"))
         self.engine = create_async_engine(f"sqlite+aiosqlite:///{self.db}")
         self.maker = async_sessionmaker(self.engine, expire_on_commit=False)
         monkeypatch.setattr(middlewares, "async_session_maker", self.maker)
-        self.admin_id = uuid.uuid4()
-        self.api_key = "sk-presenton-test-key"
-        if seed_admin:
-            asyncio.run(self._seed())
+        self.api_key = SERVICE_KEY
         app = FastAPI()
 
         @app.get("/api/v1/ppt/whoami")
@@ -62,13 +57,16 @@ class Env:
             p = request.state.auth_principal
             return {
                 "username": p.username, "is_admin": p.is_admin, "id": str(p.user_id),
-                "export_token": bool(getattr(request.state, "internal_session_token", None)),
+                "export_cookie": getattr(request.state, "export_cookie_header", None),
             }
 
         ppt = APIRouter(prefix="/api/v1/ppt")
         ppt.include_router(PRESENTATION_ROUTER)
         app.include_router(ppt)
-        app.include_router(API_V1_AUTH_ROUTER)
+
+        @app.get("/api/v1/admin/ping")
+        async def admin_ping():
+            return {"ok": True}
 
         async def override():
             async with self.maker() as s:
@@ -77,12 +75,6 @@ class Env:
         app.dependency_overrides[get_async_session] = override
         app.add_middleware(middlewares.SessionAuthMiddleware)
         self.client = TestClient(app)
-
-    async def _seed(self):
-        async with self.maker() as s:
-            s.add(User(id=self.admin_id, username="admin", hashed_password="x", is_superuser=True))
-            s.add(AccessToken(token=self.api_key, user_id=self.admin_id))
-            await s.commit()
 
     def sync(self, sql, **params):
         with create_engine(f"sqlite:///{self.db}").begin() as c:
@@ -110,63 +102,48 @@ def test_bad_secret_expired_and_missing_token_are_rejected(env):
         assert env.client.get("/api/v1/ppt/whoami", headers=headers).status_code == 401
 
 
-def test_workspace_user_named_admin_never_resolves_to_local_admin(env):
-    r = env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("admin")))
-    assert r.status_code == 200
-    assert r.json()["is_admin"] is False and r.json()["id"] != str(env.admin_id)
-
-
-def test_cookie_mirror_is_accepted_but_api_key_wins_over_stale_cookie(env):
+def test_cookie_mirror_is_accepted_and_a_bearer_wins_over_a_stale_cookie(env):
     ok = env.client.get("/api/v1/ppt/whoami", cookies={"studio_token": _token("bob")})
     assert ok.status_code == 200
-    key = env.client.get("/api/v1/ppt/whoami", headers=_bearer(env.api_key), cookies={"studio_token": "stale"})
-    assert key.status_code == 200 and key.json()["is_admin"] is True
+    bearer = env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("bob")), cookies={"studio_token": "stale"})
+    assert bearer.status_code == 200 and bearer.json()["id"] == ok.json()["id"]
 
 
-def test_bearer_caller_gets_export_session_token_and_jwt_user_is_not_admin_gated(env):
-    assert env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token())).json()["export_token"] is True
+def test_bearer_caller_hands_its_workspace_jwt_to_the_export_renderer(env):
+    token = _token()
+    assert env.client.get("/api/v1/ppt/whoami", headers=_bearer(token)).json()["export_cookie"] == f"studio_token={token}"
 
 
-def test_auth_status_recognises_workspace_token_but_not_api_keys(env):
-    # Next.js route handlers and the export renderer decide "is this caller signed in" from here.
-    for kwargs in ({"headers": _bearer(_token("carol"))}, {"cookies": {"studio_token": _token("carol")}}):
-        body = env.client.get("/api/v1/auth/status", **kwargs).json()
-        assert body["authenticated"] is True and body["role"] == "user"
-        assert body["configured"] is True and body["user_id"]
-    assert env.client.get("/api/v1/auth/status", headers=_bearer(env.api_key)).json()["authenticated"] is False
-    assert env.client.get("/api/v1/auth/status", headers=_bearer(_token(hours=-1))).json()["authenticated"] is False
-
-
-def test_fresh_database_with_no_users_still_works_for_workspace_tokens(tmp_path, monkeypatch):
-    e = Env(tmp_path, monkeypatch, seed_admin=False)
-    assert e.client.get("/api/v1/ppt/whoami", headers=_bearer(_token())).status_code == 200
-
-
-def test_without_workspace_secret_a_fresh_database_still_demands_setup(tmp_path, monkeypatch):
-    e = Env(tmp_path, monkeypatch, seed_admin=False)
+def test_without_workspace_secret_workspace_tokens_are_rejected(env, monkeypatch):
     monkeypatch.delenv("WORKSPACE_JWT_SECRET")
-    r = e.client.get("/api/v1/ppt/whoami", headers=_bearer(_token()))
-    assert r.status_code == 428
+    assert env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token())).status_code == 401
 
 
-# ---------- on-behalf-of ----------
+# ---------- service key ----------
 
-def test_trusted_service_key_acts_for_user(env, monkeypatch):
-    monkeypatch.setenv("TRUSTED_SERVICE_USERNAMES", "admin")
+def test_service_key_acts_for_user(env):
     r = env.client.get("/api/v1/ppt/whoami", headers={**_bearer(env.api_key), "X-On-Behalf-Of": "Carol"})
     direct = env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("carol")))
     assert r.status_code == 200 and r.json()["is_admin"] is False
     assert r.json()["id"] == direct.json()["id"]
 
 
-def test_untrusted_key_cannot_use_on_behalf_of(env, monkeypatch):
-    monkeypatch.delenv("TRUSTED_SERVICE_USERNAMES", raising=False)
-    r = env.client.get("/api/v1/ppt/whoami", headers={**_bearer(env.api_key), "X-On-Behalf-Of": "carol"})
-    assert r.status_code == 401
+def test_bare_service_key_is_limited_to_the_admin_surface(env):
+    assert env.client.get("/api/v1/admin/ping", headers=_bearer(env.api_key)).status_code == 200
+    assert env.client.get("/api/v1/ppt/whoami", headers=_bearer(env.api_key)).status_code == 403
 
 
-def test_on_behalf_of_is_ignored_for_plain_user_tokens(env, monkeypatch):
-    monkeypatch.setenv("TRUSTED_SERVICE_USERNAMES", "admin")
+def test_workspace_users_cannot_reach_the_admin_surface(env):
+    assert env.client.get("/api/v1/admin/ping", headers=_bearer(_token("admin"))).status_code == 403
+
+
+def test_wrong_or_unset_service_key_is_rejected(env, monkeypatch):
+    assert env.client.get("/api/v1/admin/ping", headers=_bearer("not-the-key")).status_code == 401
+    monkeypatch.delenv("STUDIO_SERVICE_API_KEY")
+    assert env.client.get("/api/v1/admin/ping", headers=_bearer(env.api_key)).status_code == 401
+
+
+def test_on_behalf_of_is_ignored_for_plain_user_tokens(env):
     r = env.client.get("/api/v1/ppt/whoami", headers={**_bearer(_token("dave")), "X-On-Behalf-Of": "admin"})
     assert r.json()["username"].startswith("ws:dave")
 

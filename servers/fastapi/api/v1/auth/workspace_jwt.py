@@ -7,8 +7,8 @@ Workspace users are keyed on ``User.external_subject`` (the JWT ``sub``, lower-c
 
 Configuration:
 - ``WORKSPACE_JWT_SECRET``: shared HS256 secret. Unset disables this whole path.
-- ``TRUSTED_SERVICE_USERNAMES``: comma-separated Studio usernames whose ``sk-presenton-`` API key
-  may act on behalf of a Workspace user through ``X-On-Behalf-Of``.
+- ``STUDIO_SERVICE_API_KEY`` (see principal.py): the Workspace backend's key; with
+  ``X-On-Behalf-Of`` it acts for the named Workspace user.
 """
 import os
 import uuid
@@ -27,11 +27,6 @@ _MAX_SUBJECT_LENGTH = 200
 
 def workspace_jwt_enabled() -> bool:
     return bool((os.getenv("WORKSPACE_JWT_SECRET") or "").strip())
-
-
-def trusted_service_usernames() -> set[str]:
-    raw = os.getenv("TRUSTED_SERVICE_USERNAMES") or ""
-    return {name.strip().lower() for name in raw.split(",") if name.strip()}
 
 
 def _normalize_subject(value: object) -> str | None:

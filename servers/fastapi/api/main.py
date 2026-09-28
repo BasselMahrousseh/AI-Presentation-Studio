@@ -16,7 +16,6 @@ from starlette.responses import FileResponse
 
 from api.lifespan import app_lifespan
 from api.middlewares import SessionAuthMiddleware
-from api.v1.auth.router import API_V1_AUTH_ROUTER
 from api.v1.admin.router import API_V1_ADMIN_ROUTER
 from api.v1.ppt.router import API_V1_PPT_ROUTER
 from utils.get_env import (
@@ -69,7 +68,6 @@ app = FastAPI(lifespan=app_lifespan)
 
 # Routers
 app.include_router(API_V1_PPT_ROUTER)
-app.include_router(API_V1_AUTH_ROUTER)
 app.include_router(API_V1_ADMIN_ROUTER)
 
 # Mount app_data and static assets (direct FastAPI access; nginx also serves /static in Docker).

@@ -1,128 +1,71 @@
 from dataclasses import dataclass
+import hmac
 from typing import Literal
 import uuid
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.v1.auth.users import UsernameUserDatabase, UserManager, get_jwt_strategy
-from models.sql.access_token import AccessToken
 from models.sql.user import User
-from api.v1.auth.config import SESSION_COOKIE_NAME
 from api.v1.auth.workspace_jwt import (
     WORKSPACE_TOKEN_COOKIE_NAME,
     get_or_create_user_for_subject,
     resolve_workspace_user,
-    trusted_service_usernames,
 )
+from utils.get_env import get_studio_service_api_key_env
 
 
 @dataclass(frozen=True)
 class AuthPrincipal:
-    user_id: uuid.UUID
+    """Who is calling. Studio has no accounts of its own: callers are Workspace users (their
+    Workspace JWT, or the service key acting for them) or the Workspace backend itself."""
+
+    user_id: uuid.UUID | None
     username: str
+    # True only for the bare service key (no X-On-Behalf-Of): it may call /api/v1/admin/* only.
     is_admin: bool
-    method: Literal["jwt", "api_key"]
+    method: Literal["workspace", "service"]
+    # The caller's Workspace JWT, handed to the export renderer, which can only send a cookie.
+    workspace_token: str | None = None
+
+
+def _bearer_token(request: Request) -> str:
+    authorization = request.headers.get("Authorization", "")
+    if authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1].strip()
+    return ""
+
+
+def _is_service_key(token: str) -> bool:
+    service_key = (get_studio_service_api_key_env() or "").strip()
+    return bool(service_key) and hmac.compare_digest(token.encode(), service_key.encode())
 
 
 async def resolve_request_principal(
     request: Request, session: AsyncSession
 ) -> tuple[AuthPrincipal | None, User | None]:
-    cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
-    if cookie_token:
-        user_db = UsernameUserDatabase(session)
-        user = await get_jwt_strategy().read_token(cookie_token, UserManager(user_db))
-        if user:
-            return (
-                AuthPrincipal(
-                    user_id=user.id,
-                    username=user.username,
-                    is_admin=user.is_superuser,
-                    method="jwt",
-                ),
-                user,
-            )
+    bearer = _bearer_token(request)
 
-    authorization = request.headers.get("Authorization", "")
-    bearer = (
-        authorization.split(" ", 1)[1].strip()
-        if authorization.lower().startswith("bearer ")
-        else ""
-    )
-
-    # GenAI Workspace session: `Authorization: Bearer <jwt>`, or the HttpOnly `studio_token`
-    # cookie mirrored by the Workspace proxy for <img>/EventSource, which cannot set headers.
-    if bearer:
-        workspace_token = "" if bearer.startswith("sk-presenton-") else bearer
-    else:
-        workspace_token = request.cookies.get(WORKSPACE_TOKEN_COOKIE_NAME, "")
-    if workspace_token:
-        user = await resolve_workspace_user(session, workspace_token)
-        if user is None:
-            return None, None
-        return (
-            AuthPrincipal(
-                user_id=user.id,
-                username=user.username,
-                is_admin=False,
-                method="jwt",
-            ),
-            user,
-        )
-
-    if bearer:
-        token = bearer
-        if not token.startswith("sk-presenton-"):
-            return None, None
-        access_token = await session.get(AccessToken, token)
-        if access_token is None:
-            return None, None
-        user = await session.get(User, access_token.user_id)
-        if user is None or not user.is_active or not user.is_superuser:
-            return None, None
-
+    # The Workspace backend (orchestrator): STUDIO_SERVICE_API_KEY, optionally acting for a
+    # Workspace user via X-On-Behalf-Of so the deck is owned by that user.
+    if bearer and _is_service_key(bearer):
         on_behalf_of = request.headers.get("X-On-Behalf-Of")
-        if on_behalf_of is not None:
-            # Only keys belonging to an explicitly trusted service account may act for a user.
-            # An untrusted or malformed attempt is rejected rather than silently ignored, so a
-            # deck can never end up owned by the service account by accident.
-            if user.username.lower() not in trusted_service_usernames():
-                return None, None
-            delegate = await get_or_create_user_for_subject(session, on_behalf_of)
-            if delegate is None:
-                return None, None
-            return (
-                AuthPrincipal(
-                    user_id=delegate.id,
-                    username=delegate.username,
-                    is_admin=False,
-                    method="jwt",
-                ),
-                delegate,
-            )
+        if on_behalf_of is None:
+            return AuthPrincipal(None, "service", True, "service"), None
+        delegate = await get_or_create_user_for_subject(session, on_behalf_of)
+        if delegate is None:
+            return None, None
+        return AuthPrincipal(delegate.id, delegate.username, False, "service"), delegate
 
-        return (
-            AuthPrincipal(
-                user_id=user.id,
-                username=user.username,
-                is_admin=True,
-                method="api_key",
-            ),
-            user,
-        )
-
-    return None, None
-
-
-def principal_from_request(request: Request) -> AuthPrincipal:
-    principal = getattr(request.state, "auth_principal", None)
-    if principal is None:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return principal
-
-
-def require_browser_admin_principal(request: Request) -> AuthPrincipal:
-    principal = principal_from_request(request)
-    if principal.method != "jwt" or not principal.is_admin:
-        raise HTTPException(status_code=403, detail="Admin browser session required")
-    return principal
+    # A Workspace user: `Authorization: Bearer <jwt>`, or the HttpOnly `studio_token` cookie the
+    # Workspace proxy mirrors for <img>/EventSource/export rendering, which cannot set headers.
+    workspace_token = bearer or request.cookies.get(WORKSPACE_TOKEN_COOKIE_NAME, "")
+    if not workspace_token:
+        return None, None
+    user = await resolve_workspace_user(session, workspace_token)
+    if user is None:
+        return None, None
+    return (
+        AuthPrincipal(user.id, user.username, False, "workspace", workspace_token),
+        user,
+    )

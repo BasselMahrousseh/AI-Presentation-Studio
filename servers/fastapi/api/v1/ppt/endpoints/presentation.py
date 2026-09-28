@@ -40,7 +40,6 @@ from services.database import async_session_maker
 from models.sql.presentation import PresentationModel, PresentationVersion
 from utils.llm_utils import TextGenerationMetrics
 from utils.sse import safe_sse_stream
-from api.v1.auth.config import SESSION_COOKIE_NAME
 from utils.web_search import get_selected_web_search_provider, get_web_search_route
 from utils.web_search import build_web_search_query, get_web_search_context
 from api.v1.auth.context import get_current_owner_id
@@ -75,20 +74,13 @@ def _presentation_response_data(presentation: PresentationModel) -> dict:
 
 
 def _build_export_cookie_header(request: Request) -> Optional[str]:
+    """Credentials the export renderer sends back to Studio (it can only carry a cookie)."""
     cookie_header = (request.headers.get("cookie") or "").strip()
     if cookie_header:
         return cookie_header
-
-    internal_session_token = getattr(
-        request.state, "internal_session_token", None
-    )
-    if isinstance(internal_session_token, str) and internal_session_token:
-        return f"{SESSION_COOKIE_NAME}={internal_session_token}"
-
-    session_token = request.cookies.get(SESSION_COOKIE_NAME)
-    if session_token:
-        return f"{SESSION_COOKIE_NAME}={session_token}"
-
+    export_cookie_header = getattr(request.state, "export_cookie_header", None)
+    if isinstance(export_cookie_header, str) and export_cookie_header:
+        return export_cookie_header
     return None
 
 

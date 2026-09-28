@@ -1,5 +1,4 @@
 from fastapi import Request
-from sqlalchemy import func, select
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
@@ -11,27 +10,20 @@ from api.v1.auth.context import (
     set_current_owner_is_admin,
 )
 from api.v1.auth.principal import resolve_request_principal
-from api.v1.auth.users import get_jwt_strategy
-from api.v1.auth.workspace_jwt import workspace_jwt_enabled
-from models.sql.user import User
+from api.v1.auth.workspace_jwt import WORKSPACE_TOKEN_COOKIE_NAME
 from services.database import async_session_maker
 from utils.get_env import is_disable_auth_enabled
 
 
 class SessionAuthMiddleware(BaseHTTPMiddleware):
     _PUBLIC_AUTH_PATHS = {
-        "/api/v1/auth/status",
-        "/api/v1/auth/verify",
-        "/api/v1/auth/setup",
-        "/api/v1/auth/login",
-        "/api/v1/auth/logout",
         # Best-effort sink for chart data captured from the export page. It is
         # designed to be unauthenticated - see chart_capture_store.py and
         # chart_capture.py's own docstrings - because the capture call is
         # fired via navigator.sendBeacon (required to avoid the export
         # bundle's networkidle0 hang, see CLAUDE.md), which cannot attach the
         # session cookie. Safety comes from the token itself: a server-minted
-        # uuid4 (utils/export_utils.py, run-bundled-presentation-export.ts),
+        # uuid4 (utils/export_utils.py),
         # sanitized against path traversal before touching the filesystem
         # (chart_capture_store._capture_path). Without this exemption every
         # capture 401s whenever auth is enabled, and every chart in every
@@ -42,8 +34,7 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
         # table-export backlog item and pptx_native_table_service.py) fired
         # via navigator.sendBeacon for the same networkidle0 reason, safe for
         # the same "server-minted uuid4, sanitized against path traversal"
-        # reason (table_capture_store._capture_path). /upgrade-tables stays
-        # authenticated, same as /upgrade-charts.
+        # reason (table_capture_store._capture_path).
         "/api/v1/ppt/presentation/export/table-capture",
     }
     _PUBLIC_AUTH_PREFIXES: tuple[str, ...] = ()
@@ -78,54 +69,27 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         async with async_session_maker() as session:
-            configured = bool(
-                await session.scalar(select(func.count()).select_from(User))
-            )
-            # A fresh database has no users yet, but Workspace users are created on first
-            # authenticated request, so do not demand the local admin setup in that mode.
-            if not configured and not workspace_jwt_enabled():
-                return JSONResponse(
-                    status_code=428,
-                    content={
-                        "detail": "Login setup is required",
-                        "setup_required": True,
-                    },
-                )
             principal, user = await resolve_request_principal(request, session)
             if principal is None:
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Unauthorized"},
                 )
-            admin_only = (
-                path.startswith("/api/v1/admin/")
-                or path.startswith("/api/v1/auth/token/")
-                or path.startswith("/api/v1/ppt/codex/auth/")
-                or (
-                    path.startswith("/api/v1/ppt/fonts/")
-                    and request.method in {"POST", "DELETE"}
-                )
-                or (
-                    path == "/api/v1/ppt/ollama/models/pull"
-                    and request.method == "POST"
-                )
-            )
-            if admin_only and (principal.method != "jwt" or not principal.is_admin):
+            # The bare service key may only read the admin surface (feedback export); everything
+            # else needs a user, either a Workspace JWT or the service key with X-On-Behalf-Of.
+            if path.startswith("/api/v1/admin/") != principal.is_admin:
                 return JSONResponse(
                     status_code=403,
-                    content={"detail": "Admin browser session required"},
+                    content={"detail": "Forbidden"},
                 )
             request.state.auth_principal = principal
             request.state.current_user = user
             request.state.auth_username = principal.username
-            # The export renderer calls back into FastAPI and can only carry a cookie, so it
-            # needs a Studio session token whenever the caller did not arrive with a cookie
-            # (API keys and Workspace bearer tokens).
-            if user is not None and (
-                principal.method == "api_key" or not request.headers.get("cookie")
-            ):
-                request.state.internal_session_token = (
-                    await get_jwt_strategy().write_token(user)
+            # The export renderer calls back into FastAPI and can only carry a cookie, so a caller
+            # that authenticated with a bearer token gets its Workspace JWT passed on as one.
+            if principal.workspace_token and not request.headers.get("cookie"):
+                request.state.export_cookie_header = (
+                    f"{WORKSPACE_TOKEN_COOKIE_NAME}={principal.workspace_token}"
                 )
             context_token = set_current_owner_id(principal.user_id)
             admin_context_token = set_current_owner_is_admin(principal.is_admin)

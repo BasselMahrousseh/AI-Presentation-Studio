@@ -14,7 +14,6 @@ from utils.get_env import (
 from utils.model_availability import (
     check_llm_and_image_provider_api_or_model_availability,
 )
-from api.v1.auth.bootstrap import bootstrap_database_admin
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +48,8 @@ async def app_lifespan(_: FastAPI):
     """
     Lifespan context manager for FastAPI application.
     Initializes the application data directory, runs Alembic migrations when
-    MIGRATE_DATABASE_ON_STARTUP=true, creates any missing tables, bootstraps
-    the primary administrator from legacy/env credentials (if provided), and checks LLM model
-    availability.
+    MIGRATE_DATABASE_ON_STARTUP=true, creates any missing tables, and checks the Azure OpenAI
+    and image-provider configuration.
     """
     _configure_application_logging()
     os.makedirs(get_app_data_directory_env(), exist_ok=True)
@@ -59,7 +57,6 @@ async def app_lifespan(_: FastAPI):
     sweep_stale_table_captures()
     await migrate_database_on_startup()
     await create_db_and_tables()
-    await bootstrap_database_admin()
     await check_llm_and_image_provider_api_or_model_availability()
     yield
     # Shutdown: release all database connections to prevent stale/leaked pools.

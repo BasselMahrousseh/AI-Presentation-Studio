@@ -33,10 +33,6 @@ def get_temp_directory_env():
     return os.getenv("TEMP_DIRECTORY")
 
 
-def get_user_config_path_env():
-    return os.getenv("USER_CONFIG_PATH")
-
-
 def get_disable_auth_env():
     return os.getenv("DISABLE_AUTH")
 
@@ -193,3 +189,8 @@ def get_openai_compat_image_api_key_env():
 
 def get_openai_compat_image_model_env():
     return os.getenv("OPENAI_COMPAT_IMAGE_MODEL")
+
+
+def get_studio_service_api_key_env():
+    """Shared secret the Workspace backend authenticates with (its PRESENTATION_STUDIO_API_KEY)."""
+    return os.getenv("STUDIO_SERVICE_API_KEY")
