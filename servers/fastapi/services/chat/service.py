@@ -93,24 +93,6 @@ class PresentationChatService:
         )
         self._tools = ChatTools(self._memory, mode=chat_mode)
 
-    async def generate_reply(
-        self,
-        user_message: str,
-        attachments: list[ChatAttachment] | None = None,
-    ) -> ChatTurnResult:
-        self._tools.set_turn_context(user_message)
-        conversation_id, messages, persisted_user_message = await self._prepare_turn_context(
-            user_message,
-            attachments or [],
-        )
-        response_text, tool_calls = await self._run_llm_with_tools(messages)
-        return await self._persist_turn(
-            conversation_id=conversation_id,
-            user_message=persisted_user_message,
-            response_text=response_text,
-            tool_calls=tool_calls,
-        )
-
     async def stream_reply(
         self,
         user_message: str,
@@ -372,63 +354,6 @@ class PresentationChatService:
             response_text=response_text,
             tool_calls=tool_calls,
         )
-
-    async def _run_llm_with_tools(self, messages: list[Message]) -> tuple[str, list[str]]:
-        client = get_client(config=get_llm_config())
-        model = get_model()
-        tools = build_chat_llm_tools(self._tools.get_tool_definitions())
-
-        called_tools: list[str] = []
-        last_tool_results: list[dict[str, Any]] = []
-
-        for _ in range(MAX_TOOL_ROUNDS):
-            try:
-                response = await asyncio.to_thread(
-                    client.generate,
-                    **get_generate_kwargs(
-                        model=model,
-                        messages=messages,
-                        tools=tools,
-                    ),
-                )
-            except Exception as exc:
-                raise handle_llm_client_exceptions(exc)
-
-            if not response.tool_calls:
-                response_text = extract_text(response.content) or (
-                    "I could not generate a response for that request."
-                )
-                return response_text, called_tools
-
-            called_tools.extend([tool_call.name for tool_call in response.tool_calls])
-            messages = self._append_sanitized_assistant_tool_turn(
-                messages,
-                content=getattr(response, "content", None),
-                tool_calls=list(response.tool_calls),
-            )
-
-            last_tool_results = []
-            for tool_call in response.tool_calls:
-                tool_result = await self._tools.execute_tool_call(tool_call)
-                last_tool_results.append(tool_result)
-                tool_response_content = json.dumps(tool_result, ensure_ascii=False)
-                messages.append(
-                    ToolResponseMessage(
-                        id=tool_call.id,
-                        content=[TextContentPart(text=tool_response_content)],
-                    )
-                )
-
-        LOGGER.warning("Max tool rounds reached in chat flow")
-        final_response = await self._try_final_response_without_tools(
-            client=client,
-            model=model,
-            messages=messages,
-        )
-        if final_response:
-            return final_response, called_tools
-
-        return self._build_tool_limit_fallback(last_tool_results), called_tools
 
     async def _try_final_response_without_tools(
         self,

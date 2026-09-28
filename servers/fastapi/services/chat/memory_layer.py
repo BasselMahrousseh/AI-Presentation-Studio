@@ -813,18 +813,6 @@ class PresentationChatMemoryLayer:
         )
 
     @staticmethod
-    def _extract_outline_title(markdown_content: str) -> str:
-        for line in markdown_content.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            heading_match = re.match(r"^#{1,6}\s*(.+?)\s*$", stripped)
-            if heading_match:
-                return heading_match.group(1).strip()
-            return stripped[:120]
-        return "Untitled outline"
-
-    @staticmethod
     def _serialize_slide(slide: SlideModel) -> str:
         if slide.html_content:
             return (

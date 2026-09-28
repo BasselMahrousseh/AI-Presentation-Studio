@@ -102,25 +102,6 @@ async def delete_chat_conversation(
     await sql_session.commit()
 
 
-@CHAT_ROUTER.post("/message", response_model=ChatMessageResponse)
-async def chat_message(
-    payload: ChatMessageRequest,
-    sql_session: AsyncSession = Depends(get_async_session),
-):
-    service = PresentationChatService(
-        sql_session=sql_session,
-        presentation_id=payload.presentation_id,
-        conversation_id=payload.conversation_id,
-        presentation_type=payload.presentation_type,
-    )
-    result = await service.generate_reply(payload.message, payload.attachments)
-    return ChatMessageResponse(
-        conversation_id=result.conversation_id,
-        response=result.response_text,
-        tool_calls=result.tool_calls,
-    )
-
-
 @CHAT_ROUTER.post("/message/stream")
 async def chat_message_stream(
     payload: ChatMessageRequest,
