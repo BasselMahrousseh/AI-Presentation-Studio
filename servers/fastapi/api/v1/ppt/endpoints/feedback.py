@@ -131,6 +131,7 @@ async def _context_snapshot(
         "tone": presentation.tone,
         "verbosity": presentation.verbosity,
         "web_search": presentation.web_search,
+        "web_search_mode": presentation.effective_web_search_mode,
         "has_source_files": bool(presentation.file_paths),
         "outline_slide_count": len(outline_slides)
         if isinstance(outline_slides, list)

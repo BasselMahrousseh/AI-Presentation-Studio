@@ -35,6 +35,7 @@ from services.temp_file_service import TEMP_FILE_SERVICE
 from utils.llm_client_error_handler import handle_llm_client_exceptions
 from utils.llm_config import get_llm_config
 from utils.llm_provider import get_model
+from utils.web_search import WebSearchMode
 from utils.llm_utils import (
     extract_text,
     get_generate_kwargs,
@@ -79,11 +80,14 @@ class PresentationChatService:
         conversation_id: uuid.UUID | None,
         chat_mode: ChatToolMode = "presentation",
         presentation_type: Literal["standard", "smart"] = "standard",
+        web_search_mode: WebSearchMode | None = None,
     ):
         self._sql_session = sql_session
         self._presentation_id = presentation_id
         self._conversation_id = conversation_id
         self._presentation_type = presentation_type
+        # The chat input's toggle; None falls back to the deck's own setting.
+        self._requested_web_search_mode = web_search_mode
 
         self._conversation_store = ChatConversationStore(sql_session)
         self._memory = PresentationContextStore(
@@ -273,6 +277,16 @@ class PresentationChatService:
                 ),
             )
 
+        self._tools.set_web_search_mode(
+            self._requested_web_search_mode or presentation.effective_web_search_mode
+        )
+        LOGGER.info(
+            "Chat web search: presentation_id=%s mode=%s tool_available=%s",
+            self._presentation_id,
+            self._tools.web_search_mode,
+            self._tools.web_search_available,
+        )
+
         attachment_context, attachment_memory = await self._build_attachment_context(
             user_message=user_message,
             attachments=attachments or [],
@@ -322,6 +336,11 @@ class PresentationChatService:
                     presentation_memory_context=presentation_memory,
                     chat_memory_context=chat_memory,
                     presentation_type=self._presentation_type,
+                    web_search_mode=(
+                        self._tools.web_search_mode
+                        if self._tools.web_search_available
+                        else "off"
+                    ),
                 )
             ),
             *history_messages,
@@ -717,6 +736,7 @@ class PresentationChatService:
             "getTemplateSummary": "Reading template summary",
             "getSmartPresentationContext": "Reading Smart deck design context",
             "readSourceDocuments": "Reading source documents",
+            "searchWeb": "Searching the web",
             "searchSlide": "Searching relevant slides",
             "getSlideAtIndex": "Opening the requested slide",
             "getAvailableLayouts": "Checking available layouts",

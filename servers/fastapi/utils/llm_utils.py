@@ -299,6 +299,7 @@ async def generate_structured_with_schema_retries(
     validate_schema_max_loop_count: int = 4,
     disconnect_checker: Optional[DisconnectChecker] = None,
     text_chunk_callback: Optional[TextChunkCallback] = None,
+    reasoning: Optional[ReasoningConfig] = None,
 ) -> dict:
     """
     Parse retries (inner loop) plus optional JSON Schema validation feedback loops (outer loop),
@@ -323,6 +324,7 @@ async def generate_structured_with_schema_retries(
                     model=model,
                     messages=working_messages,
                     response_format=response_format,
+                    reasoning=reasoning,
                 ),
             )
             if content is not None:

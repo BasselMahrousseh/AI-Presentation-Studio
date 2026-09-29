@@ -112,6 +112,7 @@ async def chat_message_stream(
         presentation_id=payload.presentation_id,
         conversation_id=payload.conversation_id,
         presentation_type=payload.presentation_type,
+        web_search_mode=payload.web_search_mode,
     )
 
     async def inner():

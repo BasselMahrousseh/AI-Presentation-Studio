@@ -165,6 +165,7 @@ def test_search_web_logs_provider_and_clamps_max_results(monkeypatch, caplog):
             web_search.WebSearchResult(
                 title="Presenton",
                 url="https://example.com/presenton",
+                snippet="Presenton is an open-source AI presentation generator.",
             )
     ]
 
@@ -179,7 +180,8 @@ def test_search_web_logs_provider_and_clamps_max_results(monkeypatch, caplog):
 
     results = asyncio.run(web_search.search_web(" current facts ", max_results=50))
 
-    assert captured == {"query": "current facts", "limit": 10}
+    # Clamped to 10 results, fetched with headroom for dropped navigation pages.
+    assert captured == {"query": "current facts", "limit": 15}
     assert len(results) == 1
     assert "provider=searxng" in caplog.text
     assert "results=1" in caplog.text
@@ -246,3 +248,45 @@ def test_exa_search_requests_highlights_and_maps_results(monkeypatch):
             snippet="Summary fallback.",
         ),
     ]
+
+
+def test_search_web_drops_navigation_pages(monkeypatch):
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", WebSearchProvider.SEARXNG.value)
+    monkeypatch.setenv("SEARXNG_BASE_URL", "http://127.0.0.1:8080")
+
+    async def fake_search(_session, _query, limit):
+        return [
+            web_search.WebSearchResult("Sign in - Claude", "https://claude.ai/", "Frequently asked questions about Claude"),
+            web_search.WebSearchResult("Download Claude", "https://claude.com/download", "Claude in Chrome is included as a connector"),
+            web_search.WebSearchResult("Claude", "https://claude.com/", "short"),
+            web_search.WebSearchResult(
+                "Claude Opus 5.5 Benchmarks, Pricing & Context Window",
+                "https://llm-stats.com/opus-5-5",
+                "Claude Opus 5.5 by Anthropic, released Sep 22, 2026; $4.00/M input tokens",
+            ),
+        ][:limit]
+
+    monkeypatch.setattr(web_search, "_search_searxng", fake_search)
+
+    results = asyncio.run(web_search.search_web("Anthropic Claude Opus 5.5"))
+
+    assert [result.url for result in results] == ["https://llm-stats.com/opus-5-5"]
+
+
+def test_get_web_search_context_merges_parallel_queries_without_duplicates(monkeypatch):
+    shared = web_search.WebSearchResult("Shared page", "https://example.com/shared", "Facts about both models side by side")
+
+    async def fake_search_web(query):
+        if query == "broken":
+            raise RuntimeError("provider down")
+        return [
+            shared,
+            web_search.WebSearchResult(f"{query} page", f"https://example.com/{query}", f"Facts about {query} in detail"),
+        ]
+
+    monkeypatch.setattr(web_search, "search_web", fake_search_web)
+
+    context = asyncio.run(web_search.get_web_search_context(["alpha", "beta", "broken"]))
+
+    assert context.count("Shared page") == 1
+    assert "alpha page" in context and "beta page" in context

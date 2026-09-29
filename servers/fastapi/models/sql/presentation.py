@@ -76,6 +76,12 @@ class PresentationModel(SQLModel, table=True):
     include_table_of_contents: bool = Field(sa_column=Column(Boolean), default=False)
     include_title_slide: bool = Field(sa_column=Column(Boolean), default=True)
     web_search: bool = Field(sa_column=Column(Boolean), default=False)
+    # "auto" (a model decides per step whether the topic needs a web search), "always" or
+    # "off". None for rows created before this column existed: those follow the old
+    # web_search boolean (see effective_web_search_mode).
+    web_search_mode: Optional[Literal["auto", "always", "off"]] = Field(
+        sa_column=Column(String, nullable=True), default=None
+    )
     theme: Optional[dict] = Field(sa_column=Column(JSON), default=None)
     fonts: Optional[dict] = Field(sa_column=Column(JSON), default=None)
     generation_mode: Literal["standard", "smart"] = Field(
@@ -145,6 +151,12 @@ class PresentationModel(SQLModel, table=True):
         default=None,
     )
 
+    @property
+    def effective_web_search_mode(self) -> Literal["auto", "always", "off"]:
+        if self.web_search_mode in ("auto", "always", "off"):
+            return self.web_search_mode
+        return "always" if self.web_search else "off"
+
     def mark_outline_generated(self) -> None:
         self.outline_generation_id = uuid.uuid4()
 
@@ -170,6 +182,7 @@ class PresentationModel(SQLModel, table=True):
             include_table_of_contents=self.include_table_of_contents,
             include_title_slide=self.include_title_slide,
             web_search=self.web_search,
+            web_search_mode=self.web_search_mode,
             theme=copy.deepcopy(self.theme),
             fonts=copy.deepcopy(self.fonts),
             generation_mode=self.generation_mode,

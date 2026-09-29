@@ -40,6 +40,10 @@ class AddOutlineInput(OpenAIStrictSchemaModel):
     )
 
 
+class GetOutlineInput(OpenAIStrictSchemaModel):
+    """No arguments: always returns every outline slide."""
+
+
 class UpdateOutlineInput(StrictSchemaModel):
     index: int = Field(ge=0, le=1000)
     content: str = Field(
@@ -100,6 +104,18 @@ class ReadSourceDocumentsInput(OpenAIStrictSchemaModel):
     )
 
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+
+
+class SearchWebInput(OpenAIStrictSchemaModel):
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description=(
+            "Search-engine-style query of at most 12 words. Keep names, versions, and "
+            "the year when relevant."
+        ),
+    )
 
 
 class GenerateAssetItemInput(StrictSchemaModel):

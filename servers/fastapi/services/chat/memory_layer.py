@@ -206,6 +206,23 @@ class PresentationChatMemoryLayer:
             response["html"] = html
         return response
 
+    async def get_outline(self) -> dict[str, Any]:
+        presentation = await self._sql_session.get(PresentationModel, self._presentation_id)
+        if not presentation:
+            return {"found": False, "message": "Presentation not found."}
+
+        # Same normalization as add/update/delete_outline, so indexes here are the ones they act on.
+        slides = self._normalize_outline_slides(presentation.outlines)
+        return {
+            "found": True,
+            "slide_count": len(slides),
+            "max_slide_count": MAX_NUMBER_OF_SLIDES,
+            "slides": [
+                {"index": index, "slide_number": index + 1, "content": slide["content"]}
+                for index, slide in enumerate(slides)
+            ],
+        }
+
     async def add_outline(
         self,
         *,

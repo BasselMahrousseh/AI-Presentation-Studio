@@ -19,6 +19,8 @@ class ChatMessageRequest(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     conversation_id: Optional[uuid.UUID] = None
     attachments: list[ChatAttachment] = Field(default_factory=list, max_length=8)
+    # The chat input's web search toggle. None uses the deck's own setting.
+    web_search_mode: Optional[Literal["auto", "always", "off"]] = None
 
     model_config = ConfigDict(extra="forbid")
 

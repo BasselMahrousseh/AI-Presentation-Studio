@@ -1,9 +1,10 @@
+import asyncio
 import html
 import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse, urlunparse
 
 import aiohttp
@@ -23,10 +24,18 @@ from utils.get_env import (
 from utils.llm_provider import get_llm_provider
 
 LOGGER = logging.getLogger(__name__)
-DEFAULT_MAX_RESULTS = 5
+DEFAULT_MAX_RESULTS = 8
+# Results that are site navigation, not content: they crowd real answers out of the top slots.
+_NAVIGATION_TITLE = re.compile(
+    r"^(sign\s*in|sign\s*up|log\s*in|login|get started|download)\b", re.IGNORECASE
+)
 # Azure OpenAI (the only provider) has no model-native web search; search goes through the
 # configured external provider (WEB_SEARCH_PROVIDER), or is unavailable.
 NATIVE_WEB_SEARCH_PROVIDERS: frozenset[LLMProvider] = frozenset()
+
+
+# Per-deck setting: "auto" lets a model decide per step whether the topic needs a search.
+WebSearchMode = Literal["auto", "always", "off"]
 
 
 @dataclass(frozen=True)
@@ -87,6 +96,14 @@ def _get_max_results() -> int:
         return DEFAULT_MAX_RESULTS
 
 
+def is_web_search_configured() -> bool:
+    """True when searches can actually run (an external provider is selected)."""
+    try:
+        return resolve_external_web_search_provider() is not None
+    except HTTPException:
+        return False
+
+
 def resolve_external_web_search_provider() -> WebSearchProvider | None:
     selected = get_selected_web_search_provider()
     if selected in {WebSearchProvider.AUTO, WebSearchProvider.NATIVE}:
@@ -101,6 +118,8 @@ async def search_web(query: str, max_results: int | None = None) -> list[WebSear
         return []
     requested_limit = max_results if max_results is not None else _get_max_results()
     limit = max(1, min(requested_limit, 10))
+    # Ask for a few extra so dropping navigation pages still leaves `limit` results.
+    fetch_limit = min(limit + 5, 15)
     provider = resolve_external_web_search_provider()
     if provider is None:
         raise HTTPException(
@@ -121,15 +140,15 @@ async def search_web(query: str, max_results: int | None = None) -> list[WebSear
             headers={"User-Agent": "Presenton/1.0"},
         ) as session:
             if provider == WebSearchProvider.SEARXNG:
-                results = await _search_searxng(session, query, limit)
+                results = await _search_searxng(session, query, fetch_limit)
             elif provider == WebSearchProvider.TAVILY:
-                results = await _search_tavily(session, query, limit)
+                results = await _search_tavily(session, query, fetch_limit)
             elif provider == WebSearchProvider.EXA:
-                results = await _search_exa(session, query, limit)
+                results = await _search_exa(session, query, fetch_limit)
             elif provider == WebSearchProvider.BRAVE:
-                results = await _search_brave(session, query, limit)
+                results = await _search_brave(session, query, fetch_limit)
             elif provider == WebSearchProvider.SERPER:
-                results = await _search_serper(session, query, limit)
+                results = await _search_serper(session, query, fetch_limit)
             else:
                 raise HTTPException(
                     status_code=400,
@@ -143,6 +162,7 @@ async def search_web(query: str, max_results: int | None = None) -> list[WebSear
         )
         raise
 
+    results = [result for result in results if not _is_navigation_result(result)][:limit]
     LOGGER.info(
         "Web search completed: provider=%s results=%d duration_ms=%d",
         provider.value,
@@ -157,12 +177,26 @@ async def search_web(query: str, max_results: int | None = None) -> list[WebSear
     return results
 
 
-async def get_web_search_context(query: str) -> str:
-    try:
-        results = await search_web(query)
-    except Exception:
-        LOGGER.warning("Continuing without external web search context")
-        return ""
+def _is_navigation_result(result: WebSearchResult) -> bool:
+    return bool(_NAVIGATION_TITLE.match(result.title)) or len(result.snippet) < 25
+
+
+async def get_web_search_context(queries: str | list[str]) -> str:
+    """Run one search per query in parallel and format the merged, de-duplicated results."""
+    query_list = [queries] if isinstance(queries, str) else list(queries)
+    outcomes = await asyncio.gather(
+        *(search_web(query) for query in query_list), return_exceptions=True
+    )
+    results: list[WebSearchResult] = []
+    seen_urls: set[str] = set()
+    for query, outcome in zip(query_list, outcomes):
+        if isinstance(outcome, BaseException):
+            LOGGER.warning("Continuing without web search results for query=%r", query[:200])
+            continue
+        for result in outcome:
+            if result.url not in seen_urls:
+                seen_urls.add(result.url)
+                results.append(result)
     context = format_web_search_context(results)
     if not context:
         LOGGER.warning("External web search returned no usable context")

@@ -40,8 +40,12 @@ from services.database import async_session_maker
 from models.sql.presentation import PresentationModel, PresentationVersion
 from utils.llm_utils import TextGenerationMetrics
 from utils.sse import safe_sse_stream
-from utils.web_search import get_selected_web_search_provider, get_web_search_route
-from utils.web_search import build_web_search_query, get_web_search_context
+from llmai import get_client
+from utils.llm_calls.plan_web_search import plan_web_search
+from utils.llm_config import get_llm_config
+from utils.llm_provider import get_model
+from utils.web_search import WebSearchMode, get_selected_web_search_provider, get_web_search_route
+from utils.web_search import get_web_search_context
 from api.v1.auth.context import get_current_owner_id
 from utils.llm_calls.generate_smart_presentation import (
     determine_smart_slide_count,
@@ -288,7 +292,10 @@ async def create_presentation(
     instructions: Annotated[Optional[str], Body()] = None,
     include_table_of_contents: Annotated[bool, Body()] = False,
     include_title_slide: Annotated[bool, Body()] = True,
-    web_search: Annotated[bool, Body()] = False,
+    # Legacy on/off switch, still accepted: true = "always", false = "off".
+    web_search: Annotated[Optional[bool], Body()] = None,
+    # "auto" (default) lets a model decide per generation step whether to search.
+    web_search_mode: Annotated[Optional[WebSearchMode], Body()] = None,
     generation_mode: Annotated[Literal["standard", "smart"], Body()] = "standard",
     smart_template: Annotated[Optional[str], Body()] = None,
     smart_brand_colors: Annotated[Optional[List[str]], Body()] = None,
@@ -348,6 +355,16 @@ async def create_presentation(
         if not source_presentation:
             raise HTTPException(404, "Source presentation not found")
 
+    if web_search_mode is not None:
+        resolved_web_search_mode: WebSearchMode = web_search_mode
+    elif web_search is not None:
+        resolved_web_search_mode = "always" if web_search else "off"
+    elif source_presentation is not None:
+        # A Smart deck built from an approved outline keeps the outline's setting.
+        resolved_web_search_mode = source_presentation.effective_web_search_mode
+    else:
+        resolved_web_search_mode = "auto"
+
     presentation_id = uuid.uuid4()
     language_to_store = (language or "").strip()
     if file_paths:
@@ -379,7 +396,8 @@ async def create_presentation(
         instructions=instructions,
         include_table_of_contents=include_table_of_contents,
         include_title_slide=include_title_slide,
-        web_search=web_search,
+        web_search=resolved_web_search_mode != "off",
+        web_search_mode=resolved_web_search_mode,
         generation_mode=generation_mode,
         smart_template=normalized_smart_template,
         smart_brand_colors=normalized_smart_brand_colors,
@@ -398,10 +416,10 @@ async def create_presentation(
 
     search_route, actual_search_provider = get_web_search_route()
     logger.info(
-        "Created presentation: id=%s web_search_enabled=%s selected_web_search_provider=%s "
+        "Created presentation: id=%s web_search_mode=%s selected_web_search_provider=%s "
         "web_search_route=%s actual_web_search_provider=%s",
         presentation_id,
-        web_search,
+        resolved_web_search_mode,
         get_selected_web_search_provider().value,
         search_route,
         (
@@ -420,9 +438,9 @@ async def _stream_smart_presentation(
 ) -> StreamingResponse:
     presentation_id = presentation.id
     logger.info(
-        "[smart-workflow] smart_stream_start presentation_id=%s stored_slides=%s files=%s web_search=%s",
+        "[smart-workflow] smart_stream_start presentation_id=%s stored_slides=%s files=%s web_search_mode=%s",
         presentation_id, presentation.n_slides, len(presentation.file_paths or []),
-        presentation.web_search,
+        presentation.effective_web_search_mode,
     )
 
     async def inner():
@@ -509,17 +527,30 @@ async def _stream_smart_presentation(
                 source_parts.append(document_context)
             logger.info("[smart-workflow] smart_documents_loaded presentation_id=%s documents=%s", presentation_id, len(documents_loader.documents))
 
-        if presentation.web_search:
-            yield SSEStatusResponse(status="Searching the web").to_string()
-            search_context = await get_web_search_context(
-                build_web_search_query(
-                    presentation.content,
-                    presentation.instructions,
-                )
+        web_search_mode = presentation.effective_web_search_mode
+        if web_search_mode != "off":
+            if web_search_mode == "auto":
+                yield SSEStatusResponse(
+                    status="Checking whether this topic needs web research"
+                ).to_string()
+            search_plan = await plan_web_search(
+                get_client(config=get_llm_config()),
+                get_model(),
+                web_search_mode,
+                presentation.content,
+                presentation.instructions,
+                disconnect_checker=disconnect_checker,
             )
-            if search_context:
-                source_parts.append(search_context)
-            logger.info("[smart-workflow] smart_web_search_complete presentation_id=%s result_chars=%s", presentation_id, len(search_context or ""))
+            logger.info(
+                "[smart-workflow] smart_web_search_plan presentation_id=%s mode=%s search=%s reason=%s queries=%r",
+                presentation_id, web_search_mode, search_plan.search, search_plan.reason, search_plan.queries,
+            )
+            if search_plan.search and search_plan.queries:
+                yield SSEStatusResponse(status="Searching the web").to_string()
+                search_context = await get_web_search_context(list(search_plan.queries))
+                if search_context:
+                    source_parts.append(search_context)
+                logger.info("[smart-workflow] smart_web_search_complete presentation_id=%s result_chars=%s", presentation_id, len(search_context or ""))
 
         source_context = "\n\n".join(source_parts)
         if len(source_context) > 90_000:

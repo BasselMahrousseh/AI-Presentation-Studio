@@ -157,10 +157,10 @@ async def stream_outlines(
 
     search_route, actual_search_provider = get_web_search_route()
     LOGGER.info(
-        "Starting outline stream: presentation_id=%s web_search_enabled=%s "
+        "Starting outline stream: presentation_id=%s web_search_mode=%s "
         "selected_web_search_provider=%s web_search_route=%s actual_web_search_provider=%s",
         presentation.id,
-        presentation.web_search,
+        presentation.effective_web_search_mode,
         get_selected_web_search_provider().value,
         search_route,
         (
@@ -307,7 +307,7 @@ async def stream_outlines(
             presentation.verbosity,
             presentation.instructions,
             effective_include_title_slide,
-            presentation.web_search,
+            presentation.effective_web_search_mode,
             presentation.include_table_of_contents,
             emit_statuses=True,
             disconnect_checker=request.is_disconnected,

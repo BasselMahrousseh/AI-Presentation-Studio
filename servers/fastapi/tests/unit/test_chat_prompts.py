@@ -41,3 +41,38 @@ def test_smart_presentations_get_the_smart_prompt():
 
     assert "presentation outline AI assistant" not in system_prompt
     assert "saveSlide" in system_prompt
+
+
+def test_factual_content_rules_apply_with_or_without_web_search():
+    from services.chat.prompts import build_system_prompt
+
+    for mode in ("off", "auto", "always"):
+        prompt = build_system_prompt("", "", presentation_type="standard", web_search_mode=mode)
+        assert "# Factual Content Rules:" in prompt
+        assert "Never write placeholder" in prompt
+
+
+def test_web_search_rules_follow_the_mode_and_carry_todays_date():
+    from datetime import datetime
+
+    from services.chat.prompts import build_system_prompt
+
+    off = build_system_prompt("", "", web_search_mode="off")
+    auto = build_system_prompt("", "", presentation_type="smart", web_search_mode="auto")
+    always = build_system_prompt("", "", web_search_mode="always")
+
+    assert "searchWeb" not in off
+    assert "# Web Search (Auto):" in auto and "# Web Search (Always):" not in auto
+    assert "# Web Search (Always):" in always
+    assert f"Today's date is {datetime.now().strftime('%Y-%m-%d')}" in auto
+    assert "{today}" not in always
+
+
+def test_outline_prompt_reads_the_outline_before_editing_it():
+    for mode in ("off", "auto", "always"):
+        system_prompt = build_system_prompt("", "", web_search_mode=mode)
+
+        assert "Before updateOutline or deleteOutline, call getOutline" in system_prompt
+        assert "Never ask the user to paste slide text" in system_prompt
+
+    assert "getOutline" not in build_system_prompt("", "", presentation_type="smart")

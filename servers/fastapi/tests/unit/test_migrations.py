@@ -1046,12 +1046,44 @@ def test_drop_standalone_tables_migration_keeps_decks_and_removes_dead_tables(tm
         assert {"presentations", "slides", "user", "generation_feedback"} <= tables
         assert "template_v2_id" not in chat_columns
         assert kept == ["kept"]
-        assert version == migrations.REVISION_HEAD == migrations.REVISION_DROP_STANDALONE_TABLES
+        assert version == migrations.REVISION_HEAD
 
         command.downgrade(config, migrations.REVISION_SOURCE_PRESENTATION)
         with engine.connect() as connection:
             inspector = inspect(connection)
             assert "template_v2" in inspector.get_table_names()
             assert "template_v2_id" in {c["name"] for c in inspector.get_columns("chat_history_messages")}
+    finally:
+        engine.dispose()
+
+
+def test_web_search_mode_migration_adds_nullable_column_and_keeps_legacy_flag(tmp_path):
+    database_url = f"sqlite:///{tmp_path / 'web_search_mode.db'}"
+    config = _alembic_config(database_url)
+    command.upgrade(config, migrations.REVISION_DROP_STANDALONE_TABLES)
+
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO presentations (id, content, n_slides, language, version, "
+                    "created_at, updated_at, generation_mode, is_favorite, web_search) VALUES "
+                    "('22222222222222222222222222222222', 'old deck', 1, 'en', 'v2-standard', "
+                    "'2026-01-01 00:00:00', '2026-01-01 00:00:00', 'smart', 0, 1)"
+                )
+            )
+        command.upgrade(config, migrations.REVISION_WEB_SEARCH_MODE)
+        with engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT web_search, web_search_mode FROM presentations")
+            ).one()
+        # Old rows keep NULL, so effective_web_search_mode still follows web_search.
+        assert tuple(row) == (1, None)
+
+        command.downgrade(config, migrations.REVISION_DROP_STANDALONE_TABLES)
+        with engine.connect() as connection:
+            columns = {c["name"] for c in inspect(connection).get_columns("presentations")}
+        assert "web_search_mode" not in columns
     finally:
         engine.dispose()

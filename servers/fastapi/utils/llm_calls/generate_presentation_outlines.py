@@ -18,7 +18,7 @@ from llmai.shared import (
 from models.presentation_outline_model import PresentationOutlineModel
 from constants.presentation import MAX_NUMBER_OF_SLIDES, MAX_OUTLINE_CONTENT_WORDS
 from utils.get_dynamic_models import get_presentation_outline_model_with_n_slides
-from utils.llm_calls.generate_web_search_query import generate_web_search_query
+from utils.llm_calls.plan_web_search import plan_web_search
 from utils.llm_client_error_handler import handle_llm_client_exceptions
 from utils.llm_config import get_llm_config
 from utils.llm_provider import get_model
@@ -31,11 +31,11 @@ from utils.llm_utils import (
 )
 from utils.schema_utils import prepare_schema_for_validation
 from utils.web_search import (
-    build_web_search_query,
+    WebSearchMode,
     get_web_search_route,
     get_selected_web_search_provider,
     get_web_search_context,
-    should_expose_external_web_search_tool,
+    is_web_search_configured,
     should_use_native_web_search,
 )
 
@@ -289,7 +289,7 @@ async def generate_ppt_outline(
     verbosity: Optional[str] = None,
     instructions: Optional[str] = None,
     include_title_slide: bool = True,
-    web_search: bool = False,
+    web_search_mode: WebSearchMode = "off",
     include_table_of_contents: bool = False,
     emit_statuses: bool = False,
     disconnect_checker: Optional[DisconnectChecker] = None,
@@ -303,8 +303,8 @@ async def generate_ppt_outline(
         else PresentationOutlineModel
     )
 
-    use_search_tool = web_search and should_use_native_web_search()
-    use_external_search = web_search and should_expose_external_web_search_tool()
+    # Model-native search (no Azure deployment has it) only runs when explicitly "always".
+    use_search_tool = web_search_mode == "always" and should_use_native_web_search()
     client = get_client(
         config=get_llm_config()
     )
@@ -317,69 +317,44 @@ async def generate_ppt_outline(
     actual_provider_display_name = _web_search_provider_display_name(
         actual_provider_name
     )
-    if not web_search:
-        LOGGER.info(
-            "Outline web search routing: enabled=false selected_provider=%s route=%s actual_provider=%s",
-            get_selected_web_search_provider().value,
-            route_mode,
-            actual_provider_name,
-        )
-    elif use_search_tool:
-        LOGGER.info(
-            "Outline web search routing: enabled=true route=native selected_provider=%s actual_provider=model-native model=%s",
-            get_selected_web_search_provider().value,
-            model,
-        )
-    elif use_external_search:
-        LOGGER.info(
-            "Outline web search routing: enabled=true route=external selected_provider=%s actual_provider=%s",
-            get_selected_web_search_provider().value,
-            actual_provider_name,
-        )
-    else:
-        LOGGER.warning(
-            "Outline web search requested but unavailable: selected_provider=%s model=%s",
-            get_selected_web_search_provider().value,
-            model,
-        )
 
-    if use_external_search:
+    search_plan = None
+    if not use_search_tool and web_search_mode != "off" and is_web_search_configured():
         if emit_statuses:
-            yield OutlineGenerationStatus("Analyzing your topic for web research")
-        fallback_query = build_web_search_query(content, instructions)
-        search_query = fallback_query
-        try:
-            generated_query = await generate_web_search_query(
-                client,
-                model,
-                content,
-                instructions,
-                disconnect_checker=disconnect_checker,
+            yield OutlineGenerationStatus(
+                "Checking whether this topic needs web research"
+                if web_search_mode == "auto"
+                else "Analyzing your topic for web research"
             )
-            if generated_query:
-                search_query = generated_query
-                LOGGER.info("Generated outline web search query: query=%r", search_query)
-            else:
-                LOGGER.info(
-                    "Outline query generation returned no query; using fallback query=%r",
-                    fallback_query,
-                )
-        except Exception:
-            LOGGER.warning(
-                "Outline web search query generation failed; using fallback query=%r",
-                fallback_query,
-                exc_info=True,
-            )
+        search_plan = await plan_web_search(
+            client,
+            model,
+            web_search_mode,
+            content,
+            instructions,
+            disconnect_checker=disconnect_checker,
+        )
+    LOGGER.info(
+        "Outline web search: mode=%s selected_provider=%s route=%s actual_provider=%s "
+        "native=%s search=%s reason=%s",
+        web_search_mode,
+        get_selected_web_search_provider().value,
+        route_mode,
+        actual_provider_name,
+        use_search_tool,
+        bool(search_plan and search_plan.search),
+        search_plan.reason if search_plan else ("native" if use_search_tool else "off-or-unconfigured"),
+    )
 
-        search_context = ""
-        if search_query:
-            if emit_statuses:
-                yield OutlineGenerationStatus(
-                    f"Searching with {actual_provider_display_name}: {search_query}"
-                )
-            search_context = await get_web_search_context(search_query)
-            if emit_statuses:
-                yield OutlineGenerationStatus("Web research complete")
+    if search_plan and search_plan.search and search_plan.queries:
+        if emit_statuses:
+            yield OutlineGenerationStatus(
+                f"Searching with {actual_provider_display_name}: "
+                + "; ".join(search_plan.queries)
+            )
+        search_context = await get_web_search_context(list(search_plan.queries))
+        if emit_statuses:
+            yield OutlineGenerationStatus("Web research complete")
         if search_context:
             additional_context = "\n\n".join(
                 part for part in (additional_context, search_context) if part
