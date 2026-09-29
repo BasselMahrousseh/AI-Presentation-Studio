@@ -1,22 +1,47 @@
 import os
-<<<<<<< HEAD
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit, parse_qsl
-=======
-from utils.get_env import get_app_data_directory_env, get_database_url_env
 from urllib.parse import urlsplit
-from sqlalchemy.engine import URL, make_url
->>>>>>> 2d219ccccb96b28718beb1e2bb6ee27ff43d9761
 import ssl
 
+from sqlalchemy.engine import URL, make_url
+
 from utils.get_env import get_app_data_directory_env, get_database_url_env
+
+
+def _persistence_mode() -> str:
+    mode = os.getenv("PERSISTENCE_MODE", "").strip().lower()
+    adapter = os.getenv("DATABASE_ADAPTER", "").strip().lower()
+    if mode not in {"", "sqlite", "oracle"}:
+        raise ValueError("Studio PERSISTENCE_MODE must be sqlite or oracle")
+    if adapter not in {"", "sqlite", "oracle"}:
+        raise ValueError("Studio DATABASE_ADAPTER must be sqlite or oracle")
+    if mode == "oracle" or adapter == "oracle":
+        return "oracle"
+    return mode
 
 
 def database_is_configured() -> bool:
     return bool(
-        os.getenv("PERSISTENCE_MODE", "").strip().lower() == "oracle"
+        _persistence_mode() == "oracle"
         or (get_database_url_env() or "").strip()
         or (get_app_data_directory_env() or "").strip()
+    )
+
+
+def build_oracle_dsn() -> str:
+    """Easy Connect / descriptor for ORACLE_DSN, or HOST + PORT + SERVICE_NAME."""
+    explicit = (os.getenv("ORACLE_DSN") or "").strip()
+    if explicit:
+        return explicit
+    host = (os.getenv("ORACLE_HOST") or "").strip()
+    service = (os.getenv("ORACLE_SERVICE_NAME") or "").strip()
+    if not host or not service:
+        return ""
+    port = (os.getenv("ORACLE_PORT") or "1521").strip()
+    protocol = (os.getenv("ORACLE_PROTOCOL") or "tcp").strip().lower() or "tcp"
+    return (
+        f"(DESCRIPTION=(ADDRESS=(PROTOCOL={protocol})(HOST={host})(PORT={port}))"
+        f"(CONNECT_DATA=(SERVICE_NAME={service})))"
     )
 
 
@@ -66,9 +91,15 @@ def get_pool_kwargs() -> dict:
     For SQLite the pool settings are not applicable and an empty dict is
     returned, since SQLite uses ``StaticPool`` / ``NullPool`` by default.
     """
+    pool_size = _int_env("DB_POOL_SIZE", 5)
+    max_overflow = _int_env("DB_MAX_OVERFLOW", 10)
+    if (os.getenv("ORACLE_POOL_MIN") or "").strip():
+        pool_size = _int_env("ORACLE_POOL_MIN", pool_size)
+    if (os.getenv("ORACLE_POOL_MAX") or "").strip():
+        max_overflow = max(0, _int_env("ORACLE_POOL_MAX", pool_size) - pool_size)
     return {
-        "pool_size": _int_env("DB_POOL_SIZE", 5),
-        "max_overflow": _int_env("DB_MAX_OVERFLOW", 10),
+        "pool_size": pool_size,
+        "max_overflow": max_overflow,
         "pool_timeout": _int_env("DB_POOL_TIMEOUT", 30),
         "pool_recycle": _int_env("DB_POOL_RECYCLE", 1800),
         "pool_pre_ping": os.getenv("DB_POOL_PRE_PING", "true").lower()
@@ -77,35 +108,34 @@ def get_pool_kwargs() -> dict:
 
 
 def get_database_url_and_connect_args() -> tuple[str, dict]:
-<<<<<<< HEAD
-    app_data = (get_app_data_directory_env() or "").strip()
-    database_url = (get_database_url_env() or "").strip()
-    if not database_url:
-        if not app_data:
-            app_data = str(Path(__file__).resolve().parents[1] / "app_data")
-        database_url = "sqlite:///" + os.path.join(app_data, "fastapi.db").replace("\\", "/")
-
-=======
-    mode = os.getenv("PERSISTENCE_MODE", "").strip().lower()
-    if mode not in {"", "sqlite", "oracle"}:
-        raise ValueError("Studio PERSISTENCE_MODE must be sqlite or oracle")
+    mode = _persistence_mode()
     explicit = (get_database_url_env() or "").strip()
     # A shared development profile can select Workspace Oracle while explicitly
     # keeping Studio on SQLite. The service-specific URL is authoritative.
     if mode == "oracle" and not explicit:
-        missing = [key for key in ("ORACLE_USER", "ORACLE_PASSWORD", "ORACLE_DSN") if not os.getenv(key, "").strip()]
+        dsn = build_oracle_dsn()
+        missing = [key for key in ("ORACLE_USER", "ORACLE_PASSWORD") if not os.getenv(key, "").strip()]
+        if not dsn:
+            missing.append("ORACLE_DSN")
         if missing:
             raise ValueError("Studio Oracle configuration is incomplete: " + ", ".join(missing))
         # Passing the DSN as a driver keyword supports Easy Connect (service
         # names), TNS aliases and full descriptors without unsafe URL assembly.
-        url = URL.create("oracle+oracledb_async", username=os.environ["ORACLE_USER"],
-                         password=os.environ["ORACLE_PASSWORD"], query={"dsn": os.environ["ORACLE_DSN"]})
+        url = URL.create(
+            "oracle+oracledb_async",
+            username=os.environ["ORACLE_USER"],
+            password=os.environ["ORACLE_PASSWORD"],
+            query={"dsn": dsn},
+        )
         return url.render_as_string(hide_password=False), {}
     if not database_is_configured():
         return "sqlite+aiosqlite:///:memory:", {"check_same_thread": False}
     app_data = (get_app_data_directory_env() or "").strip()
-    database_url = explicit or "sqlite:///" + os.path.join(app_data, "fastapi.db").replace("\\", "/")
->>>>>>> 2d219ccccb96b28718beb1e2bb6ee27ff43d9761
+    database_url = explicit or ""
+    if not database_url:
+        if not app_data:
+            app_data = str(Path(__file__).resolve().parents[1] / "app_data")
+        database_url = "sqlite:///" + os.path.join(app_data, "fastapi.db").replace("\\", "/")
     _ensure_sqlite_parent_dir(database_url)
     url = make_url(database_url)
     drivers = {"sqlite": "sqlite+aiosqlite", "postgresql": "postgresql+asyncpg",

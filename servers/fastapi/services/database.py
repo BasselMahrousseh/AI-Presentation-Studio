@@ -24,14 +24,8 @@ from utils.db_utils import get_database_url_and_connect_args, get_pool_kwargs
 database_url, connect_args = get_database_url_and_connect_args()
 _database_dialect = make_url(database_url).get_backend_name()
 
-<<<<<<< HEAD
 # SQLite uses a file lock and ignores server pool settings.
-_pool_kwargs = {} if "sqlite" in database_url else get_pool_kwargs()
-=======
-# Apply connection-pool settings for server databases (Oracle, PostgreSQL, MySQL).
-# SQLite uses a file-lock model and ignores pool configuration, so we skip it.
-_pool_kwargs = get_pool_kwargs() if _database_dialect != "sqlite" else {}
->>>>>>> 2d219ccccb96b28718beb1e2bb6ee27ff43d9761
+_pool_kwargs = {} if _database_dialect == "sqlite" else get_pool_kwargs()
 
 sql_engine: AsyncEngine = create_async_engine(
     database_url, connect_args=connect_args, hide_parameters=True, **_pool_kwargs
@@ -96,7 +90,6 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-# Validate provisioned Oracle; allow model-based setup for development dialects.
 async def create_db_and_tables():
     """Create any missing tables from the current models. Startup does not run Alembic."""
     async with sql_engine.begin() as conn:
@@ -117,10 +110,5 @@ async def create_db_and_tables():
 
 
 async def dispose_engines():
-    """Dispose all engine connection pools.
-
-    Call this during application shutdown (e.g. in a FastAPI ``shutdown``
-    event or lifespan context) to release every connection back to the
-    database and prevent stale / leaked connections.
-    """
+    """Release every pooled connection during application shutdown."""
     await sql_engine.dispose()

@@ -63,27 +63,8 @@ REVISION_HEAD = REVISION_ORACLE_BASELINE
 
 
 async def migrate_database_on_startup() -> None:
-<<<<<<< HEAD
     """Schema is created from the SQLModel tables. Startup does not run Alembic."""
     return
-=======
-    if get_migrate_database_on_startup_env() not in ["true", "True"]:
-        return
-    if command is None or Config is None or ScriptDirectory is None:
-        print(
-            "Alembic is not available; skipping database migrations. "
-            "Database startup validation still applies.",
-            flush=True,
-        )
-        return
-
-    try:
-        await asyncio.to_thread(_run_migrations)
-        print("Migrations run successfully", flush=True)
-    except Exception as exc:
-        print(f"Error running migrations: {exc}", flush=True)
-        raise
->>>>>>> 2d219ccccb96b28718beb1e2bb6ee27ff43d9761
 
 
 def _run_migrations() -> None:
