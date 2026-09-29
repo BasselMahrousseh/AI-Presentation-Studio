@@ -26,6 +26,13 @@ RETIRED_TABLES = {
 }
 
 
+def reflected_names(inspector, method):
+    names = getattr(inspector, method)()
+    if inspector.bind.dialect.name == "oracle":
+        return [str(inspector.bind.dialect.denormalize_name(name)) for name in names]
+    return names
+
+
 def find_name(names, expected: str) -> str | None:
     matches = [name for name in names if name.casefold() == expected.casefold()]
     if len(matches) > 1:
@@ -45,10 +52,10 @@ def validate_identifier_case(inspector, expected: str, actual: str) -> None:
 
 
 def version_table_name(inspector) -> str | None:
-    tables = inspector.get_table_names()
+    tables = reflected_names(inspector, "get_table_names")
     old = find_name(tables, LEGACY_VERSION_TABLE)
     new = find_name(tables, SCHEMA_VERSION_TABLE)
-    views = inspector.get_view_names()
+    views = reflected_names(inspector, "get_view_names")
     if any(find_name(views, name) for name in (LEGACY_VERSION_TABLE, SCHEMA_VERSION_TABLE)):
         raise RuntimeError("A view conflicts with the Studio migration tracker")
     if old and new:
@@ -65,7 +72,7 @@ def version_table(name: str) -> Table:
 
 def canonical_schema_tables(inspector) -> dict[str, str]:
     """Return canonical tables, refusing ambiguous or mixed active schemas."""
-    names = inspector.get_table_names()
+    names = reflected_names(inspector, "get_table_names")
     canonical = {
         new: found for new in TABLE_RENAMES.values()
         if (found := find_name(names, new)) is not None
@@ -83,14 +90,14 @@ def canonical_schema_tables(inspector) -> dict[str, str]:
 def validate_create_all_schema(connection, metadata) -> None:
     """Never hide legacy data behind a new empty set of ORM tables."""
     inspector = inspect(connection)
-    names = inspector.get_table_names()
+    names = reflected_names(inspector, "get_table_names")
     canonical = canonical_schema_tables(inspector)
     if any(find_name(names, old) for old in {*TABLE_RENAMES, *RETIRED_TABLES}) or (
         version_table_name(inspector) == LEGACY_VERSION_TABLE
     ):
         raise RuntimeError("Legacy Studio schema found; enable MIGRATE_DATABASE_ON_STARTUP or run Alembic upgrade head")
     for expected in TABLE_RENAMES.values():
-        if find_name(inspector.get_view_names(), expected):
+        if find_name(reflected_names(inspector, "get_view_names"), expected):
             raise RuntimeError(f"A view conflicts with Studio table {expected}")
     for expected, actual in canonical.items():
         columns = {column["name"] for column in inspector.get_columns(actual)}

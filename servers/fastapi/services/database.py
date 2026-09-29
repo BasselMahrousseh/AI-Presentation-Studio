@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
 )
 from sqlalchemy import event
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, with_loader_criteria
 from sqlmodel import SQLModel
 
@@ -21,16 +22,23 @@ from utils.db_utils import get_database_url_and_connect_args, get_pool_kwargs
 
 
 database_url, connect_args = get_database_url_and_connect_args()
+_database_dialect = make_url(database_url).get_backend_name()
 
+<<<<<<< HEAD
 # SQLite uses a file lock and ignores server pool settings.
 _pool_kwargs = {} if "sqlite" in database_url else get_pool_kwargs()
+=======
+# Apply connection-pool settings for server databases (Oracle, PostgreSQL, MySQL).
+# SQLite uses a file-lock model and ignores pool configuration, so we skip it.
+_pool_kwargs = get_pool_kwargs() if _database_dialect != "sqlite" else {}
+>>>>>>> 2d219ccccb96b28718beb1e2bb6ee27ff43d9761
 
 sql_engine: AsyncEngine = create_async_engine(
-    database_url, connect_args=connect_args, **_pool_kwargs
+    database_url, connect_args=connect_args, hide_parameters=True, **_pool_kwargs
 )
 
 
-if "sqlite" in database_url:
+if _database_dialect == "sqlite":
     @event.listens_for(sql_engine.sync_engine, "connect")
     def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
         cursor = dbapi_connection.cursor()
@@ -88,7 +96,7 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-# Create Database and Tables
+# Validate provisioned Oracle; allow model-based setup for development dialects.
 async def create_db_and_tables():
     """Create any missing tables from the current models. Startup does not run Alembic."""
     async with sql_engine.begin() as conn:

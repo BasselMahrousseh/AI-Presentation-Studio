@@ -124,6 +124,10 @@ class ImageGenerationService:
                 if image_path.startswith("http"):
                     return image_path
                 elif os.path.exists(image_path):
+                    from services.asset_storage import get_asset_storage
+                    storage = get_asset_storage()
+                    if storage.is_s3:
+                        image_path = await asyncio.to_thread(storage.publish_existing, image_path)
                     return ImageAsset(
                         path=image_path,
                         is_uploaded=False,

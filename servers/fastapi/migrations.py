@@ -5,7 +5,8 @@ from sqlalchemy import create_engine, func, inspect, select
 # The migration scripts live in servers/fastapi/alembic/. Running the server
 # from that directory puts this folder on sys.path ahead of the installed
 # Alembic package, so "from alembic import command" fails. Migrations stay
-# off unless MIGRATE_DATABASE_ON_STARTUP=true; tables are created by SQLModel.
+# off unless MIGRATE_DATABASE_ON_STARTUP=true. Oracle always requires a validated
+# migration baseline; development dialects can create tables from SQLModel.
 try:
     from alembic import command
     from alembic.config import Config
@@ -57,12 +58,32 @@ REVISION_SOURCE_PRESENTATION = "c4e6a8b0d2f3"
 REVISION_DROP_STANDALONE_TABLES = "d5f7b9c1e3a4"
 REVISION_WEB_SEARCH_MODE = "e7b1d3f5a9c2"
 REVISION_WORKSPACE_TABLE_NAMES = "f8c2d4e6a0b3"
-REVISION_HEAD = REVISION_WORKSPACE_TABLE_NAMES
+REVISION_ORACLE_BASELINE = "a9b2c4d6e8f0"
+REVISION_HEAD = REVISION_ORACLE_BASELINE
 
 
 async def migrate_database_on_startup() -> None:
+<<<<<<< HEAD
     """Schema is created from the SQLModel tables. Startup does not run Alembic."""
     return
+=======
+    if get_migrate_database_on_startup_env() not in ["true", "True"]:
+        return
+    if command is None or Config is None or ScriptDirectory is None:
+        print(
+            "Alembic is not available; skipping database migrations. "
+            "Database startup validation still applies.",
+            flush=True,
+        )
+        return
+
+    try:
+        await asyncio.to_thread(_run_migrations)
+        print("Migrations run successfully", flush=True)
+    except Exception as exc:
+        print(f"Error running migrations: {exc}", flush=True)
+        raise
+>>>>>>> 2d219ccccb96b28718beb1e2bb6ee27ff43d9761
 
 
 def _run_migrations() -> None:
@@ -77,7 +98,12 @@ def _run_migrations() -> None:
     # Alembic uses synchronous engines; strip async driver prefixes.
     database_url = to_sync_sqlalchemy_url(database_url)
 
-    config.set_main_option("sqlalchemy.url", database_url)
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+    if database_url.startswith("oracle"):
+        # Oracle has never supported the old migration chain. Its environment
+        # guard uses the frozen baseline and never guesses a legacy revision.
+        command.upgrade(config, "head")
+        return
     _repair_orphan_alembic_revision(config, database_url)
     _stamp_legacy_database_if_needed(config, database_url)
 
@@ -104,7 +130,7 @@ def _repair_orphan_alembic_revision(config: Config, database_url: str) -> None:
         return
     head = heads[0]
 
-    engine = create_engine(database_url)
+    engine = create_engine(database_url, hide_parameters=True)
     try:
         with engine.begin() as connection:
             inspector = inspect(connection)
@@ -323,7 +349,7 @@ def _stamp_legacy_database_if_needed(config: Config, database_url: str) -> None:
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
     head = heads[0] if len(heads) == 1 else script.get_base()
-    engine = create_engine(database_url)
+    engine = create_engine(database_url, hide_parameters=True)
     try:
         with engine.connect() as connection:
             inspector = inspect(connection)
@@ -362,7 +388,7 @@ def _is_unversioned_populated_database(database_url: str) -> bool:
         "presenton_cloud_provider",
         "generation_feedback",
     }
-    engine = create_engine(database_url)
+    engine = create_engine(database_url, hide_parameters=True)
     try:
         with engine.connect() as connection:
             inspector = inspect(connection)

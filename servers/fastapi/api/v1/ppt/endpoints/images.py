@@ -1,4 +1,5 @@
 from io import BytesIO
+import asyncio
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +9,7 @@ from models.image_prompt import ImagePrompt
 from models.sql.image_asset import ImageAsset
 from services.database import get_async_session
 from services.image_generation_service import ImageGenerationService
+from services.asset_storage import get_asset_storage
 from utils.asset_directory_utils import (
     filesystem_image_path_to_app_data_url,
     get_images_directory,
@@ -135,6 +137,10 @@ async def upload_image(
         with open(image_path, "wb") as f:
             f.write(content)
 
+        storage = get_asset_storage()
+        if storage.is_s3:
+            image_path = await asyncio.to_thread(storage.publish_existing, image_path)
+
         image_asset = ImageAsset(path=image_path, is_uploaded=True)
 
         sql_session.add(image_asset)
@@ -174,10 +180,13 @@ async def delete_uploaded_image_by_id(
         if not image:
             raise HTTPException(status_code=404, detail="Image not found")
 
-        os.remove(image.path)
+        storage = get_asset_storage()
+        await asyncio.to_thread(storage.delete, storage.reference_for_path(image.path))
 
         await sql_session.delete(image)
         await sql_session.commit()
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete image: {str(e)}")
