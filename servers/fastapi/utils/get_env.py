@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 DEFAULT_PRESENTON_OAUTH_ISSUER = "https://api.presenton.ai"
 DEFAULT_PRESENTON_OAUTH_CLIENT_ID = "ptc_presenton_open_source"
@@ -15,7 +16,10 @@ def get_database_url_env():
 
 
 def get_app_data_directory_env():
-    return os.getenv("APP_DATA_DIRECTORY")
+    # Durable local storage must never live inside TempFileService's cleanup root.
+    return (os.getenv("APP_DATA_DIRECTORY") or "").strip() or str(
+        Path(__file__).resolve().parents[1] / "app_data"
+    )
 
 
 def get_fastapi_public_base_url() -> str | None:

@@ -52,6 +52,8 @@ def _get_url() -> str:
 def run_migrations_offline() -> None:
     """Generate SQL script without connecting to the database."""
     url = _get_url()
+    if url.startswith("oracle"):
+        raise RuntimeError("Use python -m dbschema.oracle_v1 for the frozen Oracle SQL baseline; offline historical migrations do not support Oracle")
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -73,6 +75,7 @@ def run_migrations_online() -> None:
         configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        hide_parameters=True,
     )
     try:
         with connectable.begin() as connection:
@@ -83,6 +86,18 @@ def run_migrations_online() -> None:
             # their existing tracker without bootstrapping or creating tables.
             readonly = context.get_context().opts.get("dont_mutate", False)
             existing = version_table_name(inspect(connection))
+            if connection.dialect.name == "oracle" and not readonly:
+                from dbschema.oracle_bootstrap import prepare_upgrade, validate_runtime_schema
+                from dbschema.oracle_v1 import REVISION
+                opts = context.get_context().opts
+                operation = getattr(opts.get("fn"), "__name__", "")
+                destination = opts.get("destination_rev")
+                if operation == "upgrade" and destination in {"head", "heads", REVISION}:
+                    prepare_upgrade(connection)
+                elif operation == "downgrade" and destination == REVISION:
+                    validate_runtime_schema(connection)
+                else:
+                    raise RuntimeError("Oracle supports upgrade head and inspection; historical downgrade/stamp cannot bypass its baseline")
             if readonly:
                 options["version_table"] = existing or SCHEMA_VERSION_TABLE
             else:

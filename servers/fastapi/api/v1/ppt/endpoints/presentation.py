@@ -138,7 +138,7 @@ async def get_all_presentations(
     # that the Workspace can no longer open; they stay in the database untouched.
     query = query.where(PresentationModel.generation_mode == "smart")
     if favorites_only:
-        query = query.where(PresentationModel.is_favorite.is_(True))
+        query = query.where(PresentationModel.is_favorite == True)  # noqa: E712
     if include_slides and include_unfinished:
         query = query.where(
             or_(
@@ -270,13 +270,14 @@ async def duplicate_presentation(
 
 
 def _existing_source_file_paths(file_paths: Optional[List[str]]) -> List[str]:
-    """Resolve stored source file paths, dropping any that no longer exist
-    (TempFileService wipes the temp dir on every backend start)."""
+    """Retain durable references and tolerate only missing legacy temp sources."""
     existing: List[str] = []
     for file_path in file_paths or []:
         try:
-            existing.append(TEMP_FILE_SERVICE.resolve_temp_path(file_path, must_exist=True))
-        except HTTPException:
+            existing.extend(TEMP_FILE_SERVICE.validate_file_references([file_path]))
+        except HTTPException as exc:
+            if exc.status_code == 503 or file_path.startswith("/app_data/"):
+                raise
             logger.warning("[smart-workflow] source file unavailable, skipping: %s", file_path)
     return existing
 
@@ -368,7 +369,7 @@ async def create_presentation(
     presentation_id = uuid.uuid4()
     language_to_store = (language or "").strip()
     if file_paths:
-        validated_file_paths = TEMP_FILE_SERVICE.resolve_existing_temp_paths(file_paths)
+        validated_file_paths = await asyncio.to_thread(TEMP_FILE_SERVICE.validate_file_references, file_paths)
     elif source_presentation is not None and source_presentation.file_paths:
         # A deck built from an approved outline (the outline page's Smart/e&
         # buttons) must see the same source documents the outline was grounded
@@ -376,8 +377,8 @@ async def create_presentation(
         # lost. Inherited files may have been removed since (the temp dir is
         # wiped on every backend start), so skip missing ones instead of
         # failing the whole deck with a 404.
-        validated_file_paths = _existing_source_file_paths(
-            source_presentation.file_paths
+        validated_file_paths = await asyncio.to_thread(
+            _existing_source_file_paths, source_presentation.file_paths
         ) or None
     else:
         validated_file_paths = None
@@ -503,14 +504,14 @@ async def _stream_smart_presentation(
         # start - a restart between creating this deck and streaming it (or
         # resuming an interrupted run) must degrade to outline-only generation,
         # not a 404 mid-stream.
-        source_file_paths = _existing_source_file_paths(presentation.file_paths)
+        source_file_paths = await asyncio.to_thread(_existing_source_file_paths, presentation.file_paths)
         if presentation.file_paths and len(source_file_paths) < len(presentation.file_paths):
             yield SSEStatusResponse(
                 status="Some source documents are no longer available"
             ).to_string()
         if source_file_paths:
             yield SSEStatusResponse(status="Reading source documents").to_string()
-            documents_loader = DocumentsLoader(
+            documents_loader = await asyncio.to_thread(DocumentsLoader,
                 file_paths=source_file_paths,
                 presentation_language=presentation.language,
             )

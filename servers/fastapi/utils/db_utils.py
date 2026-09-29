@@ -1,12 +1,14 @@
 import os
 from utils.get_env import get_app_data_directory_env, get_database_url_env
-from urllib.parse import urlsplit, urlunsplit, parse_qsl
+from urllib.parse import urlsplit
+from sqlalchemy.engine import URL, make_url
 import ssl
 
 
 def database_is_configured() -> bool:
     return bool(
-        (get_database_url_env() or "").strip()
+        os.getenv("PERSISTENCE_MODE", "").strip().lower() == "oracle"
+        or (get_database_url_env() or "").strip()
         or (get_app_data_directory_env() or "").strip()
     )
 
@@ -68,53 +70,41 @@ def get_pool_kwargs() -> dict:
 
 
 def get_database_url_and_connect_args() -> tuple[str, dict]:
+    mode = os.getenv("PERSISTENCE_MODE", "").strip().lower()
+    if mode not in {"", "sqlite", "oracle"}:
+        raise ValueError("Studio PERSISTENCE_MODE must be sqlite or oracle")
+    explicit = (get_database_url_env() or "").strip()
+    # A shared development profile can select Workspace Oracle while explicitly
+    # keeping Studio on SQLite. The service-specific URL is authoritative.
+    if mode == "oracle" and not explicit:
+        missing = [key for key in ("ORACLE_USER", "ORACLE_PASSWORD", "ORACLE_DSN") if not os.getenv(key, "").strip()]
+        if missing:
+            raise ValueError("Studio Oracle configuration is incomplete: " + ", ".join(missing))
+        # Passing the DSN as a driver keyword supports Easy Connect (service
+        # names), TNS aliases and full descriptors without unsafe URL assembly.
+        url = URL.create("oracle+oracledb_async", username=os.environ["ORACLE_USER"],
+                         password=os.environ["ORACLE_PASSWORD"], query={"dsn": os.environ["ORACLE_DSN"]})
+        return url.render_as_string(hide_password=False), {}
     if not database_is_configured():
         return "sqlite+aiosqlite:///:memory:", {"check_same_thread": False}
-
     app_data = (get_app_data_directory_env() or "").strip()
-    database_url = (get_database_url_env() or "").strip() or "sqlite:///" + os.path.join(
-        app_data, "fastapi.db"
-    ).replace("\\", "/")
-
+    database_url = explicit or "sqlite:///" + os.path.join(app_data, "fastapi.db").replace("\\", "/")
     _ensure_sqlite_parent_dir(database_url)
-
-    if database_url.startswith("sqlite://"):
-        database_url = database_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
-    elif database_url.startswith("postgresql://"):
-        database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    elif database_url.startswith("mysql://"):
-        database_url = database_url.replace("mysql://", "mysql+aiomysql://", 1)
-    else:
-        database_url = database_url
-
-    connect_args = {}
-    if "sqlite" in database_url:
-        connect_args["check_same_thread"] = False
-
-    try:
-        split_result = urlsplit(database_url)
-        if split_result.query:
-            query_params = parse_qsl(split_result.query, keep_blank_values=True)
-            driver_scheme = split_result.scheme
-            for k, v in query_params:
-                key_lower = k.lower()
-                if key_lower == "sslmode" and "postgresql+asyncpg" in driver_scheme:
-                    if v.lower() != "disable" and "sqlite" not in database_url:
-                        connect_args["ssl"] = ssl.create_default_context()
-
-            database_url = urlunsplit(
-                (
-                    split_result.scheme,
-                    split_result.netloc,
-                    split_result.path,
-                    "",
-                    split_result.fragment,
-                )
-            )
-    except Exception:
-        pass
-
-    return database_url, connect_args
+    url = make_url(database_url)
+    drivers = {"sqlite": "sqlite+aiosqlite", "postgresql": "postgresql+asyncpg",
+               "postgres": "postgresql+asyncpg", "mysql": "mysql+aiomysql",
+               "oracle": "oracle+oracledb_async", "oracle+oracledb": "oracle+oracledb_async"}
+    url = url.set(drivername=drivers.get(url.drivername, url.drivername))
+    if url.get_backend_name() == "oracle" and url.drivername != "oracle+oracledb_async":
+        raise ValueError("Studio Oracle runtime requires the python-oracledb async thin driver")
+    connect_args = {"check_same_thread": False} if url.get_backend_name() == "sqlite" else {}
+    if url.drivername == "postgresql+asyncpg" and "sslmode" in url.query:
+        sslmode = url.query["sslmode"]
+        if sslmode != "disable":
+            connect_args["ssl"] = ssl.create_default_context()
+        url = url.difference_update_query(["sslmode"])
+    # Preserve every other query option, notably Oracle service_name/dsn.
+    return url.render_as_string(hide_password=False), connect_args
 
 
 def to_sync_sqlalchemy_url(database_url: str) -> str:
@@ -126,6 +116,8 @@ def to_sync_sqlalchemy_url(database_url: str) -> str:
     MySQL URLs use ``mysql+pymysql://`` so Alembic does not require ``mysqlclient``
     (the default for plain ``mysql://``); PyMySQL is already pulled in by aiomysql.
     """
+    if database_url.startswith("oracle+oracledb_async://"):
+        return database_url.replace("oracle+oracledb_async://", "oracle+oracledb://", 1)
     if database_url.startswith("sqlite+aiosqlite:///"):
         return "sqlite:///" + database_url[len("sqlite+aiosqlite:///") :]
     if database_url.startswith("postgresql+asyncpg://"):

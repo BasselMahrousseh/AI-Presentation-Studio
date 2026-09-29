@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse
 
 from api.lifespan import app_lifespan
+from api.asset_files import StoredAssetFiles
 from api.middlewares import SessionAuthMiddleware
 from api.v1.admin.router import API_V1_ADMIN_ROUTER
 from api.v1.ppt.router import API_V1_PPT_ROUTER
@@ -65,11 +66,11 @@ app = FastAPI(lifespan=app_lifespan)
 app.include_router(API_V1_PPT_ROUTER)
 app.include_router(API_V1_ADMIN_ROUTER)
 
-# Mount app_data and static assets (direct FastAPI access; nginx also serves /static in Docker).
+# App-data bytes come from the selected durable store after ownership checks.
 app_data_dir = get_app_data_directory_env()
 if app_data_dir:
     os.makedirs(app_data_dir, exist_ok=True)
-    app.mount("/app_data", StaticFiles(directory=app_data_dir), name="app_data")
+    app.mount("/app_data", StoredAssetFiles(directory=app_data_dir), name="app_data")
 
 static_dir = get_resource_path("static")
 if os.path.isdir(static_dir):

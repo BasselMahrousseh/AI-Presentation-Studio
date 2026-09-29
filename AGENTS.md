@@ -20,8 +20,13 @@ checkout layout and resolve the documented prerequisites before execution.
 - Apply [CLAUDE.md](CLAUDE.md) for generation, ownership and export constraints.
 - Studio is integrated into Workspace. All its application and migration-tracker
   tables use `GENAI_WORKSPACE_`; do not introduce `GENAI_PRESENT_` here.
-- Studio owns a separate database. Do not merge it into the Workspace Oracle
-  schema or treat a shared prefix as a shared ORM/transaction.
+- Studio owns its schema and migrations. On-prem uses a separate Studio schema
+  in the same Oracle platform/PDB; never merge it into the Workspace schema or
+  treat a shared prefix as a shared ORM/transaction. Use the central Oracle
+  installation package linked from the database guide for both services.
+- Maintain actual direct-launch settings in `servers/fastapi/.env`; integrated
+  development uses the deliberately selected Workspace profile. Use the shared
+  configuration key reference and keep credential values out of reports.
 - Preserve databases, files, ownership and Alembic history. Renaming existing
   tables requires the documented migration; `create_all` is not an upgrade.
 - Keep Azure text inference inside the approved tenant. External content services

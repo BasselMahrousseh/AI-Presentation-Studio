@@ -26,6 +26,9 @@ with `uv sync --locked --dev`. The root npm dependencies support LiteParse and s
 `scripts/sync-presentation-export.cjs` installs the prebuilt export runtime.
 
 Workspace JWTs identify users; `STUDIO_SERVICE_API_KEY` authenticates backend handoffs.
+Direct launches use the actual `servers/fastapi/.env`; the `tools.dev` launcher
+uses its explicitly selected development profile instead. Follow the shared
+configuration key reference and never duplicate secrets into documentation.
 `tests/unit/test_route_contract.py` pins the Workspace API surface. Update clients
 and tests together when changing it. Preserve existing databases and Alembic history,
 including migrations that remove old tables.

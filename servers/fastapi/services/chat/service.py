@@ -541,7 +541,7 @@ class PresentationChatService:
             return context, ""
 
         temp_dir = TEMP_FILE_SERVICE.create_temp_dir(str(uuid.uuid4()))
-        loader = DocumentsLoader(
+        loader = await asyncio.to_thread(DocumentsLoader,
             file_paths=[attachment.file_path for attachment in attachments],
             presentation_language=presentation_language,
         )

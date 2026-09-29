@@ -53,6 +53,8 @@ async def app_lifespan(_: FastAPI):
     and image-provider configuration.
     """
     _configure_application_logging()
+    from services.asset_storage import get_asset_storage
+    get_asset_storage()  # Validate storage configuration without a live network call.
     app_data_dir = (get_app_data_directory_env() or "").strip()
     if app_data_dir:
         os.makedirs(app_data_dir, exist_ok=True)

@@ -1248,6 +1248,26 @@ wheels = [
 ]
 
 [[package]]
+name = "oracledb"
+version = "26.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8c/f3/22113415f48b6608ada31ebb46047b3b8ac361dba393d1b5ed1f768d8f6a/oracledb-26.0.1.tar.gz", hash = "sha256:786397a6b37e94ebfa6c1c6cd026755eb8fccfd39e15bcb64cb5879491882aef", size = 910463, upload-time = "2026-09-22T21:23:20.378Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/91/e63f777028a560908bc3662b1cbbaf8aba3a27dd57304655349fcbd128fe/oracledb-26.0.1-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:c8635ed9f8d659421679e16d7da56a0d50078d91b40782fb9c27c85f8d6c3075", size = 4806896, upload-time = "2026-09-22T21:23:36.916Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/59/149845af7f23cac1138f76ff1f68d0e6e03fe65e67da8084251c98bc4fa7/oracledb-26.0.1-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f1872361b806678c8865e375b8a46b59e2b4923191fb49af37d1dabc9438189f", size = 2633349, upload-time = "2026-09-22T21:23:38.505Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/58/caf7db67e8c66e0e099c30b58d257e3a60b1b33c88b331dd2802c9e356df/oracledb-26.0.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5b6949975dcd283dd4904c79c2263bbb32843116eb07f16b266b07b069ca2593", size = 2829714, upload-time = "2026-09-22T21:23:39.971Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/e8/979beffc989f146ae5e37cd5b53ebe08231306afcd5ffe245368a2710a39/oracledb-26.0.1-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:7d1fecfa6e7c39a3ee8aedeca7be2e48f4008d90cdcfa1b49ae9f825827b8156", size = 2685600, upload-time = "2026-09-22T21:23:41.73Z" },
+    { url = "https://files.pythonhosted.org/packages/29/57/5eb64f683afa2b56ece4f8d81bd09d60db19ff487c9a92911bff2be6c795/oracledb-26.0.1-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:7d407685928a87240c54d2ca8cc5e0a89fa44639b459030519f120db461004a0", size = 2856509, upload-time = "2026-09-22T21:23:43.229Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/c9/49e89422cfbc04fb93aabaca1008892322ea8c177136e14e86c50131270f/oracledb-26.0.1-cp311-cp311-win32.whl", hash = "sha256:391b61d248ade2f988581a2acadce20f3b3b21886481fc1e5bc57aceab7ab376", size = 1608982, upload-time = "2026-09-22T21:23:44.594Z" },
+    { url = "https://files.pythonhosted.org/packages/a3/2d/12b184980a87ed89cf6b23816b3aa6e4ed720a5708ee7af5960f56eee9c6/oracledb-26.0.1-cp311-cp311-win_amd64.whl", hash = "sha256:582d629ca1282653f575a74b57e3c146175a55ea43c1470ddca44c3eef04dddc", size = 2068149, upload-time = "2026-09-22T21:23:46.024Z" },
+    { url = "https://files.pythonhosted.org/packages/47/f2/61869d47cf3d74099d9398c56c839a21394b35dd19d05e91a60abb6e7881/oracledb-26.0.1-cp311-cp311-win_arm64.whl", hash = "sha256:b857ecc33ed1ec8141f4e45a7420a4df4fc625dcaa35e32b01dca62400376d5d", size = 1709535, upload-time = "2026-09-22T21:23:47.737Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1365,6 +1385,7 @@ dependencies = [
     { name = "aiosqlite" },
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "boto3" },
     { name = "dirtyjson" },
     { name = "fastapi", extra = ["standard"] },
     { name = "fastembed-vectorstore" },
@@ -1376,12 +1397,14 @@ dependencies = [
     { name = "mem0ai", extra = ["nlp"] },
     { name = "openai" },
     { name = "openpyxl" },
+    { name = "oracledb" },
     { name = "pathvalidate" },
     { name = "pdfplumber" },
     { name = "pillow" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pyjwt" },
     { name = "python-pptx" },
+    { name = "sqlalchemy" },
     { name = "sqlmodel" },
 ]
 
@@ -1398,6 +1421,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21.0" },
     { name = "alembic", specifier = ">=1.14.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
+    { name = "boto3", specifier = ">=1.35.0" },
     { name = "dirtyjson", specifier = ">=1.0.8" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.116.1" },
     { name = "fastembed-vectorstore", specifier = ">=0.5.2" },
@@ -1409,12 +1433,14 @@ requires-dist = [
     { name = "mem0ai", extras = ["nlp"], specifier = ">=0.1.115" },
     { name = "openai", specifier = ">=1.98.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },
+    { name = "oracledb", specifier = ">=3.0.0" },
     { name = "pathvalidate", specifier = ">=3.3.1" },
     { name = "pdfplumber", specifier = ">=0.11.7" },
     { name = "pillow", specifier = ">=12.2.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pyjwt", specifier = ">=2.10.1" },
     { name = "python-pptx", specifier = ">=1.0.2" },
+    { name = "sqlalchemy", specifier = ">=2.0.25" },
     { name = "sqlmodel", specifier = ">=0.0.24" },
 ]
 

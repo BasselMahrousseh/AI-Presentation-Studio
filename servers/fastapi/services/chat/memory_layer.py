@@ -1,9 +1,11 @@
+import asyncio
 import json
 import logging
 import os
 import re
 import uuid
 from typing import Any
+from fastapi import HTTPException
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -350,11 +352,11 @@ class PresentationChatMemoryLayer:
 
             name = os.path.basename(raw_path) or f"Document {source_index + 1}"
             try:
-                resolved_path = TEMP_FILE_SERVICE.resolve_temp_path(
+                resolved_path = await asyncio.to_thread(TEMP_FILE_SERVICE.resolve_temp_path,
                     raw_path,
                     must_exist=True,
                 )
-                loader = DocumentsLoader(
+                loader = await asyncio.to_thread(DocumentsLoader,
                     file_paths=[resolved_path],
                     presentation_language=presentation.language,
                 )
@@ -362,6 +364,8 @@ class PresentationChatMemoryLayer:
                 await loader.load_documents(temp_dir=temp_dir)
                 parsed_text = loader.documents[0] if loader.documents else ""
             except Exception as exc:
+                if isinstance(exc, HTTPException) and (exc.status_code == 503 or raw_path.startswith("/app_data/")):
+                    raise
                 errors.append({"name": name, "error": str(exc)})
                 continue
 
