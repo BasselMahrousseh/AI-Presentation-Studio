@@ -10,20 +10,20 @@ from api.v1.auth.context import get_current_owner_id
 
 
 class ChatHistoryMessageModel(SQLModel, table=True):
-    __tablename__ = "chat_history_messages"
+    __tablename__ = "GENAI_WORKSPACE_STUDIO_CHAT_MESSAGE"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: Optional[uuid.UUID] = Field(
         default_factory=get_current_owner_id,
         exclude=True,
         sa_column=Column(
-            ForeignKey("user.id", ondelete="CASCADE"), nullable=True, index=True
+            ForeignKey("GENAI_WORKSPACE_STUDIO_USER.id", ondelete="CASCADE"), nullable=True, index=True
         ),
     )
     presentation_id: Optional[uuid.UUID] = Field(
         default=None,
         sa_column=Column(
-            ForeignKey("presentations.id", ondelete="CASCADE"),
+            ForeignKey("GENAI_WORKSPACE_PRESENTATION.id", ondelete="CASCADE"),
             index=True,
             nullable=True,
         )

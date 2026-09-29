@@ -16,6 +16,7 @@ from models.sql.presentation import PresentationModel
 from models.sql.slide import SlideModel
 from models.sql.user import User
 from api.v1.auth.context import get_current_owner_id
+from utils.schema_names import validate_create_all_schema
 from utils.get_env import get_migrate_database_on_startup_env
 from utils.db_utils import get_database_url_and_connect_args, get_pool_kwargs
 
@@ -94,6 +95,7 @@ async def create_db_and_tables():
     should_run_alembic = get_migrate_database_on_startup_env() in ["true", "True"]
     if not should_run_alembic:
         async with sql_engine.begin() as conn:
+            await conn.run_sync(lambda sync_conn: validate_create_all_schema(sync_conn, SQLModel.metadata))
             await conn.run_sync(
                 lambda sync_conn: SQLModel.metadata.create_all(
                     sync_conn,

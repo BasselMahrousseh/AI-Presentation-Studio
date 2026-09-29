@@ -10,12 +10,14 @@ from api.v1.auth.context import get_current_owner_id
 
 
 class ImageAsset(SQLModel, table=True):
+    __tablename__ = "GENAI_WORKSPACE_IMAGE_ASSET"
+
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: Optional[uuid.UUID] = Field(
         default_factory=get_current_owner_id,
         exclude=True,
         sa_column=Column(
-            ForeignKey("user.id", ondelete="CASCADE"), nullable=True, index=True
+            ForeignKey("GENAI_WORKSPACE_STUDIO_USER.id", ondelete="CASCADE"), nullable=True, index=True
         ),
     )
     created_at: datetime = Field(

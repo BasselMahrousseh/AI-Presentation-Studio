@@ -1,97 +1,71 @@
-# e& Presentation Studio — backend
+# Presentation Studio backend
 
-The presentation-generation backend behind **Presentation Studio** in GenAI-Workspace. It turns a brief
-or source documents into a reviewed outline, then into an editable Smart (HTML) slide deck, and exports
-it to PowerPoint or PDF. Two deck styles are offered: **Standard** (the model designs freely) and the
-**e& template** (fixed e& cover, footer and thank-you slide around generated content).
+## Read architecture before executing
 
-There is no UI in this repo. Every Studio screen lives in the Workspace UI (`GenAI-Workspace-UI`,
-`src/features/studio`), which calls this FastAPI server. Architecture, the full route list and the auth
-model are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); working notes are in [`CLAUDE.md`](CLAUDE.md).
+Developers and AI agents must read the [documentation index](../GenAI-Workspace/docs/README.md),
+[system architecture](../GenAI-Workspace/docs/architecture.md),
+[database and migrations](../GenAI-Workspace/docs/database.md), and
+[configuration contract](../GenAI-Workspace/docs/configuration.md) before running setup,
+installation, build, test, service, migration or deployment commands, or changing
+code/configuration. Read the guide for the affected component next. Initial
+read-only inspection of files and Git status is allowed to establish context.
+Follow [AGENTS.md](AGENTS.md); resolve documented prerequisites before executing.
 
-## Layout
+Studio turns briefs/source documents into reviewed outlines, editable Smart HTML decks and PowerPoint/PDF exports. Standard and e& branded decks share the Smart generation path. Screens live in `GenAI-Workspace-UI`; this repository runs FastAPI and export tooling.
+
+Read the [Studio architecture](docs/ARCHITECTURE.md), [Workspace architecture](../GenAI-Workspace/docs/architecture.md), [database guide](../GenAI-Workspace/docs/database.md) and [developer setup](../GenAI-Workspace/docs/developer-setup.md). The architecture distinguishes actual behavior from missing authentication, rendering, egress and scaling safeguards.
+
+## Local development
+
+Use separate Python environments: **3.11** here and **3.12** for Workspace. The workstation baseline is Node.js **22**. Studio also needs the pinned export runtime, Chromium, fonts and parser tools in developer setup.
+
+From this repository:
 
 ```text
-servers/fastapi/        FastAPI API + database (SQLite by default, Postgres/MySQL via DATABASE_URL)
-servers/fastapi/.env    Backend config (Azure OpenAI, image settings, service key)
-presentation-export/    Downloaded PPTX/PDF export runtime (gitignored; see below)
-resources/              LiteParse document-extraction runner
-Dockerfile              FastAPI-only production image
+npm ci --ignore-scripts
+npm run sync:presentation-export
+npm run check:presentation-export
+cd servers/fastapi
+uv sync --locked --dev --python 3.11
 ```
 
-## Run locally with Workspace
+Then run from `GenAI-Workspace` with its virtualenv Python:
 
-Use the shared guide in `../GenAI-Workspace/docs/developer-setup.md`. It covers
-Python 3.11 for this API, Python 3.12 for Workspace, Node.js 22, the export runtime,
-Chromium/fonts, and the optional local Oracle database for Workspace.
-
-After installing the prerequisites, run from `GenAI-Workspace` with its virtualenv Python:
-
-```bash
+```text
 python -m tools.dev init
 python -m tools.dev doctor --profile sqlite --studio
 python -m tools.dev start --profile sqlite --studio
 ```
 
-This starts Studio on port 8002, Workspace on 8000 and the UI on 3000. Studio's
-SQLite data stays separate from Workspace's database in both developer profiles.
-Use <http://localhost:3000/app/studio>. Real deck generation requires the approved
-Azure settings below; mock Workspace chat does not provide a Studio model.
+Before starting Studio, configure approved Azure credentials, API version and endpoint/base URL in the selected profile. Empty values fail startup; Workspace mock chat does not supply a Studio model. Generation also needs a valid deployment/model. The launcher starts Studio on 8002, Workspace on 8000 and the UI on 3000. Open [Presentation Studio](http://localhost:3000/app/studio).
 
-## Configuration
+## Configuration and database
 
-`servers/fastapi/.env` (real environment variables take precedence):
+Use [servers/fastapi/.env.example](servers/fastapi/.env.example) for direct local launches or a shared profile for integrated development. The [loader](servers/fastapi/utils/environment.py) honors `STUDIO_ENV_FILE`; an empty selector prevents file loading. Implicit `.env` loading is development-only. Keep credentials private and inject deployment secrets.
 
-| Variable | Purpose |
-| --- | --- |
-| `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_MODEL` | The only LLM provider. `LLM` may be unset or `azure`. |
-| `DISABLE_IMAGE_GENERATION` | `true` uses placeholders; otherwise `IMAGE_PROVIDER` and its key are required. |
-| `STUDIO_SERVICE_API_KEY` | Key the Workspace backend authenticates with (its `PRESENTATION_STUDIO_API_KEY`). |
-| `WORKSPACE_JWT_SECRET` | Verifies Workspace users' JWTs. Required unless `DISABLE_AUTH=true` (local dev only). |
-| `NEXT_PUBLIC_URL` | Workspace UI origin; export renders its `/pdf-maker` page. |
-| `APP_DATA_DIRECTORY`, `DATABASE_URL`, `MIGRATE_DATABASE_ON_STARTUP` | Storage and migrations. |
+- Studio's Azure environment is independent of Workspace Admin settings.
+- `WORKSPACE_JWT_SECRET` verifies supported Workspace user tokens. `STUDIO_SERVICE_API_KEY` matches Workspace's `PRESENTATION_STUDIO_API_KEY`. Read the architecture before selecting SSO.
+- `NEXT_PUBLIC_URL` must reach the Workspace UI/base path from Studio for `/pdf-maker`. The UI's `FAST_API_INTERNAL_URL` points back to FastAPI.
+- `APP_DATA_DIRECTORY`, `TEMP_DIRECTORY` and `DATABASE_URL` select Studio storage. Its SQLite/PostgreSQL/MySQL database remains separate from Workspace Oracle.
+- Keep image generation disabled and external search unconfigured until an approved integration is selected.
 
-## Tests
+All active Studio application tables use `GENAI_WORKSPACE_` because Studio is
+part of Workspace. `GENAI_PRESENT_` is reserved for a future unrelated standalone
+presentation application and is not used here. Studio still owns a separate
+database; its migration tracker is `GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION`.
 
-```bash
-cd servers/fastapi && uv run --locked python -m pytest -q
+The [migration guide](docs/ARCHITECTURE.md#migrations-and-ownership-cutover) covers Alembic, database/file backup, destructive legacy-table removal and owner backfill. Alembic CLI does not implicitly load `.env`: select the target database explicitly. `create_all` is not an upgrade strategy.
+
+## Verification and deployment
+
+From `servers/fastapi`:
+
+```text
+uv run --locked python -m pytest -q
 ```
 
-`tests/unit/test_route_contract.py` pins the exact routes the Workspace uses. `./test-local.sh` runs the
-same checks as CI.
+[Route tests](servers/fastapi/tests/unit/test_route_contract.py) pin the Workspace API. `npm run check:presentation-export` at repository root checks/patches installed runtime files. Model calls, rendering, restore and PowerPoint compatibility need integration validation.
 
-## Database migrations
-
-Alembic, run on startup when `MIGRATE_DATABASE_ON_STARTUP=true`, or by hand:
-
-```bash
-cd servers/fastapi && APP_DATA_DIRECTORY=app_data uv run alembic upgrade head
-```
-
-## Docker
-
-```bash
-docker build -t presentation-studio .
-docker run -p 8000:8000 --env-file servers/fastapi/.env -e NEXT_PUBLIC_URL=https://<workspace-host> presentation-studio
-```
-
-## The e& template
-
-`smart_template: "eand"` makes the backend reserve the fixed title and thank-you positions, give the model
-a content safe-area contract, and apply the fixed footer after the generated HTML is validated. The fixed
-brand markup is never sent to the model. Layout lives in `servers/fastapi/utils/smart_brand_templates.py`;
-the artwork is served by the Workspace UI (`public/smart-templates/eand/`).
-
-## Troubleshooting
-
-| Problem | Check |
-| --- | --- |
-| Startup fails with an Azure OpenAI error | Azure variables in `servers/fastapi/.env`. |
-| Workspace calls return `401` | `WORKSPACE_JWT_SECRET` must equal the Workspace's effective JWT secret. |
-| Chat hand-off returns `401`/`403` | `STUDIO_SERVICE_API_KEY` must equal the Workspace's `PRESENTATION_STUDIO_API_KEY`. |
-| `LiteParse runner not found` on upload | Run `npm install --omit=dev --ignore-scripts` from the repo root. |
-| Export returns `500` / runtime missing | Run `npm run sync:presentation-export`; check `BUILT_PYTHON_MODULE_PATH` and that `NEXT_PUBLIC_URL` reaches the Workspace UI. |
-
-## License
+The [Dockerfile](Dockerfile) creates an API-only image on port 8000. It currently uses Node 20; test parity with the Node 22 workstation setup. Follow [deployment guidance](docs/ARCHITECTURE.md#configuration-and-prerequisites) for private routing, authentication, durable volumes, CORS and capacity. Image build success does not establish production readiness.
 
 Based on Presenton. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

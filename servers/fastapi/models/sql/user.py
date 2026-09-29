@@ -16,7 +16,7 @@ class UserBase(DeclarativeBase):
 class User(UserBase):
     """Username-only account model used by the FastAPI Users manager."""
 
-    __tablename__ = "user"
+    __tablename__ = "GENAI_WORKSPACE_STUDIO_USER"
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=uuid.uuid4

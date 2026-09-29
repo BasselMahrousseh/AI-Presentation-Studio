@@ -30,7 +30,7 @@ class GenerationFeedback(SQLModel, table=True):
     the same generation updates this row rather than adding another.
     """
 
-    __tablename__ = "generation_feedback"
+    __tablename__ = "GENAI_WORKSPACE_STUDIO_FEEDBACK"
     __table_args__ = (
         UniqueConstraint(
             "owner_id",
@@ -45,13 +45,13 @@ class GenerationFeedback(SQLModel, table=True):
     owner_id: Optional[uuid.UUID] = Field(
         default_factory=get_current_owner_id,
         sa_column=Column(
-            ForeignKey("user.id", ondelete="CASCADE"), nullable=True, index=True
+            ForeignKey("GENAI_WORKSPACE_STUDIO_USER.id", ondelete="CASCADE"), nullable=True, index=True
         ),
     )
     # SET NULL, not CASCADE: feedback is product data and should outlive the deck it rated.
     presentation_id: Optional[uuid.UUID] = Field(
         sa_column=Column(
-            ForeignKey("presentations.id", ondelete="SET NULL"),
+            ForeignKey("GENAI_WORKSPACE_PRESENTATION.id", ondelete="SET NULL"),
             nullable=True,
             index=True,
         ),

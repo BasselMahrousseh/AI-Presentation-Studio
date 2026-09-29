@@ -17,14 +17,14 @@ class PresentationVersion(str, Enum):
 
 
 class PresentationModel(SQLModel, table=True):
-    __tablename__ = "presentations"
+    __tablename__ = "GENAI_WORKSPACE_PRESENTATION"
 
     id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
     owner_id: Optional[uuid.UUID] = Field(
         default_factory=get_current_owner_id,
         exclude=True,
         sa_column=Column(
-            ForeignKey("user.id", ondelete="CASCADE"),
+            ForeignKey("GENAI_WORKSPACE_STUDIO_USER.id", ondelete="CASCADE"),
             nullable=True,
             index=True,
         ),
@@ -144,7 +144,7 @@ class PresentationModel(SQLModel, table=True):
     source_presentation_id: Optional[uuid.UUID] = Field(
         sa_column=Column(
             Uuid,
-            ForeignKey("presentations.id", ondelete="SET NULL"),
+            ForeignKey("GENAI_WORKSPACE_PRESENTATION.id", ondelete="SET NULL"),
             nullable=True,
             index=True,
         ),

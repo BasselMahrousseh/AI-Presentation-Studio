@@ -1,5 +1,9 @@
 # AI Presentation Studio
 
+Read [AGENTS.md](AGENTS.md) and its architecture-first sequence before executing
+setup/build/test/service/migration commands or changing code/configuration.
+Initial read-only inspection is allowed to establish context.
+
 Keep this guide under 300 lines. Keep architectural constraints and durable lessons;
 use Git history for old sessions and resolved investigations.
 
@@ -13,8 +17,8 @@ LLM inference must stay inside the e&-contracted Azure tenant. New integrations
 that transmit user content outside that boundary must be off by default and documented.
 Do not silently enable external content services.
 
-The parent `run_all.bat` starts Studio FastAPI on port 8002 and Workspace on ports
-8000/3000. `NEXT_PUBLIC_URL` must point to the Workspace UI because export renders
+The Workspace `tools.dev` profile launcher starts Studio FastAPI on port 8002
+and Workspace on ports 8000/3000. `NEXT_PUBLIC_URL` must point to the Workspace UI because export renders
 its `/pdf-maker` page. `FAST_API_INTERNAL_URL` points the UI proxy to Studio.
 
 Install Python dependencies from `servers/fastapi/pyproject.toml` and `uv.lock`
@@ -25,6 +29,9 @@ Workspace JWTs identify users; `STUDIO_SERVICE_API_KEY` authenticates backend ha
 `tests/unit/test_route_contract.py` pins the Workspace API surface. Update clients
 and tests together when changing it. Preserve existing databases and Alembic history,
 including migrations that remove old tables.
+All active Studio tables and its migration tracker use `GENAI_WORKSPACE_`.
+This is Workspace functionality in a separate database, not a standalone
+`GENAI_PRESENT_` product. Preserve data through the documented rename migration.
 
 ## Generation and export rules
 
