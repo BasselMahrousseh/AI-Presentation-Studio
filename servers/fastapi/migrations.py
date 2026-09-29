@@ -1,10 +1,20 @@
 import asyncio
 from pathlib import Path
 
-from alembic import command
-from alembic.config import Config
-from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
+
+# The migration scripts live in servers/fastapi/alembic/. Running the server
+# from that directory puts this folder on sys.path ahead of the installed
+# Alembic package, so "from alembic import command" fails. Migrations stay
+# off unless MIGRATE_DATABASE_ON_STARTUP=true; tables are created by SQLModel.
+try:
+    from alembic import command
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+except ImportError:
+    command = None
+    Config = None
+    ScriptDirectory = None
 
 from utils.db_utils import get_database_url_and_connect_args, to_sync_sqlalchemy_url
 from utils.get_env import get_migrate_database_on_startup_env
@@ -47,6 +57,13 @@ REVISION_HEAD = REVISION_WEB_SEARCH_MODE
 
 async def migrate_database_on_startup() -> None:
     if get_migrate_database_on_startup_env() not in ["true", "True"]:
+        return
+    if command is None or Config is None or ScriptDirectory is None:
+        print(
+            "Alembic is not available; skipping database migrations. "
+            "Tables are created from the application models.",
+            flush=True,
+        )
         return
 
     try:

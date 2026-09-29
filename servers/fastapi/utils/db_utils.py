@@ -4,13 +4,20 @@ from urllib.parse import urlsplit, urlunsplit, parse_qsl
 import ssl
 
 
+def database_is_configured() -> bool:
+    return bool(
+        (get_database_url_env() or "").strip()
+        or (get_app_data_directory_env() or "").strip()
+    )
+
+
 def _ensure_sqlite_parent_dir(database_url: str) -> None:
     if not database_url.startswith("sqlite://"):
         return
 
     split_result = urlsplit(database_url)
     db_path = split_result.path
-    if not db_path:
+    if not db_path or db_path in {"/:memory:", "/:memory"}:
         return
 
     # sqlite URLs on Windows can start with /C:/..., normalize that for os.path.
@@ -18,8 +25,14 @@ def _ensure_sqlite_parent_dir(database_url: str) -> None:
         db_path = db_path[1:]
 
     parent = os.path.dirname(db_path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
+    # "/tmp/presenton" becomes the UNC path "//tmp/presenton" on Windows.
+    if not parent or parent.startswith(("//", "\\\\")):
+        return
+    if os.name == "nt" and (parent == "\\tmp\\presenton" or "/tmp/" in db_path):
+        return
+    os.makedirs(parent, exist_ok=True)
+
+
 def _int_env(name: str, default: int) -> int:
     """Read an integer from an environment variable, falling back to *default*."""
     raw = os.getenv(name)
@@ -55,9 +68,13 @@ def get_pool_kwargs() -> dict:
 
 
 def get_database_url_and_connect_args() -> tuple[str, dict]:
-    database_url = get_database_url_env() or "sqlite:///" + os.path.join(
-        get_app_data_directory_env() or "/tmp/presenton", "fastapi.db"
-    )
+    if not database_is_configured():
+        return "sqlite+aiosqlite:///:memory:", {"check_same_thread": False}
+
+    app_data = (get_app_data_directory_env() or "").strip()
+    database_url = (get_database_url_env() or "").strip() or "sqlite:///" + os.path.join(
+        app_data, "fastapi.db"
+    ).replace("\\", "/")
 
     _ensure_sqlite_parent_dir(database_url)
 
