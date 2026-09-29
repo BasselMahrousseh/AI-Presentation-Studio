@@ -1,7 +1,9 @@
 import os
-from utils.get_env import get_app_data_directory_env, get_database_url_env
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl
 import ssl
+
+from utils.get_env import get_app_data_directory_env, get_database_url_env
 
 
 def database_is_configured() -> bool:
@@ -68,13 +70,12 @@ def get_pool_kwargs() -> dict:
 
 
 def get_database_url_and_connect_args() -> tuple[str, dict]:
-    if not database_is_configured():
-        return "sqlite+aiosqlite:///:memory:", {"check_same_thread": False}
-
     app_data = (get_app_data_directory_env() or "").strip()
-    database_url = (get_database_url_env() or "").strip() or "sqlite:///" + os.path.join(
-        app_data, "fastapi.db"
-    ).replace("\\", "/")
+    database_url = (get_database_url_env() or "").strip()
+    if not database_url:
+        if not app_data:
+            app_data = str(Path(__file__).resolve().parents[1] / "app_data")
+        database_url = "sqlite:///" + os.path.join(app_data, "fastapi.db").replace("\\", "/")
 
     _ensure_sqlite_parent_dir(database_url)
 

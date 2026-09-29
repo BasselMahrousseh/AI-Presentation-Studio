@@ -1,4 +1,3 @@
-import asyncio
 from pathlib import Path
 
 from sqlalchemy import create_engine, func, inspect, select
@@ -17,7 +16,6 @@ except ImportError:
     ScriptDirectory = None
 
 from utils.db_utils import get_database_url_and_connect_args, to_sync_sqlalchemy_url
-from utils.get_env import get_migrate_database_on_startup_env
 from utils.schema_names import (
     TABLE_RENAMES,
     canonical_schema_tables,
@@ -63,22 +61,8 @@ REVISION_HEAD = REVISION_WORKSPACE_TABLE_NAMES
 
 
 async def migrate_database_on_startup() -> None:
-    if get_migrate_database_on_startup_env() not in ["true", "True"]:
-        return
-    if command is None or Config is None or ScriptDirectory is None:
-        print(
-            "Alembic is not available; skipping database migrations. "
-            "Tables are created from the application models.",
-            flush=True,
-        )
-        return
-
-    try:
-        await asyncio.to_thread(_run_migrations)
-        print("Migrations run successfully", flush=True)
-    except Exception as exc:
-        print(f"Error running migrations: {exc}", flush=True)
-        raise
+    """Schema is created from the SQLModel tables. Startup does not run Alembic."""
+    return
 
 
 def _run_migrations() -> None:

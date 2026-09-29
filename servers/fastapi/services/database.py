@@ -17,15 +17,13 @@ from models.sql.slide import SlideModel
 from models.sql.user import User
 from api.v1.auth.context import get_current_owner_id
 from utils.schema_names import validate_create_all_schema
-from utils.get_env import get_migrate_database_on_startup_env
 from utils.db_utils import get_database_url_and_connect_args, get_pool_kwargs
 
 
 database_url, connect_args = get_database_url_and_connect_args()
 
-# Apply connection-pool settings for server-class databases (PostgreSQL, MySQL).
-# SQLite uses a file-lock model and ignores pool configuration, so we skip it.
-_pool_kwargs = get_pool_kwargs() if "sqlite" not in database_url else {}
+# SQLite uses a file lock and ignores server pool settings.
+_pool_kwargs = {} if "sqlite" in database_url else get_pool_kwargs()
 
 sql_engine: AsyncEngine = create_async_engine(
     database_url, connect_args=connect_args, **_pool_kwargs
@@ -92,23 +90,22 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
 
 # Create Database and Tables
 async def create_db_and_tables():
-    should_run_alembic = get_migrate_database_on_startup_env() in ["true", "True"]
-    if not should_run_alembic:
-        async with sql_engine.begin() as conn:
-            await conn.run_sync(lambda sync_conn: validate_create_all_schema(sync_conn, SQLModel.metadata))
-            await conn.run_sync(
-                lambda sync_conn: SQLModel.metadata.create_all(
-                    sync_conn,
-                    tables=[
-                        PresentationModel.__table__,
-                        SlideModel.__table__,
-                        ChatHistoryMessageModel.__table__,
-                        ImageAsset.__table__,
-                        User.__table__,
-                        GenerationFeedback.__table__,
-                    ],
-                )
+    """Create any missing tables from the current models. Startup does not run Alembic."""
+    async with sql_engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: validate_create_all_schema(sync_conn, SQLModel.metadata))
+        await conn.run_sync(
+            lambda sync_conn: SQLModel.metadata.create_all(
+                sync_conn,
+                tables=[
+                    PresentationModel.__table__,
+                    SlideModel.__table__,
+                    ChatHistoryMessageModel.__table__,
+                    ImageAsset.__table__,
+                    User.__table__,
+                    GenerationFeedback.__table__,
+                ],
             )
+        )
 
 
 async def dispose_engines():

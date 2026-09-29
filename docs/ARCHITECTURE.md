@@ -112,7 +112,7 @@ Oracle for Workspace does not move Studio data.
 
 | Database choice | Current implementation |
 |---|---|
-| SQLite | Without `DATABASE_URL`, selects `<APP_DATA_DIRECTORY>/fastapi.db`, or `/tmp/presenton/fastapi.db` when that directory is unset. The example explicitly chooses `./app_data/studio.db`. Relative paths resolve from the process working directory. |
+| SQLite | Without `DATABASE_URL`, selects `<APP_DATA_DIRECTORY>/fastapi.db`. When that directory is also unset, the file is `servers/fastapi/app_data/fastapi.db`. Startup creates missing tables from the application models and does not run Alembic. The example explicitly chooses `./app_data/studio.db`. Relative paths resolve from the process working directory. |
 | PostgreSQL | `postgresql://...` becomes asyncpg at runtime; Alembic uses psycopg. Pool configuration is supported. This is a candidate for a separately validated shared deployment. |
 | MySQL | `mysql://...` becomes aiomysql at runtime; Alembic uses PyMySQL. Driver support does not establish migration/workload qualification. |
 
