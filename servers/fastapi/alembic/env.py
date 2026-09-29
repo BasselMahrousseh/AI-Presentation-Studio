@@ -1,10 +1,9 @@
-import os
 import sys
 from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, inspect, pool
 from sqlmodel import SQLModel
 
 # Make sure all models can be imported when alembic runs standalone.
@@ -18,6 +17,11 @@ from models.sql.image_asset import ImageAsset  # noqa: F401, E402
 from models.sql.presentation import PresentationModel  # noqa: F401, E402
 from models.sql.slide import SlideModel  # noqa: F401, E402
 from models.sql.user import User  # noqa: F401, E402
+from utils.schema_names import (  # noqa: E402
+    LEGACY_VERSION_TABLE,
+    SCHEMA_VERSION_TABLE,
+    version_table_name,
+)
 
 alembic_config = context.config
 
@@ -54,6 +58,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        version_table=SCHEMA_VERSION_TABLE,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -69,14 +74,34 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            compare_type=True,
-        )
-        with context.begin_transaction():
-            context.run_migrations()
+    try:
+        with connectable.begin() as connection:
+            options = dict(connection=connection, target_metadata=target_metadata,
+                           compare_type=True, version_table=SCHEMA_VERSION_TABLE)
+            context.configure(**options)
+            # Alembic marks current/history inspection with dont_mutate. Read
+            # their existing tracker without bootstrapping or creating tables.
+            readonly = context.get_context().opts.get("dont_mutate", False)
+            existing = version_table_name(inspect(connection))
+            if readonly:
+                options["version_table"] = existing or SCHEMA_VERSION_TABLE
+            else:
+                # Python's sqlite3 legacy transaction mode otherwise commits DDL
+                # before its first DML. Start a real transaction so a failed
+                # rename rolls back the tracker and every application table.
+                if connection.dialect.name == "sqlite":
+                    if not connection.connection.driver_connection.in_transaction:
+                        connection.exec_driver_sql("BEGIN")
+                if existing and existing.casefold() == LEGACY_VERSION_TABLE.casefold():
+                    quote = connection.dialect.identifier_preparer.quote_identifier
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE {quote(existing)} RENAME TO {quote(SCHEMA_VERSION_TABLE)}"
+                    )
+            context.configure(**options)
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        connectable.dispose()
 
 
 if context.is_offline_mode():

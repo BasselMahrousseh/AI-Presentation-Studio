@@ -225,8 +225,7 @@ async def stream_outlines(
             # which this same endpoint's own success path backfills from 0
             # to the real generated slide count below. Re-deriving from
             # n_slides here would silently flip this decision on every call
-            # after the first (see BUG_REPORT_has_explicit_slide_structure_
-            # idempotency.md). n_slides_to_generate itself is still
+            # after the first. n_slides_to_generate itself is still
             # recomputed fresh on every call, since it's per-call LLM-prompt
             # input, not persisted state.
             has_explicit_slide_structure = presentation.has_explicit_slide_structure

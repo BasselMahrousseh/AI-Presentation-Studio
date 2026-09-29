@@ -18,6 +18,12 @@ TABLE_RENAMES = {
 }
 SCHEMA_VERSION_TABLE = "GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION"
 LEGACY_VERSION_TABLE = "alembic_version"
+RETIRED_TABLES = {
+    "access_tokens", "template_create_infos", "templates", "presentation_layout_codes",
+    "webhook_subscriptions", "async_tasks", "async_presentation_generation_tasks",
+    "ollamapullstatus", "presenton_cloud_provider", "provider_settings", "font_uploads",
+    "keyvaluesqlmodel", "template_v2",
+}
 
 
 def find_name(names, expected: str) -> str | None:
@@ -25,6 +31,17 @@ def find_name(names, expected: str) -> str | None:
     if len(matches) > 1:
         raise RuntimeError(f"Ambiguous Studio database objects for {expected}: {matches}")
     return matches[0] if matches else None
+
+
+def validate_identifier_case(inspector, expected: str, actual: str) -> None:
+    if actual == expected:
+        return
+    # MySQL can normalize physical table names to lowercase. Accept that only
+    # when the server actually uses case-insensitive table-name resolution.
+    if inspector.bind.dialect.name == "mysql":
+        if inspector.bind.exec_driver_sql("SELECT @@lower_case_table_names").scalar_one() in (1, 2):
+            return
+    raise RuntimeError(f"Unexpected Studio identifier casing: {actual}; expected {expected}")
 
 
 def version_table_name(inspector) -> str | None:
@@ -37,10 +54,8 @@ def version_table_name(inspector) -> str | None:
     if old and new:
         raise RuntimeError("Both legacy and canonical Studio migration trackers exist; reconcile them before migrating")
     name = new or old
-    if name and inspector.bind.dialect.name != "mysql" and name not in (
-        LEGACY_VERSION_TABLE, SCHEMA_VERSION_TABLE
-    ):
-        raise RuntimeError(f"Unexpected casing for Studio migration tracker: {name}")
+    if name:
+        validate_identifier_case(inspector, SCHEMA_VERSION_TABLE if new else LEGACY_VERSION_TABLE, name)
     return name
 
 
@@ -55,13 +70,13 @@ def canonical_schema_tables(inspector) -> dict[str, str]:
         new: found for new in TABLE_RENAMES.values()
         if (found := find_name(names, new)) is not None
     }
-    legacy = [old for old in TABLE_RENAMES if find_name(names, old)]
+    legacy = [old for old in {*TABLE_RENAMES, *RETIRED_TABLES} if find_name(names, old)]
     if canonical and legacy:
         raise RuntimeError("Mixed legacy and canonical Studio tables; reconcile the schema before migrating")
     if canonical and len(canonical) != len(TABLE_RENAMES):
         raise RuntimeError("Incomplete canonical Studio schema; restore the missing tables before migrating")
-    if inspector.bind.dialect.name != "mysql" and any(k != v for k, v in canonical.items()):
-        raise RuntimeError("Studio table names must use their canonical uppercase spelling")
+    for expected, actual in canonical.items():
+        validate_identifier_case(inspector, expected, actual)
     return canonical
 
 
@@ -70,7 +85,7 @@ def validate_create_all_schema(connection, metadata) -> None:
     inspector = inspect(connection)
     names = inspector.get_table_names()
     canonical = canonical_schema_tables(inspector)
-    if any(find_name(names, old) for old in TABLE_RENAMES) or (
+    if any(find_name(names, old) for old in {*TABLE_RENAMES, *RETIRED_TABLES}) or (
         version_table_name(inspector) == LEGACY_VERSION_TABLE
     ):
         raise RuntimeError("Legacy Studio schema found; enable MIGRATE_DATABASE_ON_STARTUP or run Alembic upgrade head")

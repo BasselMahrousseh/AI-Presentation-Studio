@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, func, inspect, select
 
 # The migration scripts live in servers/fastapi/alembic/. Running the server
 # from that directory puts this folder on sys.path ahead of the installed
@@ -18,6 +18,12 @@ except ImportError:
 
 from utils.db_utils import get_database_url_and_connect_args, to_sync_sqlalchemy_url
 from utils.get_env import get_migrate_database_on_startup_env
+from utils.schema_names import (
+    TABLE_RENAMES,
+    canonical_schema_tables,
+    version_table,
+    version_table_name,
+)
 
 
 LEGACY_BASELINE_REVISION = "00b3c27a13bc"
@@ -52,7 +58,8 @@ REVISION_GENERATION_FEEDBACK = "b7d3e9f1a2c4"
 REVISION_SOURCE_PRESENTATION = "c4e6a8b0d2f3"
 REVISION_DROP_STANDALONE_TABLES = "d5f7b9c1e3a4"
 REVISION_WEB_SEARCH_MODE = "e7b1d3f5a9c2"
-REVISION_HEAD = REVISION_WEB_SEARCH_MODE
+REVISION_WORKSPACE_TABLE_NAMES = "f8c2d4e6a0b3"
+REVISION_HEAD = REVISION_WORKSPACE_TABLE_NAMES
 
 
 async def migrate_database_on_startup() -> None:
@@ -103,7 +110,7 @@ def _run_migrations() -> None:
 
 def _repair_orphan_alembic_revision(config: Config, database_url: str) -> None:
     """
-    If alembic_version points at a revision id that no longer exists in alembic/versions
+    If the migration tracker points at a revision id that no longer exists in alembic/versions
     (removed branch, old image, etc.), re-stamp from the live schema so upgrade can run.
     """
     script = ScriptDirectory.from_config(config)
@@ -118,11 +125,15 @@ def _repair_orphan_alembic_revision(config: Config, database_url: str) -> None:
         with engine.begin() as connection:
             inspector = inspect(connection)
             tables = set(inspector.get_table_names())
-            if "alembic_version" not in tables:
+            canonical_schema_tables(inspector)
+            tracker_name = version_table_name(inspector)
+            if not tracker_name:
                 return
-            version_num = connection.execute(
-                text("SELECT version_num FROM alembic_version LIMIT 1")
-            ).scalar_one_or_none()
+            tracker = version_table(tracker_name)
+            versions = connection.execute(select(tracker.c.version_num)).scalars().all()
+            if len(versions) > 1:
+                raise RuntimeError("Studio expects a single migration revision; reconcile multiple tracker rows first")
+            version_num = versions[0] if versions else None
             if not version_num or version_num in known:
                 return
             print(
@@ -132,8 +143,7 @@ def _repair_orphan_alembic_revision(config: Config, database_url: str) -> None:
             )
             target = _infer_revision_from_schema(inspector, tables, head)
             connection.execute(
-                text("UPDATE alembic_version SET version_num = :revision"),
-                {"revision": target},
+                tracker.update().values(version_num=target),
             )
     finally:
         engine.dispose()
@@ -145,6 +155,33 @@ def _infer_revision_from_schema(
     _head_revision: str,
 ) -> str:
     """Best-effort: map existing SQLite/Postgres schema to our linear migration chain."""
+    canonical = canonical_schema_tables(inspector)
+    if canonical:
+        # Only current, complete ORM-created schemas can be stamped at the new
+        # head. Missing columns require operator repair, not a blind stamp.
+        from models.sql.chat_history_message import ChatHistoryMessageModel
+        from models.sql.generation_feedback import GenerationFeedback
+        from models.sql.image_asset import ImageAsset
+        from models.sql.presentation import PresentationModel
+        from models.sql.slide import SlideModel
+        from models.sql.user import User
+
+        for model in (User, PresentationModel, SlideModel, ImageAsset,
+                      ChatHistoryMessageModel, GenerationFeedback):
+            actual = canonical[model.__table__.name]
+            columns = {column["name"] for column in inspector.get_columns(actual)}
+            if not set(model.__table__.columns.keys()).issubset(columns):
+                raise RuntimeError(f"Cannot infer revision for incomplete Studio table {actual}")
+        return REVISION_WORKSPACE_TABLE_NAMES
+    if set(TABLE_RENAMES).issubset(tables) and _has_column(
+        inspector, "presentations", "source_presentation_id"
+    ):
+        if not {"provider_settings", "template_v2"}.intersection(tables) and not _has_column(
+            inspector, "chat_history_messages", "template_v2_id"
+        ):
+            return (REVISION_WEB_SEARCH_MODE if _has_column(inspector, "presentations", "web_search_mode")
+                    else REVISION_DROP_STANDALONE_TABLES)
+        return REVISION_SOURCE_PRESENTATION
     owned_tables = {
         "presentations",
         "slides",
@@ -292,7 +329,7 @@ def _is_uuid_storage_column(inspector, table_name: str, column_name: str) -> boo
 
 def _stamp_legacy_database_if_needed(config: Config, database_url: str) -> None:
     """
-    If the DB has app tables but no migration reference in alembic_version,
+    If the DB has app tables but no migration reference in either tracker,
     treat it as a legacy DB and stamp the latest revision already reflected by
     the live schema before upgrading.
     """
@@ -346,14 +383,15 @@ def _is_unversioned_populated_database(database_url: str) -> bool:
         with engine.connect() as connection:
             inspector = inspect(connection)
             table_names = set(inspector.get_table_names())
-            has_alembic_version_table = "alembic_version" in table_names
+            canonical = canonical_schema_tables(inspector)
+            tracker_name = version_table_name(inspector)
             has_applied_revision = False
-            if has_alembic_version_table:
+            if tracker_name:
                 revision_count = connection.execute(
-                    text("SELECT COUNT(*) FROM alembic_version")
+                    select(func.count()).select_from(version_table(tracker_name))
                 ).scalar_one()
                 has_applied_revision = revision_count > 0
-            has_known_app_tables = len(table_names.intersection(known_app_tables)) > 0
+            has_known_app_tables = bool(canonical or table_names.intersection(known_app_tables))
             return has_known_app_tables and not has_applied_revision
     finally:
         engine.dispose()

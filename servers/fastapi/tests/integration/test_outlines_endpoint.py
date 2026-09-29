@@ -120,8 +120,7 @@ async def _stream_once(presentation_id: uuid.UUID, session: FakeAsyncSession) ->
 
 
 def test_stream_outlines_has_explicit_slide_structure_is_idempotent_across_repeated_calls():
-    """Regression test for the has_explicit_slide_structure idempotency bug
-    (BUG_REPORT_has_explicit_slide_structure_idempotency.md): the first call
+    """Preserve the persisted structure-detection decision: the first call
     to GET /outlines/stream/{id} for content with clean "Slide N:" markers
     must detect has_explicit_slide_structure=true, and every subsequent call
     for the same id must report the same result - not silently flip to

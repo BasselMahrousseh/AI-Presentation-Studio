@@ -63,7 +63,7 @@ def test_upgrade_from_baseline_stamp_skips_existing_theme_column(tmp_path):
 
         with engine.connect() as connection:
             version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
+                text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")
             ).scalar_one()
             columns = {
                 row[1]
@@ -140,7 +140,7 @@ def test_upgrade_from_theme_stamp_skips_existing_template_create_infos_table(tmp
 
         with engine.connect() as connection:
             version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
+                text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")
             ).scalar_one()
             tables = {
                 row[0]
@@ -190,7 +190,7 @@ def test_upgrade_from_template_stamp_skips_existing_chat_history_table(tmp_path)
 
         with engine.connect() as connection:
             version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
+                text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")
             ).scalar_one()
             indexes = {
                 row[1]
@@ -258,11 +258,11 @@ def test_consolidated_migration_adds_presentation_version(tmp_path):
                 {"revision": migrations.REVISION_CHAT_HISTORY},
             )
 
-        command.upgrade(_alembic_config(database_url), "head")
+        command.upgrade(_alembic_config(database_url), migrations.REVISION_WEB_SEARCH_MODE)
 
         with engine.connect() as connection:
             version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
+                text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")
             ).scalar_one()
             presentation_version = connection.execute(
                 text("SELECT version FROM presentations WHERE id = 'p1'")
@@ -277,7 +277,7 @@ def test_consolidated_migration_adds_presentation_version(tmp_path):
                 for row in connection.execute(text("PRAGMA table_info(slides)"))
             }
 
-        assert version == migrations.REVISION_HEAD
+        assert version == migrations.REVISION_WEB_SEARCH_MODE
         assert presentation_version == "v1-standard"
         assert version_column[3] == 1
         assert version_column[4] is None
@@ -326,7 +326,7 @@ def test_async_task_status_migration_maps_processing_to_pending(tmp_path):
 
         with engine.connect() as connection:
             version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
+                text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")
             ).scalar_one()
             statuses = dict(
                 connection.execute(
@@ -398,11 +398,11 @@ def test_smart_mode_backfill_repairs_html_presentations(tmp_path):
                 {"revision": migrations.REVISION_PRESENTON_CLOUD_PROVIDER},
             )
 
-        command.upgrade(_alembic_config(database_url), "head")
+        command.upgrade(_alembic_config(database_url), migrations.REVISION_WEB_SEARCH_MODE)
 
         with engine.connect() as connection:
             version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
+                text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")
             ).scalar_one()
             modes = dict(
                 connection.execute(
@@ -412,7 +412,7 @@ def test_smart_mode_backfill_repairs_html_presentations(tmp_path):
                 ).all()
             )
 
-        assert version == migrations.REVISION_HEAD
+        assert version == migrations.REVISION_WEB_SEARCH_MODE
         assert modes == {
             "smart-deck": "smart",
             "standard-deck": "standard",
@@ -512,18 +512,18 @@ def test_upgrade_from_template_v2_revision_adds_slide_ui(tmp_path):
                 {"revision": migrations.REVISION_TEMPLATE_V2},
             )
 
-        command.upgrade(_alembic_config(database_url), "head")
+        command.upgrade(_alembic_config(database_url), migrations.REVISION_WEB_SEARCH_MODE)
 
         with engine.connect() as connection:
             version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
+                text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")
             ).scalar_one()
             slide_columns = {
                 row[1]
                 for row in connection.execute(text("PRAGMA table_info(slides)"))
             }
 
-        assert version == migrations.REVISION_HEAD
+        assert version == migrations.REVISION_WEB_SEARCH_MODE
         assert "ui" in slide_columns
     finally:
         engine.dispose()
@@ -637,7 +637,7 @@ def test_upgrade_from_font_uploads_revision_converts_template_v2_ids_to_strings(
 
         with engine.connect() as connection:
             version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
+                text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")
             ).scalar_one()
             stored_template_id = connection.execute(
                 text("SELECT id FROM template_v2")
@@ -802,7 +802,7 @@ def test_removed_intermediate_revision_upgrades_through_consolidated_migration(
 
         with engine.connect() as connection:
             version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
+                text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")
             ).scalar_one()
             template_columns = {
                 row[1]
@@ -839,18 +839,18 @@ def test_upgrade_from_has_explicit_slide_structure_revision_adds_quality_flag_co
                 {"revision": migrations.REVISION_HAS_EXPLICIT_SLIDE_STRUCTURE},
             )
 
-        command.upgrade(_alembic_config(database_url), "head")
+        command.upgrade(_alembic_config(database_url), migrations.REVISION_WEB_SEARCH_MODE)
 
         with engine.connect() as connection:
             version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
+                text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")
             ).scalar_one()
             columns = {
                 row[1]
                 for row in connection.execute(text("PRAGMA table_info(presentations)"))
             }
 
-        assert version == migrations.REVISION_HEAD
+        assert version == migrations.REVISION_WEB_SEARCH_MODE
         assert {"source_quality_flags", "acknowledged_quality_flag_groups"}.issubset(
             columns
         )
@@ -899,10 +899,10 @@ def test_generation_feedback_migration_backfills_generation_ids(tmp_path):
                 {"id": "e" * 32, "p": "a" * 32},
             )
 
-        command.upgrade(config, "head")
+        command.upgrade(config, migrations.REVISION_WEB_SEARCH_MODE)
 
         with engine.connect() as connection:
-            version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            version = connection.execute(text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")).scalar_one()
             result = {
                 row[0]: (row[1], row[2])
                 for row in connection.execute(
@@ -916,7 +916,7 @@ def test_generation_feedback_migration_backfills_generation_ids(tmp_path):
     finally:
         engine.dispose()
 
-    assert version == migrations.REVISION_HEAD
+    assert version == migrations.REVISION_WEB_SEARCH_MODE
     assert "generation_feedback" in tables
     assert result["a" * 32][0] and result["a" * 32][1]
     assert result["b" * 32][0] and result["b" * 32][1] is None
@@ -927,7 +927,7 @@ def test_generation_feedback_migration_backfills_generation_ids(tmp_path):
 
     # Idempotent: a second upgrade run (the migration guards) must not re-roll the ids.
     command.downgrade(config, migrations.REVISION_WORKSPACE_IDENTITY)
-    command.upgrade(config, "head")
+    command.upgrade(config, migrations.REVISION_WEB_SEARCH_MODE)
 
 
 def test_source_presentation_migration_adds_nullable_self_link(tmp_path):
@@ -980,7 +980,7 @@ def test_source_presentation_migration_adds_nullable_self_link(tmp_path):
         command.upgrade(config, migrations.REVISION_SOURCE_PRESENTATION)
 
         with engine.connect() as connection:
-            version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            version = connection.execute(text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")).scalar_one()
             existing = connection.execute(
                 text("SELECT source_presentation_id FROM presentations WHERE id = :id"),
                 {"id": "a" * 32},
@@ -1035,18 +1035,18 @@ def test_drop_standalone_tables_migration_keeps_decks_and_removes_dead_tables(tm
                     "'2026-01-01 00:00:00', '2026-01-01 00:00:00', 'smart', 0)"
                 )
             )
-        command.upgrade(config, "head")
+        command.upgrade(config, migrations.REVISION_WEB_SEARCH_MODE)
         with engine.connect() as connection:
             inspector = inspect(connection)
             tables = set(inspector.get_table_names())
             chat_columns = {c["name"] for c in inspector.get_columns("chat_history_messages")}
             kept = connection.execute(text("SELECT content FROM presentations")).scalars().all()
-            version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            version = connection.execute(text("SELECT version_num FROM GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION")).scalar_one()
         assert {"template_v2", "access_tokens", "provider_settings", "async_tasks"}.isdisjoint(tables)
         assert {"presentations", "slides", "user", "generation_feedback"} <= tables
         assert "template_v2_id" not in chat_columns
         assert kept == ["kept"]
-        assert version == migrations.REVISION_HEAD
+        assert version == migrations.REVISION_WEB_SEARCH_MODE
 
         command.downgrade(config, migrations.REVISION_SOURCE_PRESENTATION)
         with engine.connect() as connection:

@@ -33,7 +33,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, MetaData, Table, Uuid, create_engine, select, update
+from sqlalchemy import Column, MetaData, Table, Uuid, create_engine, inspect, select, update
 
 ASSET_ROOTS = ("images", "uploads", "exports", "pptx-to-html", "pptx-to-json")
 _REF = re.compile(
@@ -118,9 +118,27 @@ def _rewrite_value(value, *args):
 def run(db_url: str, app_data: str, mapping: dict[str, str], apply: bool) -> dict:
     engine = create_engine(db_url)
     meta = MetaData()
+    # Support the reviewed cutover script both before and after the Workspace
+    # table-name migration. Never combine rows from two parallel schemas.
+    names = inspect(engine).get_table_names()
+    renames = {
+        "user": "GENAI_WORKSPACE_STUDIO_USER",
+        "presentations": "GENAI_WORKSPACE_PRESENTATION",
+        "slides": "GENAI_WORKSPACE_SLIDE",
+        "chat_history_messages": "GENAI_WORKSPACE_STUDIO_CHAT_MESSAGE",
+    }
+    canonical = any(name.casefold() in {n.casefold() for n in renames.values()} for name in names)
+    legacy = any(name.casefold() in renames for name in names)
+    if canonical and legacy:
+        raise RuntimeError("Mixed legacy and canonical Studio tables; reconcile the schema before backfilling")
     # Reflection maps UUID columns to plain strings on SQLite; declare them so ids compare and
     # bind the same way on every dialect.
     def reflect(name: str, *uuid_cols: str) -> Table:
+        expected = renames[name] if canonical else name
+        matches = [n for n in names if n.casefold() == expected.casefold()]
+        if len(matches) != 1:
+            raise RuntimeError(f"Expected exactly one Studio table {expected}")
+        name = matches[0]
         return Table(name, meta, *(Column(c, Uuid, primary_key=(c == "id")) for c in uuid_cols), autoload_with=engine)
 
     users = reflect("user", "id")
