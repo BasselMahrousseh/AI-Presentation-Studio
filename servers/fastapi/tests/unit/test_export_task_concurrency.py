@@ -170,6 +170,31 @@ def test_bad_max_concurrency_env_falls_back_to_default(monkeypatch):
     assert _export_task_max_concurrency() == 3
 
 
+def test_cancelled_queued_render_does_not_consume_a_later_slot(monkeypatch):
+    service = ExportTaskService(timeout_seconds=10, max_concurrency=1)
+
+    async def render(*args, **kwargs):
+        return {"path": "rendered.png"}
+
+    monkeypatch.setattr(service, "_run_task_locked", render)
+
+    async def scenario():
+        await service._acquire_render_slot(None)
+        queued = asyncio.create_task(service._run_task({}, "err", queue_timeout=0.2))
+        await asyncio.sleep(0.02)
+        queued.cancel()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await queued
+        finally:
+            service._release_render_slot()
+        # A cancelled blocking worker would acquire the released slot here.
+        await asyncio.sleep(0.25)
+        assert await service._run_task({}, "err", queue_timeout=0.2) == {"path": "rendered.png"}
+        assert service._in_flight == 0
+
+    asyncio.run(scenario())
+
 def test_valid_max_concurrency_env_is_respected(monkeypatch):
     monkeypatch.setenv("EXPORT_TASK_MAX_CONCURRENCY", "5")
     assert _export_task_max_concurrency() == 5

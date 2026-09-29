@@ -1,12 +1,7 @@
 import os
-from pathlib import Path
+from utils.environment import load_studio_environment
 
-from dotenv import load_dotenv
-
-# Load FastAPI's own .env for direct launches before importing modules
-# that resolve environment-backed configuration. Existing environment variables
-# (including Docker/production values) always take precedence.
-load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+load_studio_environment()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

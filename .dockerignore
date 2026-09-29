@@ -1,5 +1,13 @@
 .git
 .gitignore
+.env
+**/.env
+.env.*
+**/.env.*
+!**/.env.example
+**/*.db
+**/*.sqlite
+**/*.sqlite3
 
 node_modules
 **/node_modules

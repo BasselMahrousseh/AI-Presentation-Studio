@@ -184,29 +184,24 @@ class ExportTaskService:
     async def _acquire_render_slot(
         self, queue_timeout: float | None
     ) -> tuple[float, int]:
-        """Block (off the event loop) until a render slot is free.
-
-        Returns `(seconds_waited, in_flight_after_acquire)` for logging. Tries
-        a non-blocking acquire first so the common, uncontended case never
-        pays a thread hop at all.
-        """
+        """Wait cancellably for a slot shared across threads and event loops."""
         started_at = time.monotonic()
-        acquired = self._render_slots.acquire(blocking=False)
-        if not acquired:
+        while not self._render_slots.acquire(blocking=False):
+            delay = 0.05
             if queue_timeout is not None:
-                acquired = await asyncio.to_thread(
-                    self._render_slots.acquire, True, queue_timeout
-                )
-                if not acquired:
-                    waited = time.monotonic() - started_at
+                waited = time.monotonic() - started_at
+                remaining = queue_timeout - waited
+                if remaining <= 0:
                     raise ExportTaskSaturatedError(
                         "Export task queue saturated: no render slot became "
                         f"available within {queue_timeout}s "
                         f"(max_concurrency={self._max_concurrency}, "
                         f"waited={waited:.1f}s)"
                     )
-            else:
-                await asyncio.to_thread(self._render_slots.acquire)
+                delay = min(delay, remaining)
+            # A blocking acquire in to_thread survives cancellation and can take
+            # a slot after its caller is gone, permanently leaking capacity.
+            await asyncio.sleep(delay)
 
         with self._in_flight_lock:
             self._in_flight += 1
@@ -267,8 +262,8 @@ class ExportTaskService:
     @staticmethod
     def _resolve_converter_path(export_dir: str) -> str:
         py_dir = os.path.join(export_dir, "py")
-        extension = ".exe" if os.name == "nt" else ""
         platform_name = sys_platform()
+        extension = ".exe" if platform_name == "win32" else ""
         arch_name = sys_arch()
 
         candidates: list[str] = []
@@ -368,10 +363,16 @@ class ExportTaskService:
 
     @staticmethod
     def _resolve_trusted_runtime_path(path_or_url: str) -> str | None:
-        parsed = urlparse(path_or_url)
-        candidate = unquote(parsed.path) if parsed.scheme else path_or_url
-        if parsed.scheme == "file" and os.name == "nt" and candidate.startswith("/"):
-            candidate = candidate[1:]
+        # A native Windows drive letter is a path, not a URL scheme.
+        if os.path.isabs(path_or_url):
+            candidate = path_or_url
+        else:
+            parsed = urlparse(path_or_url)
+            if parsed.scheme not in ("", "file") or parsed.netloc:
+                return None
+            candidate = unquote(parsed.path) if parsed.scheme else path_or_url
+            if parsed.scheme == "file" and os.name == "nt" and candidate.startswith("/"):
+                candidate = candidate[1:]
 
         allowed_roots = [
             get_app_data_directory_env(),

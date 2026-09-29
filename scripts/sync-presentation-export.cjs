@@ -107,6 +107,13 @@ function resolveLinuxAssetName() {
     process.arch
   ).toLowerCase();
 
+  if (process.platform === "win32") {
+    if (arch === "amd64" || arch === "x64") {
+      return "export-Windows-X64.zip";
+    }
+    throw new Error(`Unsupported Windows export arch: ${arch}`);
+  }
+
   if (arch === "amd64" || arch === "x64") {
     return "export-Linux-X64.zip";
   }
@@ -237,19 +244,29 @@ function chmodIfPossible(filePath) {
 }
 
 function ensureCurrentConverterLink(converterPath) {
-  const currentPath = path.join(targetPyDir, "convert-linux-current");
-  fs.rmSync(currentPath, { force: true });
-
   if (process.platform === "win32") {
-    fs.copyFileSync(converterPath, currentPath);
+    const currentPath = path.join(targetPyDir, "convert-win32-x64.exe");
+    if (converterPath !== currentPath) {
+      fs.copyFileSync(converterPath, currentPath);
+    }
     return currentPath;
   }
+
+  const currentPath = path.join(targetPyDir, "convert-linux-current");
+  fs.rmSync(currentPath, { force: true });
 
   fs.symlinkSync(path.basename(converterPath), currentPath);
   return currentPath;
 }
 
 function getConverterCandidates(baseDir = targetPyDir) {
+  if (linuxAssetName === "export-Windows-X64.zip") {
+    return [
+      path.join(baseDir, "convert-win32-x64.exe"),
+      path.join(baseDir, "convert.exe"),
+    ];
+  }
+
   if (linuxAssetName === "export-Linux-ARM64.zip") {
     return [
       path.join(baseDir, "convert-linux-arm64"),
@@ -355,7 +372,7 @@ function validateExistingRuntime(expectedVersion) {
   if (!converterPath) {
     return {
       ok: false,
-      reason: `No Linux converter binary under ${targetPyDir} or ${targetRoot}.`,
+      reason: `No compatible converter binary under ${targetPyDir} or ${targetRoot}.`,
     };
   }
   chmodIfPossible(converterPath);

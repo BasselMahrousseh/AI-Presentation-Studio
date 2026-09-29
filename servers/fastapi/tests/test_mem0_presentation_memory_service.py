@@ -56,7 +56,7 @@ class TestMem0PresentationMemoryService:
         FakeMemoryClient.instances = []
         _mem0_oss_fresh()
 
-    def test_shared_client_defaults_to_local_llm_without_openai_key(self):
+    def test_shared_client_defaults_to_local_llm_without_openai_key(self, tmp_path):
         captured = {}
 
         def _fake_memory_from_config(config, telemetry_base):
@@ -69,7 +69,7 @@ class TestMem0PresentationMemoryService:
             {
                 "MEM0_ENABLED": "true",
                 "MEM0_REQUIRE_SPACY_MODEL": "false",
-                "APP_DATA_DIRECTORY": "/tmp/presenton-test",
+                "APP_DATA_DIRECTORY": str(tmp_path),
                 "OLLAMA_URL": "http://ollama:11434",
                 "OLLAMA_MODEL": "llama3.1:8b",
             },
@@ -81,7 +81,7 @@ class TestMem0PresentationMemoryService:
             client = mem0_oss.get_shared_mem0_client()
 
         assert client is not None
-        assert captured["telemetry_base"].endswith("/mem0/telemetry/oss")
+        assert captured["telemetry_base"] == str(tmp_path / "mem0" / "telemetry" / "oss")
         assert captured["config"]["llm"]["provider"] == "openai"
         assert captured["config"]["llm"]["config"]["model"] == "llama3.1:8b"
         assert captured["config"]["llm"]["config"]["api_key"] == "ollama"

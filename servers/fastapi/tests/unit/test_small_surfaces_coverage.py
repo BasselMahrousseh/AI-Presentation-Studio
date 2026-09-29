@@ -349,8 +349,12 @@ def test_export_task_output_permissions_are_readable(tmp_path):
 
     EXPORT_TASK_SERVICE._ensure_output_readable(str(output_path))
 
-    assert stat.S_IMODE(export_dir.stat().st_mode) == 0o755
-    assert stat.S_IMODE(output_path.stat().st_mode) == 0o644
+    assert os.access(export_dir, os.R_OK | os.X_OK)
+    assert os.access(output_path, os.R_OK)
+    # Windows chmod does not implement POSIX group/other permission bits.
+    if os.name != "nt":
+        assert stat.S_IMODE(export_dir.stat().st_mode) == 0o755
+        assert stat.S_IMODE(output_path.stat().st_mode) == 0o644
 
 
 def test_get_file_name_with_random_uuid_variants():

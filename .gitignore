@@ -73,5 +73,15 @@ benchmark/
 # local dev runtime data
 servers/fastapi/.runtime-smart/
 
-# Studio backend config (Azure OpenAI, image settings) is committed deliberately.
-!servers/fastapi/.env
+# Configuration templates are safe to track; live credentials are local.
+!servers/fastapi/.env.example
+
+# Generated verification and dependency caches
+.coverage*
+coverage.xml
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+.uv-cache/
+document-extraction-liteparse/
+servers/nextjs/

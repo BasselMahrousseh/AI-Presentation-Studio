@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "presentation-studio-backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "Presentation generation and export API for GenAI Workspace"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.11,<3.12"

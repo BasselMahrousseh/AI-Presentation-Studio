@@ -19,25 +19,24 @@ resources/              LiteParse document-extraction runner
 Dockerfile              FastAPI-only production image
 ```
 
-## Run locally (with the Workspace)
+## Run locally with Workspace
 
-From the GenAI-Workspace folder:
+Use the shared guide in `../GenAI-Workspace/docs/developer-setup.md`. It covers
+Python 3.11 for this API, Python 3.12 for Workspace, Node.js 22, the export runtime,
+Chromium/fonts, and the optional local Oracle database for Workspace.
 
-```bash
-./run_studio.sh 2>&1 | tee /tmp/studio-dev.log     # Studio backend on :8011
-cd GenAI-Workspace-Dev && venv/bin/python run_all.py  # Workspace backend :8000 + UI :3000
-```
-
-Then use Studio at http://localhost:3000. Studio does not auto-reload: restart `run_studio.sh` after
-backend changes. Its log lines are prefixed `[studio-api]`.
-
-First-time setup of this checkout:
+After installing the prerequisites, run from `GenAI-Workspace` with its virtualenv Python:
 
 ```bash
-npm install --omit=dev --ignore-scripts        # LiteParse + sharp, used by the backend
-npm run sync:presentation-export               # download and patch the export runtime
-cd servers/fastapi && uv sync --locked --dev   # Python dependencies
+python -m tools.dev init
+python -m tools.dev doctor --profile sqlite --studio
+python -m tools.dev start --profile sqlite --studio
 ```
+
+This starts Studio on port 8002, Workspace on 8000 and the UI on 3000. Studio's
+SQLite data stays separate from Workspace's database in both developer profiles.
+Use <http://localhost:3000/app/studio>. Real deck generation requires the approved
+Azure settings below; mock Workspace chat does not provide a Studio model.
 
 ## Configuration
 

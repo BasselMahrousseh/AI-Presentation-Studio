@@ -28,9 +28,9 @@ route list below; the Workspace UI's matching TemplateV2 editor was removed in t
 ## 2. Layout
 
 ```
-studio-dev/ (worktree of AI-Presentation-Studio, branch feature/workspace-identity -> Dev-Backend)
+AI-Presentation-Studio/
 ├── servers/fastapi/        FastAPI backend + SQLite/Postgres (the whole product)
-│   └── .env                Committed backend config: Azure OpenAI, image settings, service key
+│   └── .env.example        Template; actual Azure/service credentials are local or injected
 ├── presentation-export/    Gitignored prebuilt Node/Puppeteer bundle + PPTX converter (see §6)
 ├── resources/document-extraction/   LiteParse runner (Node) used to read uploaded documents
 ├── scripts/sync-presentation-export.cjs   Downloads/patches the export bundle
@@ -38,7 +38,7 @@ studio-dev/ (worktree of AI-Presentation-Studio, branch feature/workspace-identi
 └── Dockerfile              FastAPI-only image (Python + Node + Chromium)
 ```
 
-Locally, `run_studio.sh` (GenAI-Workspace root) starts FastAPI on :8011; the Workspace runs on :3000 and
+Locally, the parent `run_all.bat` starts FastAPI on :8002; the Workspace runs on :3000 and
 proxies browser calls to it (`GenAI-Workspace-UI/src/lib/studio-proxy.ts`). In the container the app
 listens on :8000 (`CMD python server.py --host 0.0.0.0 --port 8000`).
 
@@ -62,7 +62,9 @@ listed or opened.
 
 ### 4.1 Startup
 
-`api/main.py` loads `servers/fastapi/.env` (`override=False`: real env vars win), mounts the routers,
+`api/main.py` loads an explicit `STUDIO_ENV_FILE`, or the local `.env` only in development.
+An empty selector from the Workspace launcher prevents fallback loading. Process values win;
+duplicate keys are rejected and secrets are not interpolated. The app mounts the routers,
 `/app_data` (user files) and `/static` (icons, vendor JS). `api/lifespan.py` runs Alembic when
 `MIGRATE_DATABASE_ON_STARTUP=true`, creates missing tables, and fails fast if Azure OpenAI or (unless
 `DISABLE_IMAGE_GENERATION`) the image provider is not configured. LLM calls go through `llmai` with an
@@ -152,8 +154,8 @@ and verifies the export runtime.
 ## 9. History worth knowing
 
 - An outline-flag idempotency bug (`has_explicit_slide_structure` flipping to `false` on a repeat
-  stream) was fixed by persisting the flag in its own column with a data-driven backfill —
-  `BUG_REPORT_has_explicit_slide_structure_idempotency.md`.
+  stream) is prevented by persisting the flag in its own column with a data-driven backfill.
+  The outline endpoint integration tests cover repeated requests.
 - A DB session held open across a multi-minute Smart stream (pool exhaustion risk on Postgres) was fixed
   by opening short-lived sessions per unit of work in `stream_presentation`.
 - Several Smart-mode overflow classes (canvas, table, Grid/Flexbox min-width squeeze) are guarded by
@@ -163,6 +165,3 @@ and verifies the export runtime.
 ## 10. Where to go deeper
 
 - `CLAUDE.md` — business context, durable lessons, open items.
-- `STUDIO_IN_WORKSPACE_STATUS.md` (GenAI-Workspace folder root) — history of the migration into the
-  Workspace, including the September 2026 cleanup.
-- `BUG_REPORT_has_explicit_slide_structure_idempotency.md` — the bug summarized in §9.
