@@ -27,20 +27,32 @@ RENAMES = (
     ("chat_history_messages", "GENAI_WORKSPACE_STUDIO_CHAT_MESSAGE"),
     ("generation_feedback", "GENAI_WORKSPACE_STUDIO_FEEDBACK"),
 )
+RETIRED_TABLES = {
+    "access_tokens", "template_create_infos", "templates", "presentation_layout_codes",
+    "webhook_subscriptions", "async_tasks", "async_presentation_generation_tasks",
+    "ollamapullstatus", "presenton_cloud_provider", "provider_settings", "font_uploads",
+    "keyvaluesqlmodel", "template_v2",
+}
 
 
 def _preflight(connection, renames):
     inspector = sa.inspect(connection)
     tables = inspector.get_table_names()
     objects = tables + inspector.get_view_names()
+    if any(name.casefold() in RETIRED_TABLES for name in tables):
+        raise RuntimeError("Retired Studio tables remain; reconcile the preceding cleanup migration first")
     pairs = []
     for source, target in renames:
         matches = [name for name in tables if name.casefold() == source.casefold()]
         if len(matches) != 1:
             raise RuntimeError(f"Studio rename requires exactly one source table {source}")
         actual = matches[0]
-        if actual != source and connection.dialect.name != "mysql":
-            raise RuntimeError(f"Unexpected Studio source table casing: {actual}")
+        if actual != source:
+            folded_mysql_names = connection.dialect.name == "mysql" and (
+                connection.exec_driver_sql("SELECT @@lower_case_table_names").scalar_one() in (1, 2)
+            )
+            if not folded_mysql_names:
+                raise RuntimeError(f"Unexpected Studio source table casing: {actual}")
         if any(name.casefold() == target.casefold() for name in objects):
             raise RuntimeError(f"Studio rename target {target} already exists; reconcile the schema first")
         pairs.append((actual, target))

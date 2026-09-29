@@ -50,9 +50,9 @@ def test_get_all_presentations_lists_only_smart_decks():
     assert response == []
     compiled = _compile_statement(session.executed_statement)
     # Outline drafts and legacy TemplateV2 decks are "standard" rows and are not listed.
-    assert "presentations.generation_mode = 'smart'" in compiled
-    assert "presentations.version =" not in compiled
-    assert "ORDER BY presentations.created_at DESC" in compiled
+    assert "\"GENAI_WORKSPACE_PRESENTATION\".generation_mode = 'smart'" in compiled
+    assert "\"GENAI_WORKSPACE_PRESENTATION\".version =" not in compiled
+    assert "ORDER BY \"GENAI_WORKSPACE_PRESENTATION\".created_at DESC" in compiled
 
 
 def test_get_all_presentations_can_skip_slide_preview_join():
@@ -82,9 +82,9 @@ def test_get_all_presentations_can_skip_slide_preview_join():
     assert response[0].slides == []
     assert response[0].fonts == {"Inter": "https://example.com/inter.css"}
     compiled = _compile_statement(session.executed_statement)
-    assert "presentations.generation_mode = 'smart'" in compiled
-    assert "JOIN slides" not in compiled
-    assert "ORDER BY presentations.created_at DESC" in compiled
+    assert "\"GENAI_WORKSPACE_PRESENTATION\".generation_mode = 'smart'" in compiled
+    assert 'JOIN "GENAI_WORKSPACE_SLIDE"' not in compiled
+    assert "ORDER BY \"GENAI_WORKSPACE_PRESENTATION\".created_at DESC" in compiled
 
 
 def test_get_all_presentations_lists_unfinished_decks_but_not_slide_less_drafts():
@@ -95,9 +95,9 @@ def test_get_all_presentations_lists_unfinished_decks_but_not_slide_less_drafts(
     )
 
     compiled = _compile_statement(session.executed_statement)
-    assert "LEFT OUTER JOIN slides" in compiled
-    assert "slides.id IS NOT NULL" in compiled
-    assert "presentations.generation_status = 'in_progress'" in compiled
+    assert 'LEFT OUTER JOIN "GENAI_WORKSPACE_SLIDE"' in compiled
+    assert '"GENAI_WORKSPACE_SLIDE".id IS NOT NULL' in compiled
+    assert "\"GENAI_WORKSPACE_PRESENTATION\".generation_status = 'in_progress'" in compiled
 
 
 def test_get_all_presentations_returns_an_unfinished_deck_with_no_first_slide():

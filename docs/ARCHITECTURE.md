@@ -42,7 +42,7 @@ Studio supports two authenticated principals:
 - A Workspace HS256 JWT in a bearer header or `studio_token` cookie. `WORKSPACE_JWT_SECRET` must match the Workspace issuer. `exp` and `sub` are required. Issuer/audience checks apply only when `WORKSPACE_JWT_ISSUER` and `WORKSPACE_JWT_AUDIENCE` are configured consistently with issued tokens.
 - A bearer `STUDIO_SERVICE_API_KEY`, matched to Workspace's `PRESENTATION_STUDIO_API_KEY`. With `X-On-Behalf-Of`, it delegates to that Workspace subject. Without the header, it can access only `/api/v1/admin/*`. Workspace user JWTs, including administrators' JWTs, cannot access Studio's service-admin surface.
 
-[Identity mapping](../servers/fastapi/api/v1/auth/workspace_jwt.py) creates a Studio `user` on first use, keyed by the lowercased JWT `sub` in `external_subject`, never by a local username. This provides user ownership in one trusted Workspace identity namespace, **not organization-based tenancy**. Multiple issuers/organizations must not share ambiguous subjects until identity is namespaced in code.
+[Identity mapping](../servers/fastapi/api/v1/auth/workspace_jwt.py) creates a `GENAI_WORKSPACE_STUDIO_USER` row on first use, keyed by the lowercased JWT `sub` in `external_subject`, never by a local username. This provides user ownership in one trusted Workspace identity namespace, **not organization-based tenancy**. Multiple issuers/organizations must not share ambiguous subjects until identity is namespaced in code.
 
 Workspace stores the access token in browser storage and mirrors it to an HttpOnly, SameSite=Lax cookie for Studio assets, EventSource and downloads. The mirror does not remove the browser-readable original token. The proxy forwards only the Studio cookie and caller authorization. Backend signature verification, rather than the UI login gate, is the security boundary.
 
@@ -85,6 +85,13 @@ Database sessions are short-lived around units of work. `generation_status="in_p
 
 Generation is an in-process asynchronous task attached to an HTTP stream. It is cancelled when the stream unwinds; later requests resume persisted progress. There is no durable queue, distributed lease or per-deck generation lock. Avoid simultaneous generation requests for the same deck. The status field alone is not mutual exclusion.
 
+Outline streaming persists the `has_explicit_slide_structure` decision with the
+completed outline. Repeated requests reuse it even after `n_slides` is backfilled;
+an explicit user-supplied slide count remains authoritative. Preserve the
+[repeat-call regression tests](../servers/fastapi/tests/integration/test_outlines_endpoint.py)
+when changing detection or resume behavior. This stable decision does not provide
+a general idempotency guarantee for generation requests.
+
 The UI currently has different rendering paths:
 
 - [SmartHtmlSlide](../../GenAI-Workspace-UI/src/features/studio/app/%28presentation-generator%29/components/SmartHtmlSlide.tsx) defaults to a sandboxed `allow-scripts` iframe. The legacy `NEXT_PUBLIC_PRESENTON_ELECTRON_PLATFORM=linux` flag selects sanitized in-page markup plus chart-script injection.
@@ -125,6 +132,11 @@ Use absolute storage paths, an explicit database URL and separate databases/cred
 
 The [models](../servers/fastapi/models/sql) define the current schema; [migration scripts](../servers/fastapi/alembic/versions) define upgrades. JSON storage depends on the dialect. There is no separately maintained Studio SQL bootstrap dump: use Alembic. Workspace Oracle SQL belongs in the [central database guide](../../GenAI-Workspace/docs/database.md), not in Studio's database.
 
+Studio's uppercase table identifiers are quoted by SQLAlchemy. Quote them in
+manual PostgreSQL queries too, for example
+`SELECT count(*) FROM "GENAI_WORKSPACE_PRESENTATION"`; an unquoted identifier
+is folded to lowercase and refers to a different object.
+
 ### Migrations and ownership cutover
 
 The current head is `f8c2d4e6a0b3`, the canonical Workspace table-name migration,
@@ -138,8 +150,15 @@ after `e7b1d3f5a9c2` (per-deck web-search mode). Key milestones are:
 The rename maps `user`, `presentations`, `slides`, `imageasset`,
 `chat_history_messages` and `generation_feedback` to the six prefixed application
 tables above without copying or deleting rows. It preflights old/new collisions
-before renaming. Fresh Alembic installations finish with the same canonical
-names; no active layout/version tables are introduced.
+before renaming and retains existing index/constraint names. SQLite requires
+3.26 or newer, `legacy_alter_table` disabled and valid foreign keys. Its upgrade
+runs the tracker and application renames in one transaction. MySQL uses one
+`RENAME TABLE` statement for the six application tables, but tracker DDL commits
+separately. A failed MySQL application-table preflight can therefore leave the
+canonical tracker holding the unchanged prior revision; resolve the reported
+collision and retry with the updated migration tooling.
+Fresh Alembic installations finish with the same canonical names;
+no active layout/version tables are introduced.
 
 Online upgrade/downgrade/stamp also transitions the legacy `alembic_version`
 tracker to `GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION` before revision discovery.
@@ -150,7 +169,7 @@ but the tracker remains canonical so Alembic can safely record the prior revisio
 This means a code rollback still needs a compatible migration environment; do not
 assume old binaries can read the new tracker.
 
-With `MIGRATE_DATABASE_ON_STARTUP=true`, [startup](../servers/fastapi/api/lifespan.py) invokes [migrations.py](../servers/fastapi/migrations.py). Otherwise startup refuses known legacy table names rather than creating empty canonical replacements; `create_all` only creates missing current tables and neither upgrades existing columns nor stamps revisions. It is not an upgrade strategy. Startup migrations also infer/restamp some legacy or unknown revisions; inspect that behavior on a restored copy before applying it to an old or divergent database.
+With `MIGRATE_DATABASE_ON_STARTUP=true`, [startup](../servers/fastapi/api/lifespan.py) invokes [migrations.py](../servers/fastapi/migrations.py). Otherwise [schema validation](../servers/fastapi/utils/schema_names.py) rejects legacy or mixed names, incomplete canonical schemas, conflicting views and missing model columns before `create_all`. A fresh empty database can receive current tables, but `create_all` neither upgrades existing columns nor stamps revisions. It is not an upgrade strategy. Startup migrations also infer/restamp some legacy or unknown revisions; inspect that behavior on a restored copy before applying it to an old or divergent database.
 
 For controlled deployments, stop writers, back up the database **and application files**, migrate once, verify the revision and start the service. Do not have every replica race to migrate. From `servers/fastapi`, after injecting the intended database configuration:
 
@@ -160,7 +179,7 @@ uv run --locked python -m alembic -c alembic.ini current
 uv run --locked python -m alembic -c alembic.ini upgrade head
 ```
 
-`heads` reads migration scripts; `current` reads the selected database; `upgrade` changes it. The Alembic CLI does not load Studio's `.env` selector. Inject `DATABASE_URL` through the process environment or deliberately load the selected environment before invoking Alembic. Some historical scripts inspect live tables, so a complete `upgrade --sql` is not guaranteed offline.
+`heads` reads migration scripts; `current` reads the selected database; `upgrade` changes it. The Alembic CLI does not load Studio's `.env` selector. Inject `DATABASE_URL` through the process environment or deliberately load the selected environment before invoking Alembic. The table-name migration explicitly requires an online connection for collision and foreign-key checks; `upgrade --sql` cannot generate the complete upgrade offline.
 
 [backfill_deck_owners.py](../servers/fastapi/scripts/backfill_deck_owners.py) accepts an explicit presentation-to-Workspace-subject mapping. It is dry-run by default; `--apply` copies referenced assets into owner directories and rewrites references. Unmapped decks and original files stay untouched. Do not assign all legacy decks to the first user or expose private roots to work around unresolved ownership.
 
@@ -211,11 +230,11 @@ Use [`.env.example`](../servers/fastapi/.env.example) as the local template. Rea
 Required workstation tooling: Python **3.11** (3.12 is outside the declared range), `uv`, the team baseline Node.js **22**, npm, Chromium and a matching export converter. The current Docker image still uses Node 20; validate parity before promoting the same release across these environments. From the repository root:
 
 ```text
-npm ci
+npm ci --ignore-scripts
 npm run sync:presentation-export
 npm run check:presentation-export
 cd servers/fastapi
-uv sync --locked --dev
+uv sync --locked --dev --python 3.11
 uv run --locked python server.py --host 127.0.0.1 --port 8002
 ```
 

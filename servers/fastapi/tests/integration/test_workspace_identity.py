@@ -94,7 +94,7 @@ def test_valid_token_creates_stable_non_admin_user(env):
     b = env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("ALICE")))
     assert a.status_code == 200 and a.json()["is_admin"] is False
     assert a.json()["id"] == b.json()["id"]  # subject is case-normalised, one account
-    assert len(env.sync("select id from user where external_subject='alice'")) == 1
+    assert len(env.sync("select id from GENAI_WORKSPACE_STUDIO_USER where external_subject='alice'")) == 1
 
 
 def test_bad_secret_expired_and_missing_token_are_rejected(env):
@@ -171,14 +171,14 @@ def test_favourite_toggle_is_owner_scoped_and_does_not_touch_updated_at(env):
     a = env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("alice"))).json()["id"]
     b = env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("bob"))).json()["id"]
     deck = _make_deck(env, uuid.UUID(a))
-    before = env.sync("select updated_at from presentations where id=:i", i=deck.hex)[0][0]
+    before = env.sync("select updated_at from GENAI_WORKSPACE_PRESENTATION where id=:i", i=deck.hex)[0][0]
 
     other = env.client.patch(f"/api/v1/ppt/presentation/{deck}/favorite", json={"is_favorite": True}, headers=_bearer(_token("bob")))
     assert other.status_code == 404  # another user's deck is invisible, not forbidden
 
     mine = env.client.patch(f"/api/v1/ppt/presentation/{deck}/favorite", json={"is_favorite": True}, headers=_bearer(_token("alice")))
     assert mine.status_code == 200
-    assert env.sync("select updated_at from presentations where id=:i", i=deck.hex)[0][0] == before
+    assert env.sync("select updated_at from GENAI_WORKSPACE_PRESENTATION where id=:i", i=deck.hex)[0][0] == before
 
     listing = env.client.get("/api/v1/ppt/presentation/all?favorites_only=true", headers=_bearer(_token("alice"))).json()
     assert [p["id"] for p in listing] == [str(deck)] and listing[0]["is_favorite"] is True
@@ -191,7 +191,7 @@ def test_favourite_toggle_is_owner_scoped_and_does_not_touch_updated_at(env):
 def test_all_supports_last_edited_sort(env):
     a = uuid.UUID(env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("alice"))).json()["id"])
     old, new = _make_deck(env, a, "old"), _make_deck(env, a, "new")
-    env.sync("update presentations set updated_at='2026-06-01 00:00:00' where id=:i", i=old.hex)
+    env.sync("update GENAI_WORKSPACE_PRESENTATION set updated_at='2026-06-01 00:00:00' where id=:i", i=old.hex)
     by_edit = env.client.get("/api/v1/ppt/presentation/all?sort_by=updated_at", headers=_bearer(_token("alice"))).json()
     assert [p["title"] for p in by_edit][0] == "old"
     assert new  # created_at ties, so ordering above can only come from updated_at
@@ -212,7 +212,7 @@ def _backfill_fixture(env, tmp_path):
     old_owner = uuid.uuid4()
     other_owner = uuid.uuid4()
     for who in (old_owner, other_owner):
-        env.sync("insert into user (id, username, hashed_password, is_active, is_superuser, is_verified, auth_version) "
+        env.sync("insert into GENAI_WORKSPACE_STUDIO_USER (id, username, hashed_password, is_active, is_superuser, is_verified, auth_version) "
                  "values (:i, :n, 'x', 1, 0, 1, 1)", i=who.hex, n=f"svc-{who.hex[:6]}")
     (app_data / "images" / "users" / str(old_owner)).mkdir(parents=True)
     (app_data / "images" / "users" / str(old_owner) / "a.png").write_bytes(b"A")
@@ -227,7 +227,7 @@ def _backfill_fixture(env, tmp_path):
         "escape": "/app_data/images/../../etc/passwd",
         "gone": f"/app_data/images/users/{old_owner}/missing.png",
     }
-    env.sync("update slides set content=:c where presentation=:p", c=json.dumps(body), p=mapped.hex)
+    env.sync("update GENAI_WORKSPACE_SLIDE set content=:c where presentation=:p", c=json.dumps(body), p=mapped.hex)
     return app_data, old_owner, mapped, unmapped, body
 
 
@@ -236,8 +236,8 @@ def test_backfill_dry_run_writes_nothing(env, tmp_path):
     mod = _load_backfill()
     rep = mod.run(f"sqlite:///{env.db}", str(app_data), {str(mapped): "Erin"}, apply=False)
     assert len(rep["reassigned"]) == 1 and rep["unattributed"] == [str(unmapped)]
-    assert env.sync("select owner_id from presentations where id=:i", i=mapped.hex)[0][0] == old_owner.hex
-    assert env.sync("select count(*) from user where external_subject='erin'")[0][0] == 0
+    assert env.sync("select owner_id from GENAI_WORKSPACE_PRESENTATION where id=:i", i=mapped.hex)[0][0] == old_owner.hex
+    assert env.sync("select count(*) from GENAI_WORKSPACE_STUDIO_USER where external_subject='erin'")[0][0] == 0
     assert not (app_data / "images" / "users").joinpath("x").exists()
 
 
@@ -247,14 +247,14 @@ def test_backfill_apply_reassigns_copies_files_rewrites_urls_and_is_idempotent(e
     mapping = {str(mapped): "Erin"}
     rep = mod.run(f"sqlite:///{env.db}", str(app_data), mapping, apply=True)
 
-    new_owner = env.sync("select id from user where external_subject='erin'")[0][0]
-    assert env.sync("select owner_id from presentations where id=:i", i=mapped.hex)[0][0] == new_owner
-    assert env.sync("select owner_id from slides where presentation=:i", i=mapped.hex)[0][0] == new_owner
+    new_owner = env.sync("select id from GENAI_WORKSPACE_STUDIO_USER where external_subject='erin'")[0][0]
+    assert env.sync("select owner_id from GENAI_WORKSPACE_PRESENTATION where id=:i", i=mapped.hex)[0][0] == new_owner
+    assert env.sync("select owner_id from GENAI_WORKSPACE_SLIDE where presentation=:i", i=mapped.hex)[0][0] == new_owner
     # unattributed decks are untouched
-    assert env.sync("select owner_id from presentations where id=:i", i=unmapped.hex)[0][0] == old_owner.hex
+    assert env.sync("select owner_id from GENAI_WORKSPACE_PRESENTATION where id=:i", i=unmapped.hex)[0][0] == old_owner.hex
 
     new_uuid = str(uuid.UUID(new_owner))
-    content = json.loads(env.sync("select content from slides where presentation=:i", i=mapped.hex)[0][0])
+    content = json.loads(env.sync("select content from GENAI_WORKSPACE_SLIDE where presentation=:i", i=mapped.hex)[0][0])
     assert content["img"] == f"/app_data/images/users/{new_uuid}/a.png"
     assert content["legacy"] == f"/app_data/images/users/{new_uuid}/legacy.png"
     assert (app_data / "images" / "users" / new_uuid / "a.png").read_bytes() == b"A"
@@ -271,6 +271,6 @@ def test_backfill_apply_reassigns_copies_files_rewrites_urls_and_is_idempotent(e
     assert is_app_data_path_authorized(content["img"], user_id=uuid.UUID(new_uuid), is_admin=False)
 
     again = mod.run(f"sqlite:///{env.db}", str(app_data), mapping, apply=True)
-    assert env.sync("select count(*) from user where external_subject='erin'")[0][0] == 1
-    assert json.loads(env.sync("select content from slides where presentation=:i", i=mapped.hex)[0][0]) == content
+    assert env.sync("select count(*) from GENAI_WORKSPACE_STUDIO_USER where external_subject='erin'")[0][0] == 1
+    assert json.loads(env.sync("select content from GENAI_WORKSPACE_SLIDE where presentation=:i", i=mapped.hex)[0][0]) == content
     assert again["reassigned"][0]["from_owner"] == str(uuid.UUID(new_owner))
