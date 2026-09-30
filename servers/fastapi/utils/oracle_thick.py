@@ -118,11 +118,15 @@ class _ThickCursor:
             return await self._acall(self._cursor.fetchmany)
         return await self._acall(self._cursor.fetchmany, size)
 
-    async def setinputsizes(self, *args, **kwargs):
-        return await self._acall(self._cursor.setinputsizes, *args, **kwargs)
+    def setinputsizes(self, *args, **kwargs):
+        # python-oracledb's AsyncCursor.setinputsizes is synchronous, and
+        # SQLAlchemy's async Oracle adapter calls it without awaiting.
+        return self._call(self._cursor.setinputsizes, *args, **kwargs)
 
-    async def nextset(self):
-        return await self._acall(self._cursor.nextset)
+    def nextset(self):
+        # SQLAlchemy's generic adapter awaits this; the real AsyncCursor method
+        # is synchronous. Returning a coroutine keeps that await working.
+        return self._acall(self._cursor.nextset)
 
     def var(self, *args, **kwargs):
         return self._call(self._cursor.var, *args, **kwargs)
