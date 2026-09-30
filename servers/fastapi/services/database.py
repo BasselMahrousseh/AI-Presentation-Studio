@@ -103,8 +103,12 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
 
 async def create_db_and_tables():
     """Create any missing tables from the current models. Startup does not run Alembic."""
+    import logging
+    log = logging.getLogger("uvicorn.error")
+    log.info("Reading the Oracle schema")
     async with sql_engine.begin() as conn:
         await conn.run_sync(lambda sync_conn: validate_create_all_schema(sync_conn, SQLModel.metadata))
+        log.info("Schema check finished; ensuring Studio tables")
         await conn.run_sync(
             lambda sync_conn: SQLModel.metadata.create_all(
                 sync_conn,
@@ -118,6 +122,7 @@ async def create_db_and_tables():
                 ],
             )
         )
+    log.info("Studio tables are ready")
 
 
 async def dispose_engines():

@@ -10,11 +10,40 @@ import logging
 import os
 import platform
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 from sqlalchemy.engine import make_url
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
+
+
+def _invoke(executor: ThreadPoolExecutor, fn, *args, **kwargs):
+    """Run Oracle work on the connection thread without freezing the server.
+
+    A nested call from that same thread runs inline. Otherwise the server waits
+    forever for itself, and Ctrl+C never returns because the event loop is blocked.
+    From SQLAlchemy's greenlet, hand the wait back to the running loop so a
+    shutdown signal can interrupt it.
+    """
+    workers = getattr(executor, "_threads", ())
+    if threading.current_thread() in workers:
+        return fn(*args, **kwargs)
+
+    from sqlalchemy.util.concurrency import await_only, in_greenlet
+
+    if in_greenlet():
+        async def _run():
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(executor, lambda: fn(*args, **kwargs))
+
+        return await_only(_run())
+
+    future = executor.submit(lambda: fn(*args, **kwargs))
+    while True:
+        try:
+            return future.result(timeout=0.5)
+        except FutureTimeout:
+            continue
 
 _init_lock = threading.Lock()
 _thick_ready = False
@@ -93,7 +122,7 @@ class _ThickCursor:
         self._executor = executor
 
     def _call(self, fn, *args, **kwargs):
-        return self._executor.submit(lambda: fn(*args, **kwargs)).result()
+        return _invoke(self._executor, fn, *args, **kwargs)
 
     async def _acall(self, fn, *args, **kwargs):
         loop = asyncio.get_running_loop()
@@ -194,7 +223,7 @@ class _ThickConnection:
         self._call(setattr, self._conn, name, value)
 
     def _call(self, fn, *args, **kwargs):
-        return self._executor.submit(lambda: fn(*args, **kwargs)).result()
+        return _invoke(self._executor, fn, *args, **kwargs)
 
     async def _acall(self, fn, *args, **kwargs):
         loop = asyncio.get_running_loop()

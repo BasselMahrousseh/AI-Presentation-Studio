@@ -78,6 +78,19 @@ def test_sqlalchemy_setinputsizes_runs_instead_of_returning_a_coroutine():
         wrapper._executor.shutdown(wait=True)
 
 
+def test_nested_oracle_call_on_the_connection_thread_does_not_deadlock():
+    wrapper = _ThickConnection()
+    raw = _FakeConnection()
+    object.__setattr__(wrapper, "_conn", raw)
+    cursor = wrapper.cursor()
+    try:
+        nested = wrapper._executor.submit(lambda: cursor.setinputsizes(content=str))
+        assert nested.result(timeout=2) == {"content": str}
+    finally:
+        cursor.close()
+        wrapper._executor.shutdown(wait=False, cancel_futures=True)
+
+
 def test_thick_cursor_runs_on_one_connection_thread():
     wrapper = _ThickConnection()
     raw = _FakeConnection()

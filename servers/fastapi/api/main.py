@@ -28,7 +28,7 @@ from utils.path_helpers import get_resource_path
 
 init_sandbox_safe_mimetypes()
 
-request_logger = logging.getLogger("studio.request")
+request_logger = logging.getLogger("uvicorn.error")
 
 
 def _maybe_init_sentry() -> None:
