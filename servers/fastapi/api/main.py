@@ -1,3 +1,4 @@
+import logging
 import os
 from utils.environment import load_studio_environment
 
@@ -8,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import Request
 from starlette.responses import FileResponse
+from starlette.routing import Match
 
 from api.lifespan import app_lifespan
 from api.asset_files import StoredAssetFiles
@@ -25,6 +27,8 @@ from utils.path_helpers import get_resource_path
 
 
 init_sandbox_safe_mimetypes()
+
+request_logger = logging.getLogger("studio.request")
 
 
 def _maybe_init_sentry() -> None:
@@ -114,3 +118,34 @@ async def static_icon_fallback_middleware(request: Request, call_next):
     if not os.path.isfile(placeholder):
         return response
     return FileResponse(placeholder, media_type="image/svg+xml")
+
+
+def _route_matched(request: Request) -> bool:
+    for route in request.app.router.routes:
+        match, _child = route.matches(request.scope)
+        if match == Match.FULL:
+            return True
+    return False
+
+
+@app.middleware("http")
+async def log_http_request(request: Request, call_next):
+    """Record the method and path that actually arrived, and why a 404 happened."""
+    method = request.method
+    path = request.url.path
+    request_logger.info("request %s %s", method, path)
+    response = await call_next(request)
+    if response.status_code != 404:
+        request_logger.info("response %s %s %s", method, path, response.status_code)
+        return response
+    try:
+        registered = _route_matched(request)
+    except Exception:
+        registered = False
+    request_logger.warning(
+        "404 %s %s (%s)",
+        method,
+        path,
+        "a handler returned 404" if registered else "no route is registered for this method and path",
+    )
+    return response

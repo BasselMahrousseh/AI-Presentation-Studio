@@ -303,6 +303,12 @@ async def create_presentation(
     source_presentation_id: Annotated[Optional[uuid.UUID], Body()] = None,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
+    logger.info(
+        "create_presentation entered mode=%s template=%s n_slides=%s",
+        generation_mode,
+        smart_template,
+        n_slides,
+    )
 
     if n_slides is not None and n_slides < 1:
         raise HTTPException(
