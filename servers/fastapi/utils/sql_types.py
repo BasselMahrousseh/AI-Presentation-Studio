@@ -130,7 +130,11 @@ def _required_text_default(element, compiler, **kwargs):
 def _required_text_oracle(element, compiler, **kwargs):
     # Oracle folds the empty string to NULL; required prompt/chat text may be
     # empty while a deck is being drafted. Persist an empty LOB in that case.
-    return "COALESCE(" + compiler.process(list(element.clauses)[0], **kwargs) + ", EMPTY_CLOB())"
+    # Thick mode binds the Python string as NVARCHAR (DB_TYPE_NVARCHAR).
+    # EMPTY_CLOB() cannot sit in that COALESCE (ORA-00932). TO_CLOB makes both
+    # sides CLOB, which is the column type.
+    bind = compiler.process(list(element.clauses)[0], **kwargs)
+    return "COALESCE(TO_CLOB(" + bind + "), EMPTY_CLOB())"
 
 
 class RequiredText(TypeDecorator):

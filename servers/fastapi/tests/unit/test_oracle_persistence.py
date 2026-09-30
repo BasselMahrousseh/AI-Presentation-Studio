@@ -121,7 +121,7 @@ def test_all_orm_tables_and_queries_compile_for_supported_dialects(dialect):
     statement = select(PresentationModel).where(PresentationModel.is_favorite == True)  # noqa: E712
     assert "IS 1" not in str(statement.compile(dialect=dialect))
     sql = str(insert(PresentationModel).values(content="", language="en", n_slides=0, version="v2-standard").compile(dialect=dialect))
-    assert ("EMPTY_CLOB()" in sql) == (dialect.name == "oracle")
+    assert ("COALESCE(TO_CLOB(" in sql and "EMPTY_CLOB()" in sql) == (dialect.name == "oracle")
 
 
 def test_frozen_oracle_columns_match_runtime_and_ddl_has_native_types():
