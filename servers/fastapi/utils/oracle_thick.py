@@ -264,5 +264,7 @@ async def open_thick_connection(database_url: str) -> _ThickConnection:
     ensure_oracle_thick_mode()
     user, password, dsn = credentials_from_sqlalchemy_url(database_url)
     connection = _ThickConnection()
+    logger.info("Connecting to Oracle as %s", user)
     await asyncio.to_thread(connection.connect, user, password, dsn)
+    logger.info("Oracle session open")
     return connection

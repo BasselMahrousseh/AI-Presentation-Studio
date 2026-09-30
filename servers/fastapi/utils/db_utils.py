@@ -40,7 +40,8 @@ def build_oracle_dsn() -> str:
     port = (os.getenv("ORACLE_PORT") or "1521").strip()
     protocol = (os.getenv("ORACLE_PROTOCOL") or "tcp").strip().lower() or "tcp"
     return (
-        f"(DESCRIPTION=(ADDRESS=(PROTOCOL={protocol})(HOST={host})(PORT={port}))"
+        "(DESCRIPTION=(CONNECT_TIMEOUT=20)"
+        f"(ADDRESS=(PROTOCOL={protocol})(HOST={host})(PORT={port}))"
         f"(CONNECT_DATA=(SERVICE_NAME={service})))"
     )
 
