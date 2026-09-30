@@ -19,6 +19,7 @@ from models.sql.user import User
 from api.v1.auth.context import get_current_owner_id
 from utils.schema_names import validate_create_all_schema
 from utils.db_utils import get_database_url_and_connect_args, get_pool_kwargs
+from utils.oracle_thick import open_thick_connection
 
 
 database_url, connect_args = get_database_url_and_connect_args()
@@ -27,9 +28,19 @@ _database_dialect = make_url(database_url).get_backend_name()
 # SQLite uses a file lock and ignores server pool settings.
 _pool_kwargs = {} if _database_dialect == "sqlite" else get_pool_kwargs()
 
-sql_engine: AsyncEngine = create_async_engine(
-    database_url, connect_args=connect_args, hide_parameters=True, **_pool_kwargs
-)
+_engine_kwargs = {
+    "connect_args": connect_args,
+    "hide_parameters": True,
+    **_pool_kwargs,
+}
+if _database_dialect == "oracle":
+    async def _connect_oracle_thick():
+        return await open_thick_connection(database_url)
+
+    # This listener rejects thin mode (DPY-3001). The creator uses Instant Client.
+    _engine_kwargs["async_creator"] = _connect_oracle_thick
+
+sql_engine: AsyncEngine = create_async_engine(database_url, **_engine_kwargs)
 
 
 if _database_dialect == "sqlite":

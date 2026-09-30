@@ -42,8 +42,10 @@ def apply_schema() -> None:
 
     from utils.db_utils import get_database_url_and_connect_args, to_sync_sqlalchemy_url
     from utils.environment import load_studio_environment
+    from utils.oracle_thick import ensure_oracle_thick_mode
 
     load_studio_environment()
+    ensure_oracle_thick_mode()
     database_url, _connect_args = get_database_url_and_connect_args()
     engine = create_engine(to_sync_sqlalchemy_url(database_url), hide_parameters=True)
     try:
