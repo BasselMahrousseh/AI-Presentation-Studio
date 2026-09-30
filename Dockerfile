@@ -1,142 +1,65 @@
-# syntax=docker/dockerfile:1.7
+# Presentation Studio API. Python backend and Oracle thick mode only.
+# Layout checks and PPTX/PDF export need the Node presentation-export runtime,
+# which this image does not install.
 
-FROM python:3.11-slim-trixie AS fastapi-builder
+FROM python:3.11-slim-bookworm
 
-WORKDIR /app/servers/fastapi
+ARG http_proxy=http://proxy.etisalat.corp.ae:8080
+ARG https_proxy=http://proxy.etisalat.corp.ae:8080
+# Override when download.oracle.com is blocked. Folder inside the zip must match ORACLE_CLIENT_PATH.
+ARG ORACLE_IC_URL=https://download.oracle.com/otn_software/linux/instantclient/2326300/instantclient-basiclite-linux.x64-23.26.3.0.0.zip
 
-ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
-
-RUN python -m venv --without-pip /opt/venv \
-    && pip install --no-cache-dir uv
-
-COPY servers/fastapi/pyproject.toml servers/fastapi/uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
-    && uv pip install --python /opt/venv/bin/python -r /tmp/requirements.txt
-
-COPY servers/fastapi /app/servers/fastapi
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/venv/bin/python --no-deps .
-# mem0/spaCy BM25 lemmatization loads en_core_web_sm at runtime; spaCy tries pip to
-# download it otherwise. Runtime image has no pip in PATH (--without-pip venv).
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/venv/bin/python \
-    "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
-ENV HF_HOME=/root/.cache/huggingface \
-    PRESENTON_FASTEMBED_ICON_CACHE_DIR=/root/.cache/presenton/fastembed-icons
-# Warm FastEmbed caches into the image (not a BuildKit cache mount, or HF weights would be missing).
-RUN /opt/venv/bin/python scripts/warm_fastembed_cache.py
-
-
-FROM node:20-bookworm-slim AS assets-builder
-
-WORKDIR /app
-
-ARG TARGETARCH
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates unzip \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY package.json /app/
-
-RUN mkdir -p /app/document-extraction-liteparse \
-    && cd /app/document-extraction-liteparse \
-    && npm init -y \
-    && npm install @llamaindex/liteparse@1.5.2 --omit=dev
-
-COPY resources/document-extraction/liteparse_runner.mjs /app/document-extraction-liteparse/liteparse_runner.mjs
-COPY scripts/sync-presentation-export.cjs /app/scripts/sync-presentation-export.cjs
-# Bundled export still loads @img/sharp-* native addons from node_modules (not inlined).
-RUN rm -rf /app/presentation-export \
-    && EXPORT_RUNTIME_ARCH="${TARGETARCH}" node /app/scripts/sync-presentation-export.cjs --force \
-    && find /app/presentation-export/py -maxdepth 1 -type f -name "convert-linux-*" -exec chmod +x {} \; \
-    && cd /app/presentation-export \
-    && npm init -y \
-    && npm install "sharp@^0.34.5" --include=optional --omit=dev --no-fund --no-audit --no-package-lock
-
-
-FROM python:3.11-slim-trixie AS runtime
-
-WORKDIR /app
-
-ARG INSTALL_TESSERACT=true
-ARG TARGETARCH
-ARG CHROMIUM_VERSION=149.0.7827.196-1~deb13u1
-ARG CHROMIUM_SNAPSHOT=20260625T180000Z
-
-# LiteParse uses Node + @llamaindex/liteparse; OCR uses Tesseract. Node also runs presentation-export.
-ENV APP_DATA_DIRECTORY=/app_data \
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    APP_DATA_DIRECTORY=/app_data \
     TEMP_DIRECTORY=/tmp/presenton \
-    EXPORT_PACKAGE_ROOT=/app/presentation-export \
-    EXPORT_RUNTIME_DIR=/app/presentation-export \
-    BUILT_PYTHON_MODULE_PATH=/app/presentation-export/py/convert-linux-current \
-    PRESENTON_APP_ROOT=/app \
-    HF_HOME=/root/.cache/huggingface \
-    PRESENTON_FASTEMBED_ICON_CACHE_DIR=/root/.cache/presenton/fastembed-icons \
-    PATH="/opt/venv/bin:${PATH}" \
-    NODE_ENV=production \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+    ORACLE_CLIENT_PATH=/opt/oracle/instantclient_23_26 \
+    LD_LIBRARY_PATH=/opt/oracle/instantclient_23_26 \
+    ORACLE_PROTOCOL=tcp
 
+# Instant Client for Native Network Encryption. The thin driver fails with DPY-3001 on this listener.
 RUN set -eux; \
-    printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99snapshot; \
-    printf 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/%s trixie-security main\n' "$CHROMIUM_SNAPSHOT" > /etc/apt/sources.list.d/chromium-snapshot.list; \
-    packages="ca-certificates curl fontconfig imagemagick zstd \
-    fonts-liberation fonts-noto-core fonts-noto-extra fonts-noto-mono fonts-noto-ui-core fonts-noto-ui-extra \
-    fonts-noto-cjk fonts-noto-cjk-extra fonts-noto-color-emoji xdg-utils \
-    libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
-    libcairo2 libcups2t64 libdbus-1-3 libdrm2 libexpat1 libgbm1 \
-    libglib2.0-0t64 libgtk-3-0t64 libnspr4 libnss3 libpango-1.0-0 \
-    libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
-    libxkbcommon0 libxrandr2 libxshmfence1 libxss1 libxtst6"; \
-    if [ "$INSTALL_TESSERACT" = "true" ]; then packages="$packages tesseract-ocr tesseract-ocr-eng"; fi; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends --allow-downgrades \
-    $packages \
-    chromium="${CHROMIUM_VERSION}" \
-    chromium-common="${CHROMIUM_VERSION}" \
-    chromium-driver="${CHROMIUM_VERSION}"; \
-    apt-mark hold chromium chromium-common chromium-driver; \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; \
-    apt-get install -y --no-install-recommends nodejs; \
+    export HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy" http_proxy="$http_proxy" https_proxy="$https_proxy"; \
+    apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=3 update; \
+    apt-get install -y --no-install-recommends ca-certificates libaio1 wget unzip; \
+    mkdir -p /opt/oracle; \
+    cd /opt/oracle; \
+    wget -q --header "Cookie: oraclelicense=accept-securebackup-cookie" -O ic.zip "$ORACLE_IC_URL"; \
+    unzip -q ic.zip; \
+    rm -f ic.zip; \
+    test -d "$ORACLE_CLIENT_PATH"; \
+    echo "$ORACLE_CLIENT_PATH" > /etc/ld.so.conf.d/oracle-instantclient.conf; \
+    ldconfig; \
+    apt-get purge -y --auto-remove wget unzip; \
     rm -rf /var/lib/apt/lists/*
 
-# Remove any non-Noto fonts that may have been installed as dependencies.
-RUN find /usr/share/fonts -type f ! -iname 'Noto*' -delete \
-    && find /usr/share/fonts -type d -empty -delete \
-    && fc-cache -fsv
+RUN useradd --create-home --shell /bin/bash appuser \
+    && mkdir -p /app_data /tmp/presenton \
+    && chown -R appuser:appuser /app_data /tmp/presenton
 
-RUN mkdir -p /app/scripts /app/servers/fastapi
-RUN mkdir -p /app_data/exports /app_data/images /app_data/uploads /app_data/fonts \
-    && chmod -R a+rX /app_data
-
-COPY --from=fastapi-builder /opt/venv /opt/venv
-COPY --from=fastapi-builder /app/servers/fastapi /app/servers/fastapi
-COPY --from=fastapi-builder /root/.cache/huggingface /root/.cache/huggingface
-COPY --from=fastapi-builder /root/.cache/presenton/fastembed-icons /root/.cache/presenton/fastembed-icons
-
-COPY --from=assets-builder /app/package.json /app/package.json
-COPY --from=assets-builder /app/document-extraction-liteparse /app/document-extraction-liteparse
-COPY --from=assets-builder /app/presentation-export /app/presentation-export
-COPY --from=assets-builder /app/scripts/sync-presentation-export.cjs /app/scripts/sync-presentation-export.cjs
-
-RUN set -eux; \
-    if [ -z "${TARGETARCH:-}" ]; then TARGETARCH="$(dpkg --print-architecture)"; fi; \
-    case "$TARGETARCH" in \
-    amd64) export_arch="x64" ;; \
-    arm64) export_arch="arm64" ;; \
-    *) echo "Unsupported TARGETARCH: $TARGETARCH" && exit 1 ;; \
-    esac; \
-    test -f "/app/presentation-export/py/convert-linux-${export_arch}"; \
-    ln -sf "/app/presentation-export/py/convert-linux-${export_arch}" /app/presentation-export/py/convert-linux-current; \
-    chmod +x "/app/presentation-export/py/convert-linux-${export_arch}"; \
-    ls -lah /app/presentation-export/py
-
-COPY LICENSE NOTICE ./
-
-# Studio is an API-only backend behind the GenAI Workspace. NEXT_PUBLIC_URL must be the Workspace UI
-# origin: the export pipeline opens its /pdf-maker page in headless Chromium to render PPTX/PDF.
 WORKDIR /app/servers/fastapi
+
+RUN pip install --proxy "$http_proxy" --no-cache-dir uv
+
+COPY servers/fastapi/pyproject.toml servers/fastapi/uv.lock ./
+RUN uv sync --locked --no-dev --no-install-project
+
+COPY servers/fastapi /app/servers/fastapi
+RUN uv sync --locked --no-dev --no-editable \
+    && chown -R appuser:appuser /app
+
+ENV PATH="/app/servers/fastapi/.venv/bin:${PATH}"
+
+USER appuser
+
 EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD python -c "import socket; s=socket.create_connection(('127.0.0.1',8000),5); s.close()"
+
+# Oracle credentials and PERSISTENCE_MODE are supplied at runtime, not baked into the image.
 CMD ["python", "server.py", "--host", "0.0.0.0", "--port", "8000"]
