@@ -2608,10 +2608,12 @@ async def generate_smart_presentation(
             if isinstance(result, BaseException):
                 raise result
 
+    # Any deck longer than one response can finish — outline or a chosen
+    # count. A single 33-slide call stops partway (observed around slide 8)
+    # when the model output budget runs out, and the page never moves on.
     if (
         n_slides > SMART_LONG_DECK_SLIDE_COUNT
         and n_slides - len(accepted_slides) > SMART_CHUNK_SIZE
-        and _get_explicit_content_slide_count(content) is not None
     ):
         await generate_in_chunks()
         if len(accepted_slides) >= n_slides:

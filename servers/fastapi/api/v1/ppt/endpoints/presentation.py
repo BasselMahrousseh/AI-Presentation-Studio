@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Annotated, Any, List, Literal, Optional
 from fastapi import (
     APIRouter,
@@ -777,13 +778,21 @@ async def _stream_smart_presentation(
         )
 
         try:
+            # A long deck can go a minute between slides. With no bytes on the
+            # wire the corporate gateway drops the stream, and the page stays
+            # on the last slide it received (seen as "Generating slide 8 of 33").
+            last_keepalive = time.monotonic()
             while not generation_task.done() or not generation_events.empty():
                 try:
                     event_type, event_value = await asyncio.wait_for(
                         generation_events.get(), timeout=0.1
                     )
                 except asyncio.TimeoutError:
+                    if time.monotonic() - last_keepalive >= 15:
+                        last_keepalive = time.monotonic()
+                        yield ": keepalive\n\n"
                     continue
+                last_keepalive = time.monotonic()
                 if event_type == "metrics":
                     metrics = event_value
                     if not isinstance(metrics, TextGenerationMetrics):

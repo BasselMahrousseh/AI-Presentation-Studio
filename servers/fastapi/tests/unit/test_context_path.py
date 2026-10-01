@@ -4,8 +4,13 @@ from fastapi.testclient import TestClient
 from utils.context_path import ContextPathMiddleware, context_path
 
 
-def test_empty_context_path_stays_at_the_root(monkeypatch):
+def test_unset_context_path_defaults_to_presentation_studio(monkeypatch):
     monkeypatch.delenv("CONTEXT_PATH", raising=False)
+    assert context_path() == "/presentation-studio"
+
+
+def test_empty_context_path_stays_at_the_root(monkeypatch):
+    monkeypatch.setenv("CONTEXT_PATH", "")
     assert context_path() == ""
 
 

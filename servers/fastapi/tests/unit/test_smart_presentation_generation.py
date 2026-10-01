@@ -2453,9 +2453,9 @@ def test_a_chunk_whose_stream_dies_is_backfilled_slide_by_slide(monkeypatch):
 
 @pytest.mark.parametrize(
     "n_slides, use_outline",
-    ((smart_generation.SMART_LONG_DECK_SLIDE_COUNT, True), (22, False)),
+    ((smart_generation.SMART_LONG_DECK_SLIDE_COUNT, True),),
 )
-def test_short_decks_and_decks_without_an_outline_use_one_stream(
+def test_decks_at_the_long_deck_limit_use_one_stream(
     monkeypatch, n_slides, use_outline
 ):
     calls = []
@@ -2475,6 +2475,29 @@ def test_short_decks_and_decks_without_an_outline_use_one_stream(
     )
 
     assert calls == [1]
+    assert len(result["slides"]) == n_slides
+
+
+def test_a_long_count_without_an_outline_is_still_chunked(monkeypatch):
+    """A chosen count of 33 has no Slide N: markers, but one response still
+    dies partway (observed stuck at slide 8 of 33)."""
+    n_slides = 33
+    calls = []
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        assert _is_chunk_call(messages)
+        calls.append(_requested_indices(messages, n_slides)[0])
+        response = ""
+        for index in _requested_indices(messages, n_slides):
+            block = _slide_block(_smart_slide_html(title=f"Slide {index}"))
+            response += block
+            await on_chunk(block)
+        return response, None
+
+    _patch_llm(monkeypatch, fake_stream)
+    result = _generate_outline_deck(n_slides, [], content="A topic with no slide plan")
+
+    assert sorted(calls) == [0, 10, 20, 30]
     assert len(result["slides"]) == n_slides
 
 

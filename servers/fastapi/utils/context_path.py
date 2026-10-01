@@ -1,11 +1,17 @@
-"""Gateway context path. Empty means the API stays at the site root."""
+"""context_path.py: Gateway context path. Empty means the API stays at the site root."""
 
 import os
 
 
 def context_path() -> str:
-    """Return a leading-slash prefix such as ``/presentation-studio``, or ``""``."""
-    raw = (os.getenv("CONTEXT_PATH") or "").strip()
+    """Return the gateway prefix. Unset defaults to ``/presentation-studio``.
+
+    Set ``CONTEXT_PATH`` empty to serve the API at the site root.
+    """
+    if "CONTEXT_PATH" not in os.environ:
+        raw = "/presentation-studio"
+    else:
+        raw = (os.environ.get("CONTEXT_PATH") or "").strip()
     if not raw or raw == "/":
         return ""
     if not raw.startswith("/"):

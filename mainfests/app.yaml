@@ -1,0 +1,138 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: presentation-studio-secrets
+  namespace: ocr-apis
+type: Opaque
+stringData:
+  AZURE_OPENAI_API_KEY: "c373800d0e6f4b9ebbbff4137c99c2df"
+  ORACLE_PASSWORD: "AiDev$12$45"
+  STUDIO_SERVICE_API_KEY: "sk-presenton-dev-placeholder"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "37"
+  name: presentation-studio
+  namespace: ocr-apis
+  labels:
+    app: presentation-studio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: presentation-studio
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: presentation-studio
+    spec:
+      containers:
+      - name: presentation-studio
+        image: as10537dxbdb05.etisalat.corp.ae/hrbdxdevaiocr/presentation-studio-dev:$(tag)
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+        env:
+        # Public path: https://devaiocrapi.etisalat.corp.ae/presentation-studio
+        # The API gateway must forward this prefix (do not strip it). Studio removes
+        # it in-process. In-cluster callers (Workspace, UI) skip the prefix and use
+        # http://presentation-studio-service:8000/api/...
+        - name: CONTEXT_PATH
+          value: "/presentation-studio"
+        - name: ENVIRONMENT
+          value: production
+        - name: STUDIO_ENV_FILE
+          value: ""
+        - name: LLM
+          value: azure
+        - name: DISABLE_IMAGE_GENERATION
+          value: "true"
+        # Anonymous local calls skip auth. A Workspace handoff still sends the
+        # service key plus X-On-Behalf-Of, and the UI proxy still sends the user JWT.
+        - name: DISABLE_AUTH
+          value: "true"
+        # Browser origin for CORS. Same host as the public path above.
+        - name: CORS_ALLOWED_ORIGINS
+          value: "https://devaiocrapi.etisalat.corp.ae"
+        # Export renderer opens Workspace UI /pdf-maker, not this API path.
+        - name: NEXT_PUBLIC_URL
+          value: "https://devaiocrapi.etisalat.corp.ae/aiworkspaceui"
+        # Same HS256 key Workspace derives when JWT_SECRET is unset
+        # (LDAP server + base DN + user search base). Required so the UI proxy's
+        # user token is accepted when it calls Studio.
+        - name: WORKSPACE_JWT_SECRET
+          value: "ba651cc9d406a5b8ac510d75f170c8444bf0c7d6a27c679d5fce164dabfe6264"
+        - name: PERSISTENCE_MODE
+          value: oracle
+        - name: AZURE_OPENAI_ENDPOINT
+          value: https://openai-op-deployment-01.openai.azure.com/
+        - name: AZURE_OPENAI_MODEL
+          value: gpt-prod
+        - name: AZURE_OPENAI_DEPLOYMENT
+          value: gpt-prod
+        - name: AZURE_OPENAI_API_VERSION
+          value: "2025-04-01-preview"
+        - name: AZURE_OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: presentation-studio-secrets
+              key: AZURE_OPENAI_API_KEY
+        # Must equal Workspace PRESENTATION_STUDIO_API_KEY.
+        - name: STUDIO_SERVICE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: presentation-studio-secrets
+              key: STUDIO_SERVICE_API_KEY
+        - name: DATABASE_ADAPTER
+          value: oracle
+        - name: DB_TABLE_PREFIX
+          value: GENAI
+        - name: ORACLE_USER
+          value: aidev
+        - name: ORACLE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: presentation-studio-secrets
+              key: ORACLE_PASSWORD
+        - name: ORACLE_HOST
+          value: 10.57.145.57
+        - name: ORACLE_PORT
+          value: "1521"
+        - name: ORACLE_SERVICE_NAME
+          value: TEST.npdevbusinesdbc.vcnnpdevspkauh.oraclevcn.com
+        - name: ORACLE_PROTOCOL
+          value: tcp
+        - name: ORACLE_POOL_MIN
+          value: "2"
+        - name: ORACLE_POOL_MAX
+          value: "10"
+        readinessProbe:
+          tcpSocket:
+            port: 8000
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 8000
+          initialDelaySeconds: 40
+          periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: presentation-studio-service
+  namespace: ocr-apis
+spec:
+  type: ClusterIP
+  selector:
+    app: presentation-studio
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
