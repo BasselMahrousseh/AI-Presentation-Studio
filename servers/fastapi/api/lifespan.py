@@ -50,6 +50,10 @@ async def app_lifespan(_: FastAPI):
     the application models, and checks the Azure OpenAI and image-provider configuration.
     """
     _configure_application_logging()
+    from utils.context_path import context_path
+
+    prefix = context_path()
+    logger.info("Context path %s", prefix or "/")
     from services.asset_storage import get_asset_storage
     get_asset_storage()  # Validate storage configuration without a live network call.
     app_data_dir = (get_app_data_directory_env() or "").strip()

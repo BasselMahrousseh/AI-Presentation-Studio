@@ -14,6 +14,7 @@ from starlette.routing import Match
 from api.lifespan import app_lifespan
 from api.asset_files import StoredAssetFiles
 from api.middlewares import SessionAuthMiddleware
+from utils.context_path import ContextPathMiddleware
 from api.v1.admin.router import API_V1_ADMIN_ROUTER
 from api.v1.ppt.router import API_V1_PPT_ROUTER
 from utils.get_env import (
@@ -149,3 +150,7 @@ async def log_http_request(request: Request, call_next):
         "a handler returned 404" if registered else "no route is registered for this method and path",
     )
     return response
+
+
+# Outermost: a gateway that forwards CONTEXT_PATH, for example /presentation-studio.
+app.add_middleware(ContextPathMiddleware)

@@ -19,7 +19,8 @@ ENV PYTHONUNBUFFERED=1 \
     TEMP_DIRECTORY=/tmp/presenton \
     ORACLE_CLIENT_PATH=/opt/oracle/instantclient_23_26 \
     LD_LIBRARY_PATH=/opt/oracle/instantclient_23_26 \
-    ORACLE_PROTOCOL=tcp
+    ORACLE_PROTOCOL=tcp \
+    CONTEXT_PATH=/presentation-studio
 
 # Instant Client for Native Network Encryption. The thin driver fails with DPY-3001 on this listener.
 RUN set -eux; \
@@ -61,5 +62,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD python -c "import socket; s=socket.create_connection(('127.0.0.1',8000),5); s.close()"
 
-# Oracle credentials and PERSISTENCE_MODE are supplied at runtime, not baked into the image.
+# Oracle credentials, PERSISTENCE_MODE, and CONTEXT_PATH are supplied at runtime.
 CMD ["python", "server.py", "--host", "0.0.0.0", "--port", "8000"]
