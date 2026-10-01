@@ -15,7 +15,7 @@ import sys
 from sqlalchemy.dialects import oracle
 from sqlalchemy.schema import CreateIndex, CreateTable
 
-from dbschema.oracle_v1 import build_metadata
+from dbschema.oracle_v2 import build_metadata
 
 
 def ddl_statements() -> list[str]:

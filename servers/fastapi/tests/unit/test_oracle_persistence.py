@@ -17,11 +17,12 @@ from sqlalchemy.schema import CreateTable
 from sqlmodel import SQLModel
 
 from dbschema import oracle_bootstrap as bootstrap
-from dbschema.oracle_v1 import PREDECESSOR, REVISION, TRACKER, build_metadata, render_sql
+from dbschema.oracle_v2 import PREDECESSOR, REVISION, TRACKER, build_metadata, render_sql
 from models.sql.chat_history_message import ChatHistoryMessageModel
 from models.sql.generation_feedback import GenerationFeedback
 from models.sql.image_asset import ImageAsset
 from models.sql.presentation import PresentationModel
+from models.sql.presentation_operation import PresentationOperation
 from models.sql.slide import SlideModel
 from models.sql.user import User
 from utils.db_utils import get_database_url_and_connect_args, to_sync_sqlalchemy_url
@@ -138,7 +139,7 @@ def test_frozen_oracle_columns_match_runtime_and_ddl_has_native_types():
         assert {(i.name, tuple(c.name for c in i.columns), i.unique) for i in table.indexes} == {
             (i.name, tuple(c.name for c in i.columns), i.unique) for i in live.indexes}
     ddl = render_sql()
-    assert ddl == render_sql() and ddl.count("CREATE TABLE ") == 7
+    assert ddl == render_sql() and ddl.count("CREATE TABLE ") == 8
     assert "RAW(16)" in ddl and "IS JSON" in ddl and "TIMESTAMP WITH TIME ZONE" in ddl
     assert f"VALUES ('{REVISION}')" in ddl and " DEFAULT true" not in ddl
 

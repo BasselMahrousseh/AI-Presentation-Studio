@@ -1096,11 +1096,13 @@ def test_layout_check_accepts_the_real_reported_full_height_rail_slide(
     assert fit_scale is None
 
 
-def test_build_slide_preview_html_without_extra_css_is_unchanged():
+def test_build_slide_preview_html_without_extra_css_is_unchanged(monkeypatch):
     """Every other caller of _build_slide_preview_html (font previews, PPTX
     slide-to-image rendering) must be byte-for-byte unaffected by adding this
     parameter - it defaults to empty."""
     from templates.fonts_and_slides_preview import _build_slide_preview_html
+
+    monkeypatch.setattr("templates.fonts_and_slides_preview.secrets.token_urlsafe", lambda _size: "test-render-nonce")
 
     without_param = _build_slide_preview_html(
         "<div>content</div>", font_css="", width=100, height=100
@@ -1415,11 +1417,11 @@ def test_prompt_warns_against_outside_anchored_pie_donut_labels_that_clip():
     )
     prompt = str(messages[1].content)
 
-    assert "DIFFERENT datalabel setup than bar charts" in prompt
-    assert "clipped by the canvas boundary" in prompt
-    assert "keep the on-slice datalabel to the value alone" in prompt
-    assert "anchor: 'center'" in prompt
-    assert "align: 'center'" in prompt
+    assert "Place bar value labels outside the bars" in prompt
+    assert "For pie/doughnut" in prompt
+    assert "values stay within each slice" in prompt
+    assert 'anchor: "center"' in prompt
+    assert 'align: "center"' in prompt
 
 
 def test_prompt_forbids_conditionally_blanking_pie_donut_slice_labels():
@@ -1443,9 +1445,9 @@ def test_prompt_forbids_conditionally_blanking_pie_donut_slice_labels():
     )
     prompt = str(messages[1].content)
 
-    assert "empty string for" in prompt
-    assert "small values" in prompt
-    assert "unconditionally" in prompt
+    assert "Keep every value visible" in prompt
+    assert "hiding small values" in prompt
+    assert "Never include formatter functions" in prompt
 
 
 def test_prompt_forbids_fixed_height_title_header_rows():

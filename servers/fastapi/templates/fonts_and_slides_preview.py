@@ -1,4 +1,5 @@
 import html
+import secrets
 import zipfile
 import xml.etree.ElementTree as ET
 from typing import List, Optional, Tuple
@@ -7,6 +8,7 @@ from fastapi import HTTPException
 from utils.asset_directory_utils import (
     absolute_fastapi_asset_url,
 )
+from utils.smart_preview_safety import sanitize_slide_preview_html, TRUSTED_CHART_INITIALIZER
 
 
 FontInfoData = Tuple[str, Optional[str]] | Tuple[str, Optional[str], List[str]]
@@ -56,14 +58,23 @@ def _build_slide_preview_html(
     tailwind_browser_url = absolute_fastapi_asset_url(
         TAILWIND_BROWSER_SCRIPT_PATH
     )
+    slide_html = sanitize_slide_preview_html(slide_html)
+    nonce = secrets.token_urlsafe(18)
+    content_policy = (
+        f"default-src 'none'; script-src 'nonce-{nonce}'; "
+        "style-src 'unsafe-inline' http: https:; img-src data: http: https:; "
+        "font-src data: http: https:; connect-src 'none'; object-src 'none'; "
+        "frame-src 'none'; form-action 'none'; base-uri http: https:"
+    )
     return f"""<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="{html.escape(content_policy, quote=True)}" />
   <base href="{fastapi_base}" />
-  <script src="{html.escape(tailwind_browser_url, quote=True)}"></script>
-  <script src="{html.escape(_chart_js_url(), quote=True)}"></script>
-  <script src="{html.escape(_chart_datalabels_url(), quote=True)}"></script>
+  <script nonce="{nonce}" src="{html.escape(tailwind_browser_url, quote=True)}"></script>
+  <script nonce="{nonce}" src="{html.escape(_chart_js_url(), quote=True)}"></script>
+  <script nonce="{nonce}" src="{html.escape(_chart_datalabels_url(), quote=True)}"></script>
   {font_links}
   <style>
     html,
@@ -126,6 +137,7 @@ def _build_slide_preview_html(
 </head>
 <body>
   <div id="slide-preview-root">{slide_html}</div>
+  <script nonce="{nonce}">{TRUSTED_CHART_INITIALIZER}</script>
 </body>
 </html>"""
 

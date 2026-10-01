@@ -29,16 +29,17 @@ from models.sql.chat_history_message import ChatHistoryMessageModel  # noqa: F40
 from models.sql.generation_feedback import GenerationFeedback  # noqa: F401
 from models.sql.image_asset import ImageAsset  # noqa: F401
 from models.sql.presentation import PresentationModel  # noqa: F401
+from models.sql.presentation_operation import PresentationOperation  # noqa: F401
 from models.sql.slide import SlideModel  # noqa: F401
 from models.sql.user import User  # noqa: F401
-from utils.schema_names import TABLE_RENAMES
+from utils.schema_names import TABLE_RENAMES, ACTIVE_TABLES
 from utils.sql_types import PortableJSON, RequiredText
 from services.asset_migration import assert_portable_database_references
 
 
 TABLES = tuple(
     table for table in SQLModel.metadata.sorted_tables
-    if table.name in TABLE_RENAMES.values()
+    if table.name in ACTIVE_TABLES
 )
 BATCH_SIZE = 200
 

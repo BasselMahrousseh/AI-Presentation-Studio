@@ -15,6 +15,7 @@ from models.sql.chat_history_message import ChatHistoryMessageModel  # noqa: F40
 from models.sql.generation_feedback import GenerationFeedback  # noqa: F401, E402
 from models.sql.image_asset import ImageAsset  # noqa: F401, E402
 from models.sql.presentation import PresentationModel  # noqa: F401, E402
+from models.sql.presentation_operation import PresentationOperation  # noqa: F401, E402
 from models.sql.slide import SlideModel  # noqa: F401, E402
 from models.sql.user import User  # noqa: F401, E402
 from utils.schema_names import (  # noqa: E402
@@ -53,7 +54,7 @@ def run_migrations_offline() -> None:
     """Generate SQL script without connecting to the database."""
     url = _get_url()
     if url.startswith("oracle"):
-        raise RuntimeError("Use python -m dbschema.oracle_v1 for the frozen Oracle SQL baseline; offline historical migrations do not support Oracle")
+        raise RuntimeError("Use python -m dbschema.oracle_v2 for the current Oracle SQL baseline; offline historical migrations do not support Oracle")
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -88,7 +89,7 @@ def run_migrations_online() -> None:
             existing = version_table_name(inspect(connection))
             if connection.dialect.name == "oracle" and not readonly:
                 from dbschema.oracle_bootstrap import prepare_upgrade, validate_runtime_schema
-                from dbschema.oracle_v1 import REVISION
+                from dbschema.oracle_v2 import REVISION
                 opts = context.get_context().opts
                 operation = getattr(opts.get("fn"), "__name__", "")
                 destination = opts.get("destination_rev")

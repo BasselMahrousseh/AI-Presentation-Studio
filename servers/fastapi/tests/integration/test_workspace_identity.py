@@ -11,6 +11,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
@@ -26,10 +27,10 @@ SECRET = "workspace-shared-secret-for-tests-0123456789"
 SERVICE_KEY = "studio-service-key-for-tests"
 
 
-def _token(sub="alice", secret=SECRET, hours=8):
+def _token(sub="alice", secret=SECRET, hours=8, **claims):
     now = dt.datetime.now(dt.timezone.utc)
     return jwt.encode(
-        {"sub": sub, "name": "N", "email": "n@x", "iat": now, "exp": now + dt.timedelta(hours=hours)},
+        {"sub": sub, "name": "N", "email": "n@x", "iat": now, "exp": now + dt.timedelta(hours=hours), **claims},
         secret,
         algorithm="HS256",
     )
@@ -46,7 +47,7 @@ class Env:
         monkeypatch.setenv("STUDIO_SERVICE_API_KEY", SERVICE_KEY)
         self.db = tmp_path / "t.db"
         SQLModel.metadata.create_all(create_engine(f"sqlite:///{self.db}"))
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{self.db}")
+        self.engine = create_async_engine(f"sqlite+aiosqlite:///{self.db}", poolclass=NullPool)
         self.maker = async_sessionmaker(self.engine, expire_on_commit=False)
         monkeypatch.setattr(middlewares, "async_session_maker", self.maker)
         self.api_key = SERVICE_KEY
@@ -84,12 +85,21 @@ class Env:
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    return Env(tmp_path, monkeypatch)
+    instance = Env(tmp_path, monkeypatch)
+    yield instance
+    instance.client.close()
+    asyncio.run(instance.engine.dispose())
+
+
+@pytest.fixture(params=[False, True], ids=["auth-required", "local-bypass"])
+def credential_mode(env, request, monkeypatch):
+    """Provided credentials retain the same identity contract in either mode."""
+    monkeypatch.setenv("DISABLE_AUTH", str(request.param).lower())
 
 
 # ---------- JWT identity ----------
 
-def test_valid_token_creates_stable_non_admin_user(env):
+def test_valid_token_creates_stable_non_admin_user(env, credential_mode):
     a = env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("alice")))
     b = env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("ALICE")))
     assert a.status_code == 200 and a.json()["is_admin"] is False
@@ -102,7 +112,7 @@ def test_bad_secret_expired_and_missing_token_are_rejected(env):
         assert env.client.get("/api/v1/ppt/whoami", headers=headers).status_code == 401
 
 
-def test_cookie_mirror_is_accepted_and_a_bearer_wins_over_a_stale_cookie(env):
+def test_cookie_mirror_is_accepted_and_a_bearer_wins_over_a_stale_cookie(env, credential_mode):
     ok = env.client.get("/api/v1/ppt/whoami", cookies={"studio_token": _token("bob")})
     assert ok.status_code == 200
     bearer = env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("bob")), cookies={"studio_token": "stale"})
@@ -121,23 +131,23 @@ def test_without_workspace_secret_workspace_tokens_are_rejected(env, monkeypatch
 
 # ---------- service key ----------
 
-def test_service_key_acts_for_user(env):
+def test_service_key_cannot_delegate_without_action_resource_scope(env):
     r = env.client.get("/api/v1/ppt/whoami", headers={**_bearer(env.api_key), "X-On-Behalf-Of": "Carol"})
     direct = env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("carol")))
-    assert r.status_code == 200 and r.json()["is_admin"] is False
-    assert r.json()["id"] == direct.json()["id"]
+    assert r.status_code == 401
+    assert direct.status_code == 200
 
 
-def test_bare_service_key_is_limited_to_the_admin_surface(env):
+def test_bare_service_key_is_limited_to_the_admin_surface(env, credential_mode):
     assert env.client.get("/api/v1/admin/ping", headers=_bearer(env.api_key)).status_code == 200
     assert env.client.get("/api/v1/ppt/whoami", headers=_bearer(env.api_key)).status_code == 403
 
 
-def test_workspace_users_cannot_reach_the_admin_surface(env):
+def test_workspace_users_cannot_reach_the_admin_surface(env, credential_mode):
     assert env.client.get("/api/v1/admin/ping", headers=_bearer(_token("admin"))).status_code == 403
 
 
-def test_wrong_or_unset_service_key_is_rejected(env, monkeypatch):
+def test_wrong_or_unset_service_key_is_rejected(env, monkeypatch, credential_mode):
     assert env.client.get("/api/v1/admin/ping", headers=_bearer("not-the-key")).status_code == 401
     monkeypatch.delenv("STUDIO_SERVICE_API_KEY")
     assert env.client.get("/api/v1/admin/ping", headers=_bearer(env.api_key)).status_code == 401
@@ -274,3 +284,177 @@ def test_backfill_apply_reassigns_copies_files_rewrites_urls_and_is_idempotent(e
     assert env.sync("select count(*) from GENAI_WORKSPACE_STUDIO_USER where external_subject='erin'")[0][0] == 1
     assert json.loads(env.sync("select content from GENAI_WORKSPACE_SLIDE where presentation=:i", i=mapped.hex)[0][0]) == content
     assert again["reassigned"][0]["from_owner"] == str(uuid.UUID(new_owner))
+
+# ---------- canonical identity and durable remote outcome ----------
+
+def _delegation(subject="alice", operation="create-1", action="presentation.create", issuer="urn:genai-workspace:ldap", org="default"):
+    return {**_bearer(SERVICE_KEY), "X-On-Behalf-Of": subject,
+            "X-Workspace-Issuer": issuer, "X-Workspace-Org": org,
+            "X-Workspace-Action": action, "X-Workspace-Resource": f"operation:{operation}",
+            "X-Operation-Id": operation}
+
+
+def test_colliding_subjects_are_isolated_by_issuer_org_and_case(env, credential_mode):
+    tokens = [_token("alice"), _token("alice", iss="https://issuer-a", org_id="a"),
+              _token("alice", iss="https://issuer-b", org_id="a"),
+              _token("alice", iss="https://issuer-a", org_id="b"),
+              _token("Alice", iss="https://issuer-a", org_id="a")]
+    ids = [env.client.get("/api/v1/ppt/whoami", headers=_bearer(token)).json()["id"] for token in tokens]
+    assert len(set(ids)) == len(tokens)
+    assert env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token(iss="urn:genai-workspace:ldap"))).status_code == 401
+
+
+def test_scoped_create_deduplicates_and_keeps_direct_jwt_ownership(env, credential_mode):
+    headers = _delegation()
+    payload = {"content": "A synthetic deck", "generation_mode": "smart", "n_slides": 3}
+    first = env.client.post("/api/v1/ppt/presentation/create", json=payload, headers=headers)
+    assert first.status_code == 200, first.text
+    # Simulate a caller losing first response: replay the original operation.
+    second = env.client.post("/api/v1/ppt/presentation/create", json=payload, headers=headers)
+    assert second.status_code == 200 and second.json()["id"] == first.json()["id"]
+    assert env.sync("select count(*) from GENAI_WORKSPACE_PRESENTATION")[0][0] == 1
+    assert env.sync("select count(*) from GENAI_WORKSPACE_STUDIO_OPERATION")[0][0] == 1
+    mismatch = env.client.post("/api/v1/ppt/presentation/create", json={**payload, "content": "changed"}, headers=headers)
+    assert mismatch.status_code == 409
+    mine = env.client.get(f'/api/v1/ppt/presentation/{first.json()["id"]}', headers=_bearer(_token()))
+    assert mine.status_code == 200
+    other = env.client.get(f'/api/v1/ppt/presentation/{first.json()["id"]}', headers=_bearer(_token(iss="https://other", org_id="default")))
+    assert other.status_code == 404
+    lookup = env.client.get("/api/v1/ppt/presentation/operations/create-1", headers=_delegation(action="presentation.reconcile"))
+    assert lookup.status_code == 200 and lookup.json()["presentation_id"] == first.json()["id"]
+    missing = env.client.get("/api/v1/ppt/presentation/operations/create-1", headers=_delegation(subject="bob", action="presentation.reconcile"))
+    assert missing.status_code == 404
+
+
+def test_delegation_is_bound_to_method_action_and_resource(env, credential_mode):
+    payload = {"content": "Synthetic"}
+    for changed in ({"X-Workspace-Resource": "operation:other"}, {"X-Workspace-Action": "presentation.reconcile"},
+                    {"X-Workspace-Org": ""}, {"X-Operation-Id": "../invalid"}):
+        result = env.client.post("/api/v1/ppt/presentation/create", json=payload, headers={**_delegation(), **changed})
+        assert result.status_code == 401
+    assert env.client.get("/api/v1/ppt/presentation/all", headers=_delegation()).status_code == 401
+    assert env.sync("select count(*) from GENAI_WORKSPACE_PRESENTATION")[0][0] == 0
+
+
+def test_browser_cannot_forge_identity_and_direct_create_is_owned(env, credential_mode):
+    headers = {**_delegation(subject="bob", issuer="https://other", org="other"), **_bearer(_token("alice"))}
+    created = env.client.post("/api/v1/ppt/presentation/create", json={"content": "Synthetic"}, headers=headers)
+    assert created.status_code == 200
+    owner = env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("alice"))).json()["id"]
+    stored = env.sync("select owner_id from GENAI_WORKSPACE_PRESENTATION")[0][0]
+    assert uuid.UUID(stored) == uuid.UUID(owner)
+    assert env.client.get(f'/api/v1/ppt/presentation/{created.json()["id"]}', headers=_bearer(_token("bob"))).status_code == 404
+
+
+def test_local_bypass_preserves_anonymous_creates_without_inventing_an_owner(env, monkeypatch):
+    monkeypatch.setenv("DISABLE_AUTH", "true")
+    # Resolve an authenticated identity first, then ensure it cannot leak to
+    # the next anonymous request through middleware context variables.
+    authenticated = env.client.post(
+        "/api/v1/ppt/presentation/create", json={"content": "Owned"}, headers=_bearer(_token())
+    )
+    assert authenticated.status_code == 200
+    anonymous = env.client.post(
+        "/api/v1/ppt/presentation/create", json={"content": "Anonymous"},
+        headers={"Cookie": "theme=dark"},
+    )
+    assert anonymous.status_code == 200
+    rows = dict(env.sync("select content, owner_id from GENAI_WORKSPACE_PRESENTATION"))
+    assert rows["Owned"] is not None
+    assert rows["Anonymous"] is None
+    operation = env.client.post(
+        "/api/v1/ppt/presentation/create", json={"content": "Must have an owner"},
+        headers={"X-Operation-Id": "anonymous-operation"},
+    )
+    assert operation.status_code == 401
+    assert env.sync("select count(*) from GENAI_WORKSPACE_STUDIO_OPERATION")[0][0] == 0
+
+
+@pytest.mark.parametrize("credential", ["invalid-bearer", "expired-bearer", "empty-bearer", "invalid-cookie", "empty-cookie"])
+def test_local_bypass_rejects_supplied_invalid_credentials(env, monkeypatch, credential):
+    monkeypatch.setenv("DISABLE_AUTH", "true")
+    tokens = {"invalid-bearer": "invalid", "expired-bearer": _token(hours=-1), "empty-bearer": ""}
+    headers = _bearer(tokens[credential]) if credential in tokens else {
+        "Cookie": "studio_token=" + ("invalid" if credential == "invalid-cookie" else "")
+    }
+    result = env.client.post("/api/v1/ppt/presentation/create", json={"content": "Rejected"}, headers=headers)
+    assert result.status_code == 401
+    assert env.sync("select count(*) from GENAI_WORKSPACE_PRESENTATION")[0][0] == 0
+    assert env.sync("select count(*) from GENAI_WORKSPACE_STUDIO_USER")[0][0] == 0
+
+
+@pytest.mark.parametrize("header", ["X-On-Behalf-Of", "X-Workspace-Issuer", "X-Workspace-Org", "X-Workspace-Action", "X-Workspace-Resource", "X-Operation-Id"])
+def test_local_bypass_rejects_delegation_markers_without_credentials(env, monkeypatch, header):
+    monkeypatch.setenv("DISABLE_AUTH", "true")
+    result = env.client.post(
+        "/api/v1/ppt/presentation/create", json={"content": "Rejected"}, headers={header: ""}
+    )
+    assert result.status_code == 401
+    assert env.sync("select count(*) from GENAI_WORKSPACE_PRESENTATION")[0][0] == 0
+
+
+def test_completed_operation_survives_deck_deletion_without_recreation(env):
+    headers = {**_bearer(_token()), "X-Operation-Id": "deleted-operation"}
+    payload = {"content": "Synthetic"}
+    first = env.client.post("/api/v1/ppt/presentation/create", json=payload, headers=headers)
+    assert first.status_code == 200
+    env.client.delete(f'/api/v1/ppt/presentation/{first.json()["id"]}', headers=_bearer(_token()))
+    replay = env.client.post("/api/v1/ppt/presentation/create", json=payload, headers=headers)
+    assert replay.status_code == 410
+    lookup = env.client.get("/api/v1/ppt/presentation/operations/deleted-operation", headers=_bearer(_token()))
+    assert lookup.json()["presentation_id"] == first.json()["id"]
+    assert env.sync("select count(*) from GENAI_WORKSPACE_PRESENTATION")[0][0] == 0
+
+
+def test_concurrent_create_claim_rolls_back_losing_deck(env):
+    from services.presentation_operations import commit_presentation, replay_operation
+    owner = uuid.UUID(env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token())).json()["id"])
+
+    async def race():
+        ready = 0
+        all_ready = asyncio.Event()
+
+        async def contender():
+            nonlocal ready
+            async with env.maker() as session:
+                assert await replay_operation(session, owner, "racing", "same-input") is None
+                ready += 1
+                if ready == 2:
+                    all_ready.set()
+                await all_ready.wait()
+                deck = PresentationModel(id=uuid.uuid4(), owner_id=owner, version=PresentationVersion.V2_STANDARD,
+                                         content="synthetic", n_slides=1, language="en")
+                return (await commit_presentation(session, deck, owner, "racing", "same-input")).id
+        return await asyncio.gather(contender(), contender())
+
+    identities = asyncio.run(race())
+    assert identities[0] == identities[1]
+    assert env.sync("select count(*) from GENAI_WORKSPACE_PRESENTATION")[0][0] == 1
+    assert env.sync("select count(*) from GENAI_WORKSPACE_STUDIO_OPERATION")[0][0] == 1
+
+
+def test_explicit_identity_binding_preserves_uuid_and_decks_and_rejects_collision(env):
+    from scripts.bind_workspace_identities import bind_identities
+    owner = uuid.UUID(env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token())).json()["id"])
+    deck = _make_deck(env, owner)
+    mapping = [{"owner_id": str(owner), "legacy_subject": "alice", "issuer": "https://issuer-a",
+                "organization": "org-a", "subject": "Alice"}]
+    engine = create_engine(f"sqlite:///{env.db}")
+    try:
+        with engine.begin() as connection:
+            assert bind_identities(connection, mapping)["mapped_owners"] == 1
+        assert env.sync("select external_subject from GENAI_WORKSPACE_STUDIO_USER where id=:id", id=owner.hex)[0][0] == "alice"
+        with engine.begin() as connection:
+            bind_identities(connection, mapping, apply=True)
+        scoped = _bearer(_token("Alice", iss="https://issuer-a", org_id="org-a"))
+        assert env.client.get("/api/v1/ppt/whoami", headers=scoped).json()["id"] == str(owner)
+        assert env.client.get(f"/api/v1/ppt/presentation/{deck}", headers=scoped).status_code == 200
+        with engine.begin() as connection:
+            bind_identities(connection, mapping, apply=True)  # same owner/target is idempotent
+        other = env.client.get("/api/v1/ppt/whoami", headers=_bearer(_token("bob"))).json()["id"]
+        with pytest.raises(ValueError, match="already bound"):
+            with engine.begin() as connection:
+                bind_identities(connection, [{**mapping[0], "owner_id": other, "legacy_subject": "bob"}], apply=True)
+        assert env.client.get("/api/v1/ppt/whoami", headers=scoped).json()["id"] == str(owner)
+    finally:
+        engine.dispose()

@@ -60,6 +60,12 @@ def records():
             generation_id=uuid.uuid4(), rating=1, reasons=["quality"], comment="",
             context={"empty": "", "unicode": "مرحبا"}, created_at=NOW, updated_at=NOW,
         ),
+        "GENAI_WORKSPACE_STUDIO_OPERATION": dict(
+            operation_key=hashlib.sha256(f"{owner}:copy-fixture".encode()).hexdigest(),
+            operation_id="copy-fixture", owner_id=owner,
+            request_hash=hashlib.sha256(b"synthetic create payload").hexdigest(),
+            presentation_id=deck, created_at=NOW,
+        ),
     }
 
 
@@ -107,6 +113,9 @@ def test_dry_run_apply_and_rerun_preserve_payloads_without_source_writes(databas
         slide = destination.execute(select(NAMES["GENAI_WORKSPACE_SLIDE"])).mappings().one()
         assert slide["html_content"] == data["GENAI_WORKSPACE_SLIDE"]["html_content"]
         assert slide["content"]["empty"] == "" and slide["speaker_note"] is None
+        operation = destination.execute(select(NAMES["GENAI_WORKSPACE_STUDIO_OPERATION"])).mappings().one()
+        for field in ("operation_key", "operation_id", "owner_id", "request_hash", "presentation_id"):
+            assert operation[field] == data["GENAI_WORKSPACE_STUDIO_OPERATION"][field]
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before
 
 
