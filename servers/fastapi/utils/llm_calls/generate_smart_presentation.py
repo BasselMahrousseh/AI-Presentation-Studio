@@ -43,6 +43,7 @@ from utils.llm_utils import (
     stream_generate_events,
 )
 from utils.smart_slide_layout import inspect_smart_slide_layout
+from utils.smart_chart_data import chart_data_script, parse_smart_chart_data
 from constants.presentation import MAX_NUMBER_OF_SLIDES
 from utils.smart_brand_templates import EAND_SMART_TEMPLATE_ID, get_smart_brand_prompt
 
@@ -487,57 +488,30 @@ Visual evidence and asset decisions:
 """
 
 CHART_JS_INSTRUCTIONS = """
-- Use Chart.js for every quantitative chart. `Chart` is a real global
-  constructor that is already loaded - call `new Chart(...)` directly, with
-  no CDN scripts or custom plugins.
-- The datalabels plugin is ALSO already registered globally - never call
-  `Chart.register(...)` for it, and never declare or import it. Unlike
-  `Chart`, `datalabels` is NOT a variable and never exists as one anywhere -
-  the word `datalabels` may only ever appear as a literal object key with its
-  own value, e.g. `options.plugins.datalabels: { anchor: 'end', align: 'end' }`
-  or a per-dataset override like `datasets: [{ ..., datalabels: {...} }]`.
-  Writing `Chart.register(datalabels)`, the object-shorthand `{ datalabels }`,
-  or any other bare reference to `datalabels` throws
-  `ReferenceError: datalabels is not defined` the instant the script runs -
-  this aborts the whole chart initialization, leaving the canvas permanently
-  blank with no visible error anywhere in the deck itself.
-- Give each chart canvas a unique random id using `chart-` followed by six
-  lowercase hexadecimal characters, and fixed width and height. Reference
-  exactly one canvas by id with `document.querySelector('#chart-f81a12')`; do
-  not use canvas classes, `querySelectorAll`, or loops over canvases.
-- Initialize each chart immediately inside an IIFE. Do not add event listeners.
-  Set `responsive: false` and `animation: false`.
-- Use the slide palette. Configure `options.plugins.datalabels` for visible
-  value labels outside bar charts.
-- Pie and donut charts need a DIFFERENT datalabel setup than bar charts, not
-  the same `anchor: 'end', align: 'end'` pattern: a bar's outside label has
-  the whole axis margin to sit in, but a pie/donut slice can point in any
-  direction, including straight left/right/top/bottom at the very edge of
-  the canvas, so an outside label there is one of the most common ways a
-  chart silently gets its own text clipped by the canvas boundary. Canvases
-  clip at their own pixel edge with no scrollbar or overflow to fall back
-  on, so once a label is drawn past that edge it is gone, not just visually
-  crowded. This gets worse fast if the datalabel formatter also concatenates
-  the category name onto the value (e.g. `labels[i] + '\\n' + value + '%'`)
-  when a legend or side list already shows that name - the label is now two
-  lines and as wide as the longer of the name or the percentage, needing far
-  more clearance than a short "45%" would. For pie/donut: if the slide
-  already shows each category's name anywhere else (a legend, a side list of
-  labeled figures), keep the on-slice datalabel to the value alone (e.g.
-  `formatter: (v) => v + '%'`) - never repeat the category name on the slice
-  too. If the name must appear on the slice itself, use `anchor: 'center',
-  align: 'center'` so the label sits inside the slice instead of past the
-  chart's edge.
-- Never make a pie/donut datalabel formatter return an empty string for
-  small values (e.g. `(v) => v >= 10 ? v + '%' : ''`) to avoid crowding a
-  thin slice. This silently deletes that slice's own on-chart value with no
-  visual indicator anything is missing, even when every other slice keeps
-  its label - it reads as a bug, not a deliberate design choice. Every
-  slice's `formatter` must return its value unconditionally.
-- A chart is incomplete unless the same slide contains both its canvas and its
-  inline initialization script. Never return a chart canvas by itself.
+- Use Chart.js for quantitative charts through declarative JSON only. The renderer
+  loads Chart.js and instantiates charts from the configuration; never emit
+  JavaScript, callbacks, event listeners, imports, CDN scripts, or custom plugins.
+- Give each canvas a unique id using chart- followed by six lowercase hexadecimal
+  characters, and fixed width and height. Include a script with type="application/json"
+  and data-presenton-charts whose JSON object maps each canvas id to its configuration.
+- Each configuration has type, data, and optional options. Supported types are bar,
+  line, pie, doughnut, scatter, bubble, radar, and polarArea. Use double-quoted JSON
+  keys and strings, finite numbers, arrays, booleans, and null only.
+- data.datasets must contain between 1 and 32 datasets, each with a data array.
+  Use at most 24 charts per slide, 2000 entries per array, and 4096 characters per
+  string. Never include __proto__, constructor, or prototype keys.
+- Set options.responsive to false, animation to false, and events to [].
+  The datalabels plugin is already registered; configure its literal options under
+  options.plugins.datalabels. Never include formatter functions or other callbacks.
+- Use the slide palette. Place bar value labels outside the bars with enough
+  canvas margin. For pie/doughnut, use anchor: "center" and align: "center" so
+  values stay within each slice; put category names and units in the legend or
+  surrounding HTML. Keep every value visible instead of hiding small values.
+- A chart is incomplete unless its canvas and matching JSON configuration appear
+  in the same slide. Encode any less-than sign inside JSON strings as \\u003c
+  so source text cannot close the script element.
 - Example:
-  `<canvas id="chart-f81a12" width="900" height="420"></canvas><script>(() => { const canvas = document.querySelector('#chart-f81a12'); if (!canvas) return; new Chart(canvas, { type: 'bar', data: { labels: ['A', 'B'], datasets: [{ data: [10, 20], backgroundColor: ['#866255', '#B78E7E'] }] }, options: { responsive: false, animation: false, plugins: { datalabels: { anchor: 'end', align: 'end' } } } }); })();</script>`
+  <canvas id="chart-f81a12" width="900" height="420"></canvas><script type="application/json" data-presenton-charts>{"chart-f81a12":{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20],"backgroundColor":["#866255","#B78E7E"]}]},"options":{"responsive":false,"animation":false,"events":[],"plugins":{"datalabels":{"anchor":"end","align":"end"}}}}}</script>
 """
 
 SMART_PPTX_EXPORT_FIDELITY_PROMPT = """
@@ -1003,6 +977,11 @@ def _sanitize_script(match: re.Match[str]) -> str:
     attributes, content = match.group(1), match.group(2)
     if re.search(r"\bsrc\s*=", attributes, re.IGNORECASE):
         return ""
+    if _attribute(attributes, "type").lower() == "application/json" and re.search(r"\bdata-presenton-charts\b", attributes, re.IGNORECASE):
+        try:
+            return chart_data_script(parse_smart_chart_data(content))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid Smart chart configuration: {exc}") from exc
     if not _CHART_INITIALIZER.search(content):
         return ""
     if (
@@ -1064,22 +1043,27 @@ def _validate_chart_initializers(html: str) -> None:
     if not chart_canvas_ids:
         return
 
+    declared_charts = {}
+    for match in _SCRIPT_TAG.finditer(html):
+        if _attribute(match.group(1), "type").lower() == "application/json" and re.search(r"\bdata-presenton-charts\b", match.group(1), re.IGNORECASE):
+            declared_charts.update(parse_smart_chart_data(match.group(2)))
+
     chart_scripts = [
         match.group(2)
         for match in _SCRIPT_TAG.finditer(html)
-        if _CHART_INITIALIZER.search(match.group(2))
+        if _attribute(match.group(1), "type").lower() != "application/json" and _CHART_INITIALIZER.search(match.group(2))
     ]
     missing_initializers = [
         canvas_id
         for canvas_id in chart_canvas_ids
-        if not any(canvas_id in script for script in chart_scripts)
+        if canvas_id not in declared_charts and not any(canvas_id in script for script in chart_scripts)
     ]
     if missing_initializers:
         raise HTTPException(
             status_code=400,
             detail=(
                 "The Smart slide chart canvas is missing its inline Chart.js "
-                "initialization script: " + ", ".join(missing_initializers)
+                "initialization script or declarative JSON configuration: " + ", ".join(missing_initializers)
             ),
         )
 

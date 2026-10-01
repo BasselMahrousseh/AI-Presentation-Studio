@@ -14,6 +14,7 @@ from models.sql.chat_history_message import ChatHistoryMessageModel
 from models.sql.generation_feedback import GenerationFeedback
 from models.sql.image_asset import ImageAsset
 from models.sql.presentation import PresentationModel
+from models.sql.presentation_operation import PresentationOperation
 from models.sql.slide import SlideModel
 from models.sql.user import User
 from api.v1.auth.context import get_current_owner_id
@@ -60,6 +61,7 @@ _STRICT_OWNER_MODELS = (
     ChatHistoryMessageModel,
     ImageAsset,
     GenerationFeedback,
+    PresentationOperation,
 )
 
 
@@ -107,6 +109,10 @@ async def create_db_and_tables():
     log = logging.getLogger("uvicorn.error")
     log.info("Reading the Oracle schema")
     async with sql_engine.begin() as conn:
+        if _database_dialect == "oracle":
+            from dbschema.oracle_bootstrap import validate_runtime_schema
+            await conn.run_sync(validate_runtime_schema)
+            return
         await conn.run_sync(lambda sync_conn: validate_create_all_schema(sync_conn, SQLModel.metadata))
         log.info("Schema check finished; ensuring Studio tables")
         await conn.run_sync(
@@ -119,6 +125,7 @@ async def create_db_and_tables():
                     ImageAsset.__table__,
                     User.__table__,
                     GenerationFeedback.__table__,
+                    PresentationOperation.__table__,
                 ],
             )
         )

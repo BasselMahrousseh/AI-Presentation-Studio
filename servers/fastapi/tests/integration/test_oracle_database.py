@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateTable
 
 from dbschema.oracle_bootstrap import validate_runtime_schema
-from dbschema.oracle_v1 import PREDECESSOR, REVISION, TRACKER, build_metadata
+from dbschema.oracle_v2 import PREDECESSOR, REVISION, TRACKER, build_metadata
 from models.sql.chat_history_message import ChatHistoryMessageModel
 from models.sql.generation_feedback import GenerationFeedback
 from models.sql.image_asset import ImageAsset

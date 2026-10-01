@@ -14,6 +14,7 @@ EXPECTED_ROUTES = {
     ("POST", "/api/v1/ppt/files/decompose"),
     ("POST", "/api/v1/ppt/template/extract-color-palette"),
     ("POST", "/api/v1/ppt/presentation/create"),
+    ("GET", "/api/v1/ppt/presentation/operations/{operation_id}"),
     # outline
     ("GET", "/api/v1/ppt/outlines/stream/{id}"),
     ("GET", "/api/v1/ppt/outlines/{id}"),

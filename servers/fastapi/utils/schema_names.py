@@ -17,6 +17,7 @@ TABLE_RENAMES = {
     "generation_feedback": "GENAI_WORKSPACE_STUDIO_FEEDBACK",
 }
 SCHEMA_VERSION_TABLE = "GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION"
+ACTIVE_TABLES = (*TABLE_RENAMES.values(), "GENAI_WORKSPACE_STUDIO_OPERATION")
 LEGACY_VERSION_TABLE = "alembic_version"
 RETIRED_TABLES = {
     "access_tokens", "template_create_infos", "templates", "presentation_layout_codes",
@@ -103,3 +104,12 @@ def validate_create_all_schema(connection, metadata) -> None:
         columns = {column["name"] for column in inspector.get_columns(actual)}
         if not set(metadata.tables[expected].columns.keys()).issubset(columns):
             raise RuntimeError(f"Outdated Studio table {expected}; run Alembic upgrade head")
+    if canonical:
+        for expected in ACTIVE_TABLES:
+            actual = find_name(names, expected)
+            if actual is None:
+                raise RuntimeError(f"Outdated Studio schema: missing {expected}; run Alembic upgrade head")
+            validate_identifier_case(inspector, expected, actual)
+            columns = {column["name"] for column in inspector.get_columns(actual)}
+            if not set(metadata.tables[expected].columns.keys()).issubset(columns):
+                raise RuntimeError(f"Outdated Studio table {expected}; run Alembic upgrade head")

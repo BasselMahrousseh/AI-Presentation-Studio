@@ -59,7 +59,8 @@ REVISION_DROP_STANDALONE_TABLES = "d5f7b9c1e3a4"
 REVISION_WEB_SEARCH_MODE = "e7b1d3f5a9c2"
 REVISION_WORKSPACE_TABLE_NAMES = "f8c2d4e6a0b3"
 REVISION_ORACLE_BASELINE = "a9b2c4d6e8f0"
-REVISION_HEAD = REVISION_ORACLE_BASELINE
+REVISION_PRESENTATION_OPERATIONS = "b0c2d4e6f8a1"
+REVISION_HEAD = REVISION_PRESENTATION_OPERATIONS
 
 
 async def migrate_database_on_startup() -> None:
@@ -163,6 +164,12 @@ def _infer_revision_from_schema(
             columns = {column["name"] for column in inspector.get_columns(actual)}
             if not set(model.__table__.columns.keys()).issubset(columns):
                 raise RuntimeError(f"Cannot infer revision for incomplete Studio table {actual}")
+        if "GENAI_WORKSPACE_STUDIO_OPERATION" in tables:
+            from models.sql.presentation_operation import PresentationOperation
+            columns = {column["name"] for column in inspector.get_columns(PresentationOperation.__tablename__)}
+            if not set(PresentationOperation.__table__.columns.keys()).issubset(columns):
+                raise RuntimeError("Cannot infer revision for incomplete Studio operation table")
+            return REVISION_HEAD
         return REVISION_WORKSPACE_TABLE_NAMES
     if set(TABLE_RENAMES).issubset(tables) and _has_column(
         inspector, "presentations", "source_presentation_id"

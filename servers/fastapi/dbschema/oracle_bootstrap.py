@@ -10,7 +10,8 @@ import re
 from sqlalchemy import CheckConstraint, UniqueConstraint, inspect, select
 from sqlalchemy.schema import CreateTable
 
-from dbschema.oracle_v1 import PREDECESSOR, REVISION, TRACKER, build_metadata
+from dbschema.oracle_v1 import build_metadata as build_v1
+from dbschema.oracle_v2 import PREDECESSOR, REVISION, TRACKER, BASELINE_REVISION, OPERATION_TABLE, build_metadata
 from utils.schema_names import LEGACY_VERSION_TABLE, RETIRED_TABLES, TABLE_RENAMES, find_name
 
 
@@ -103,10 +104,10 @@ def _validate_table(inspector, table, *, allow_missing_indexes):
     return missing
 
 
-def validate_schema(connection, *, allow_partial=False, inspector=None):
+def validate_schema(connection, *, allow_partial=False, inspector=None, metadata=None):
     """Read-only, fail-closed inspection; returns tables/indexes still to create."""
     inspector = inspector or inspect(connection)
-    metadata = build_metadata(include_tracker=True)
+    metadata = metadata or build_metadata(include_tracker=True)
     tables = _names(inspector, "get_table_names")
     views = _names(inspector, "get_view_names") + _names(inspector, "get_materialized_view_names")
     for old in {*TABLE_RENAMES, *RETIRED_TABLES, LEGACY_VERSION_TABLE}:
@@ -175,6 +176,10 @@ def prepare_upgrade(connection):
         connection.execute(tracker.insert().values(version_num=PREDECESSOR))
     elif versions == [PREDECESSOR]:
         return
+    elif versions == [BASELINE_REVISION]:
+        if missing_names - {OPERATION_TABLE}:
+            raise RuntimeError("The existing Oracle Studio baseline is incomplete; restore before upgrading")
+        return
     elif versions == [REVISION]:
         validate_schema(connection)
     else:
@@ -182,7 +187,8 @@ def prepare_upgrade(connection):
 
 
 def apply_baseline(connection):
-    missing, indexes = validate_schema(connection, allow_partial=True)
+    metadata = build_v1(include_tracker=True)
+    missing, indexes = validate_schema(connection, allow_partial=True, metadata=metadata)
     if any(t.name == TRACKER for t in missing):
         raise RuntimeError("Oracle baseline must run through Alembic upgrade head")
     for table in missing:
@@ -192,6 +198,15 @@ def apply_baseline(connection):
         indexes.extend(table.indexes)
     for index in sorted(indexes, key=lambda i: i.name):
         index.create(connection)
+    validate_schema(connection, metadata=metadata)
+
+
+def apply_operation_migration(connection):
+    missing, indexes = validate_schema(connection, allow_partial=True)
+    if {table.name for table in missing} - {OPERATION_TABLE} or indexes:
+        raise RuntimeError("Oracle Studio baseline must be complete before the operation upgrade")
+    for table in missing:
+        connection.execute(CreateTable(table))
     validate_schema(connection)
 
 

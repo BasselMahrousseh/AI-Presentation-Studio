@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import hmac
+import re
 from typing import Literal
 import uuid
 
@@ -9,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.sql.user import User
 from api.v1.auth.workspace_jwt import (
     WORKSPACE_TOKEN_COOKIE_NAME,
-    get_or_create_user_for_subject,
+    get_or_create_user_for_identity,
+    workspace_identity,
     resolve_workspace_user,
 )
 from utils.get_env import get_studio_service_api_key_env
@@ -27,6 +29,7 @@ class AuthPrincipal:
     method: Literal["workspace", "service"]
     # The caller's Workspace JWT, handed to the export renderer, which can only send a cookie.
     workspace_token: str | None = None
+    operation_id: str | None = None
 
 
 def _bearer_token(request: Request) -> str:
@@ -52,10 +55,27 @@ async def resolve_request_principal(
         on_behalf_of = request.headers.get("X-On-Behalf-Of")
         if on_behalf_of is None:
             return AuthPrincipal(None, "service", True, "service"), None
-        delegate = await get_or_create_user_for_subject(session, on_behalf_of)
+        operation_id = request.headers.get("X-Operation-Id", "")
+        action = request.headers.get("X-Workspace-Action")
+        resource = request.headers.get("X-Workspace-Resource")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", operation_id):
+            return None, None
+        if resource != f"operation:{operation_id}":
+            return None, None
+        allowed = (
+            (request.method == "POST" and request.url.path == "/api/v1/ppt/presentation/create" and action == "presentation.create")
+            or (request.method == "GET" and request.url.path == f"/api/v1/ppt/presentation/operations/{operation_id}" and action == "presentation.reconcile")
+        )
+        if not allowed:
+            return None, None
+        identity = workspace_identity(request.headers.get("X-Workspace-Issuer"),
+                                      request.headers.get("X-Workspace-Org"), on_behalf_of)
+        if identity is None or request.headers.get("X-Workspace-Issuer") is None:
+            return None, None
+        delegate = await get_or_create_user_for_identity(session, identity)
         if delegate is None:
             return None, None
-        return AuthPrincipal(delegate.id, delegate.username, False, "service"), delegate
+        return AuthPrincipal(delegate.id, delegate.username, False, "service", operation_id=operation_id), delegate
 
     # A Workspace user: `Authorization: Bearer <jwt>`, or the HttpOnly `studio_token` cookie the
     # Workspace proxy mirrors for <img>/EventSource/export rendering, which cannot set headers.

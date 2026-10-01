@@ -21,10 +21,11 @@ from models.sql.chat_history_message import ChatHistoryMessageModel  # noqa: F40
 from models.sql.generation_feedback import GenerationFeedback
 from models.sql.image_asset import ImageAsset  # noqa: F401
 from models.sql.presentation import PresentationModel
+from models.sql.presentation_operation import PresentationOperation
 from models.sql.slide import SlideModel  # noqa: F401
 from models.sql.user import User  # noqa: F401
 from utils.schema_names import (
-    LEGACY_VERSION_TABLE, SCHEMA_VERSION_TABLE, TABLE_RENAMES,
+    LEGACY_VERSION_TABLE, SCHEMA_VERSION_TABLE, TABLE_RENAMES, ACTIVE_TABLES,
     validate_create_all_schema, validate_identifier_case, version_table,
 )
 
@@ -92,7 +93,7 @@ def seed_legacy(engine):
 
 
 def test_metadata_has_only_canonical_tables_and_foreign_keys():
-    assert set(SQLModel.metadata.tables) == set(TABLE_RENAMES.values())
+    assert set(SQLModel.metadata.tables) == set(ACTIVE_TABLES)
     assert all(fk.column.table.name in TABLE_RENAMES.values()
                for table in SQLModel.metadata.tables.values() for fk in table.foreign_keys)
 
@@ -100,7 +101,7 @@ def test_metadata_has_only_canonical_tables_and_foreign_keys():
 def test_fresh_upgrade_and_rerun_have_only_canonical_tables(db):
     config, engine = db
     command.upgrade(config, "head")
-    assert set(inspect(engine).get_table_names()) == {*TABLE_RENAMES.values(), SCHEMA_VERSION_TABLE}
+    assert set(inspect(engine).get_table_names()) == {*ACTIVE_TABLES, SCHEMA_VERSION_TABLE}
     assert tracker_revision(engine) == migrations.REVISION_HEAD
     command.upgrade(config, "head")
     assert tracker_revision(engine) == migrations.REVISION_HEAD
@@ -227,7 +228,7 @@ def test_runtime_stamps_complete_unversioned_schema_without_parallel_tables(db, 
             connection.exec_driver_sql(f'DROP TABLE "{SCHEMA_VERSION_TABLE}"')
     monkeypatch.setattr(migrations, "get_database_url_and_connect_args", lambda: (str(engine.url), {}))
     migrations._run_migrations()
-    assert set(inspect(engine).get_table_names()) == {*TABLE_RENAMES.values(), SCHEMA_VERSION_TABLE}
+    assert set(inspect(engine).get_table_names()) == {*ACTIVE_TABLES, SCHEMA_VERSION_TABLE}
     assert tracker_revision(engine) == migrations.REVISION_HEAD
 
 

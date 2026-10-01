@@ -1,6 +1,6 @@
 # Presentation Studio architecture
 
-This reference describes the Studio backend in the current working tree, reviewed on 2026-09-29. The [Workspace architecture](../../GenAI-Workspace/docs/architecture.md) covers the complete product; [database architecture](../../GenAI-Workspace/docs/database.md), [developer setup](../../GenAI-Workspace/docs/developer-setup.md) and [configuration ownership](../../GenAI-Workspace/docs/configuration.md) cover the shared environment. Unfinished safeguards and recommendations are identified explicitly below.
+This reference describes the Studio backend in the current working tree, reviewed on 2026-10-01. The [Workspace architecture](../../GenAI-Workspace/docs/architecture.md) covers the complete product; [database architecture](../../GenAI-Workspace/docs/database.md), [developer setup](../../GenAI-Workspace/docs/developer-setup.md) and [configuration ownership](../../GenAI-Workspace/docs/configuration.md) cover the shared environment. Unfinished safeguards and recommendations are identified explicitly below.
 
 ## Scope and boundaries
 
@@ -13,7 +13,7 @@ flowchart LR
     Browser --> UI[Workspace Next.js UI]
     UI -->|Studio proxy| Studio[Studio FastAPI]
     UI -->|quota checks and recording| Gateway[Workspace gateway]
-    Orchestrator[Workspace orchestrator] -->|service key and delegated subject| Studio
+    Orchestrator[Workspace orchestrator] -->|service key, scoped identity and operation| Studio
     Studio --> DB[(Dedicated Studio Oracle schema or local SQLite)]
     Studio --> Files[(Private S3 Studio namespace or local files)]
     Studio --> Cache[Local staging and temporary render files]
@@ -37,22 +37,22 @@ Workspace owns chat offers, handoff references and quotas. Studio owns presentat
 
 ## Identity and trust
 
-The browser calls `/api/studio/*` on the Workspace UI. Its Node route handler forwards bodies, SSE, images and downloads directly to FastAPI. Set the UI's server-only `FAST_API_INTERNAL_URL` explicitly. The resolver still has legacy `NEXT_PUBLIC_FAST_API` and loopback fallbacks; do not rely on these in deployment.
+The browser calls `/api/studio/*` on the Workspace UI. Its Node route handler forwards bodies, SSE, images and downloads directly to FastAPI. The central launcher derives the UI's server-only `FAST_API_INTERNAL_URL`. Direct deployments must set it explicitly; missing production configuration fails, while development falls back to loopback port 8002. The resolver ignores public build-time upstream values.
 
 Studio supports two authenticated principals:
 
 - A Workspace HS256 JWT in a bearer header or `studio_token` cookie. `WORKSPACE_JWT_SECRET` must match the Workspace issuer. `exp` and `sub` are required. Issuer/audience checks apply only when `WORKSPACE_JWT_ISSUER` and `WORKSPACE_JWT_AUDIENCE` are configured consistently with issued tokens.
-- A bearer `STUDIO_SERVICE_API_KEY`, matched to Workspace's `PRESENTATION_STUDIO_API_KEY`. With `X-On-Behalf-Of`, it delegates to that Workspace subject. Without the header, it can access only `/api/v1/admin/*`. Workspace user JWTs, including administrators' JWTs, cannot access Studio's service-admin surface.
+- A bearer `STUDIO_SERVICE_API_KEY`, matched to Workspace's `PRESENTATION_STUDIO_API_KEY`. Delegation requires the subject, issuer, organization, operation ID, action and resource headers. It is restricted to `POST /presentation/create` or `GET /presentation/operations/{operation_id}` with the matching action/resource; a bare `X-On-Behalf-Of` header is rejected. Without delegation, the key can access only `/api/v1/admin/*`. Workspace user JWTs, including administrators' JWTs, cannot access Studio's service-admin surface.
 
-[Identity mapping](../servers/fastapi/api/v1/auth/workspace_jwt.py) creates a `GENAI_WORKSPACE_STUDIO_USER` row on first use, keyed by the lowercased JWT `sub` in `external_subject`, never by a local username. This provides user ownership in one trusted Workspace identity namespace, **not organization-based tenancy**. Multiple issuers/organizations must not share ambiguous subjects until identity is namespaced in code.
+[Identity mapping](../servers/fastapi/api/v1/auth/workspace_jwt.py) creates a `GENAI_WORKSPACE_STUDIO_USER` row on first use, keyed by a canonical issuer/organization/subject identity in `external_subject`, never by a local username. Explicit issuer identities preserve subject case. The existing default-organization LDAP namespace retains its historical lowercase mapping; JWTs cannot impersonate that reserved issuer. [Explicit identity binding](../servers/fastapi/scripts/bind_workspace_identities.py) moves a reviewed legacy identity to a canonical identity while preserving its owner UUID, decks and asset ownership. It defaults to dry run and rejects collisions.
 
-Workspace stores the access token in browser storage and mirrors it to an HttpOnly, SameSite=Lax cookie for Studio assets, EventSource and downloads. The mirror does not remove the browser-readable original token. The proxy forwards only the Studio cookie and caller authorization. Backend signature verification, rather than the UI login gate, is the security boundary.
+Workspace stores the access token in browser storage and mirrors it to an HttpOnly, SameSite=Lax cookie for Studio assets, EventSource and downloads. The mirror does not remove the browser-readable original token. The proxy forwards the Studio cookie, caller authorization and operation ID, but strips browser-supplied delegation headers. Backend signature verification and owner checks are the security boundary.
 
 During an authenticated request, context variables carry the owner. SQLAlchemy hooks constrain ORM SELECTs and stamp new owned rows. Raw SQL, bulk updates and deletes must explicitly enforce owner conditions. Foreign keys preserve relationships; they do not provide row-level authorization.
 
 [Asset authorization](../servers/fastapi/api/v1/auth/assets.py) protects `/app_data/images|uploads|exports|pptx-to-html|pptx-to-json/users/<owner UUID>/...`, rejects traversal and rejects unknown private roots. Fonts/templates and `/static` are public. Keep application files behind Studio; serving the same volume through an unauthenticated web server bypasses ownership checks.
 
-`DISABLE_AUTH=true` currently bypasses authentication without checking the environment. Restrict it to isolated loopback development with disposable data. Such rows have null owners and are not automatically assigned when authentication is enabled.
+`DISABLE_AUTH=true` permits anonymous requests without checking the environment. Restrict it to isolated loopback development with disposable data. Anonymous writes have null owners and are not automatically assigned when authentication is enabled. Protected requests carrying authentication, delegation or operation headers, or a `studio_token` cookie, still require the normal principal verification. This preserves the canonical owner and operation scope for Workspace handoffs during local testing; invalid or incomplete credentials cannot become anonymous writes.
 
 ## API and user flows
 
@@ -75,7 +75,11 @@ The exact method/path contract lives in [test_route_contract.py](../servers/fast
 4. Generation streams accepted slide fragments and saves progress before marking the deck complete. Manual editing updates stored HTML and editor data.
 5. Export renders the saved deck through the Workspace `/pdf-maker` page. Feedback references the particular outline/deck generation, not only the mutable presentation ID.
 
-The UI proxy authorizes a presentation quota before creation and records usage after success. Chat handoffs use orchestrator quota rules. These are not transactional with Studio creation, and post-create recording is best effort. Direct Studio calls have no independent Workspace quota enforcement. Keep direct ingress private and reconcile usage when recording fails.
+Chat-confirmed creation reserves Workspace quota before dispatch. A stable operation ID is scoped to issuer, organization, subject and client request key; changed input with the same key is rejected. Studio commits the presentation and its operation journal together. Same-key retries reuse that outcome; concurrent losing creates roll back. Deleted presentations leave an operation tombstone, so replay cannot recreate them.
+
+Workspace settles quota after a known outcome. Uncertain transport results retain the hold and return HTTP 202 with the operation ID; retries reconcile the same operation. Definite rejection returns a safe error and releases a newly acquired hold. A failed lookup cannot refund an earlier unknown outcome, and settled operations are never dispatched again. There is no distributed transaction or automatic reconciliation worker.
+
+The direct UI Studio proxy still checks quota before creation and records usage after success; this path has not gained transactional reservations. Direct Studio calls have no independent Workspace quota enforcement. Keep direct ingress private and reconcile direct-create accounting when recording fails.
 
 ## Generation and browser rendering
 
@@ -94,14 +98,11 @@ an explicit user-supplied slide count remains authoritative. Preserve the
 when changing detection or resume behavior. This stable decision does not provide
 a general idempotency guarantee for generation requests.
 
-The UI currently has different rendering paths:
+The [UI sanitizer](../../GenAI-Workspace-UI/src/features/studio/lib/smart-html-safety.ts) is shared by Smart previews, editing and PDF export. [Chart data](../../GenAI-Workspace-UI/src/features/studio/lib/smart-chart-data.ts) is validated and rendered by trusted code. New generation and editing prompts use `<script type="application/json" data-presenton-charts>` containing a map from canvas ID to `{type, data, options}`. Configurations have size/depth limits and contain no callbacks or executable code. The UI can extract bounded literal configurations from older chart scripts with a static parser; it never executes the original script.
 
-- [SmartHtmlSlide](../../GenAI-Workspace-UI/src/features/studio/app/%28presentation-generator%29/components/SmartHtmlSlide.tsx) sanitizes HTML with DOMPurify and renders it in the main page. It then passes the original HTML to chart-script injection when scripts are enabled. There is no iframe boundary or Electron rendering switch.
-- [SmartHtmlEditor](../../GenAI-Workspace-UI/src/features/studio/app/%28presentation-generator%29/components/SmartHtmlEditor.tsx) inserts HTML directly into the editor DOM and persists edits through Redux/API calls.
-- [Chart injection](../../GenAI-Workspace-UI/src/features/studio/app/%28presentation-generator%29/components/useSmartChartInjection.ts) executes scripts extracted from original slide HTML. Its scoped-document wrapper is a rendering convenience, not a security sandbox.
-- The export page renders outside Workspace's navigation/auth shell.
+Server layout previews also pass through a [parser-based HTML allowlist](../servers/fastapi/utils/smart_preview_safety.py). Generated scripts, event handlers and active embeds are removed before Chromium receives the page. Bounded chart JSON is rendered by one fixed initializer, and a per-render nonce policy restricts script execution to bundled libraries and that initializer. Legacy script-only charts are omitted from this server preview; the UI retains static compatibility for them.
 
-Do not describe all slide HTML as sanitized or isolated. Generated HTML/scripts and media/font URLs are active content. A common sanitizer, isolated rendering origin and declarative chart data are recommended before accepting arbitrary untrusted HTML. Validate layout in Chromium; static checks cannot establish overflow or export fidelity.
+These paths still render in their existing origins; no isolated rendering origin is introduced. Approved font/media URLs can cause browser egress, and other legacy HTML consumers require their own boundary review. Validate layout and chart/export fidelity in Chromium; static tests cannot establish the rendered result.
 
 ## Database and files
 
@@ -114,12 +115,8 @@ reserved for an unrelated standalone product.
 
 | Database choice | Current implementation |
 |---|---|
-<<<<<<< HEAD
-| SQLite | Without `DATABASE_URL`, selects `<APP_DATA_DIRECTORY>/fastapi.db`. When that directory is also unset, the file is `servers/fastapi/app_data/fastapi.db`. Startup creates missing tables from the application models and does not run Alembic. The example explicitly chooses `./app_data/studio.db`. Relative paths resolve from the process working directory. |
-=======
-| Oracle | With `PERSISTENCE_MODE=oracle` and no explicit `DATABASE_URL`, requires Studio's `ORACLE_USER`, `ORACLE_PASSWORD`, `ORACLE_DSN`. Uses async thin `python-oracledb`; Alembic uses its sync driver. Oracle startup validates the canonical schema and tracker, never `create_all`. |
-| SQLite | Used by explicit local profiles. Otherwise, with no Oracle selector or explicit URL, defaults to `<APP_DATA_DIRECTORY>/fastapi.db`; the application directory defaults to `servers/fastapi/app_data`, outside temporary cleanup. Relative URL paths resolve from the process working directory. |
->>>>>>> 2d219ccccb96b28718beb1e2bb6ee27ff43d9761
+| Oracle | With `PERSISTENCE_MODE=oracle` and no explicit `DATABASE_URL`, requires Studio's `ORACLE_USER`, `ORACLE_PASSWORD`, `ORACLE_DSN`. Runtime uses a thread-backed thick `python-oracledb` adapter behind SQLAlchemy's async interface; Instant Client is required. Alembic uses the sync driver. Oracle startup validates the canonical schema and tracker, never `create_all`. |
+| SQLite | The central launcher derives an absolute database URL under `<WORKSPACE_DATA_DIR>/studio/studio.db` by default. In legacy direct launches without an Oracle selector or explicit URL, defaults to `<APP_DATA_DIRECTORY>/fastapi.db`; the application directory defaults to `servers/fastapi/app_data`. Direct relative URL paths resolve from the process working directory. |
 | PostgreSQL | `postgresql://...` becomes asyncpg at runtime; Alembic uses psycopg. Pool configuration is supported. This is a candidate for a separately validated shared deployment. |
 | MySQL | `mysql://...` becomes aiomysql at runtime; Alembic uses PyMySQL. Driver support does not establish migration/workload qualification. |
 
@@ -127,8 +124,10 @@ An explicit `DATABASE_URL` wins over `PERSISTENCE_MODE`, allowing a local Worksp
 Oracle profile to retain Studio SQLite. Do not leave a stale SQLite URL in the
 Studio production environment. Use separate owners/credentials and absolute
 storage paths. [URL conversion](../servers/fastapi/utils/db_utils.py) preserves
-query options and handles PostgreSQL `sslmode` separately. Oracle thin mode needs
-no Instant Client installation. The DBA must provide the real DSN/service and
+query options and handles PostgreSQL `sslmode` separately. The current
+[Oracle runtime adapter](../servers/fastapi/utils/oracle_thick.py) loads Instant
+Client for listeners requiring Native Network Encryption; configure Studio's
+own `ORACLE_CLIENT_PATH` where needed. The DBA must provide the real DSN/service and
 the trust or wallet material required by the approved TCPS connection; mount
 that material privately and use supported driver options. Do not disable server
 certificate verification to make a connection work.
@@ -137,12 +136,13 @@ certificate verification to make a connection work.
 
 | Table | Purpose and relationships |
 |---|---|
-| `GENAI_WORKSPACE_STUDIO_USER` | Internal UUID and unique Workspace `external_subject`. Password/admin columns remain for schema compatibility; no local-login routes are active. |
+| `GENAI_WORKSPACE_STUDIO_USER` | Internal UUID and unique canonical Workspace identity in `external_subject`; reviewed legacy bindings retain UUID ownership. Password/admin columns remain for schema compatibility; no local-login routes are active. |
 | `GENAI_WORKSPACE_PRESENTATION` | Owner, brief, outline JSON, mode/status, brand settings, quality flags, favorite and generation IDs. `source_presentation_id` references another presentation with `ON DELETE SET NULL`. |
 | `GENAI_WORKSPACE_SLIDE` | Owner, indexed presentation reference, order, HTML, content, notes and editor properties. Presentation deletion cascades. |
 | `GENAI_WORKSPACE_STUDIO_CHAT_MESSAGE` | Owner, presentation/conversation reference, position, content and tool calls. Presentation deletion cascades. |
 | `GENAI_WORKSPACE_IMAGE_ASSET` | Owner, image reference, upload/generated flag and metadata. Bytes are in S3 or the selected filesystem store. |
 | `GENAI_WORKSPACE_STUDIO_FEEDBACK` | Owner, presentation, stage, generation ID, rating/reasons/comment and context. Unique owner/presentation/stage/generation tuple. Presentation deletion sets its reference null, preserving feedback; user deletion cascades. |
+| `GENAI_WORKSPACE_STUDIO_OPERATION` | Owner-scoped create operation and input hash committed with the presentation. The presentation reference survives deletion as a tombstone; owner deletion cascades. |
 | `GENAI_WORKSPACE_STUDIO_SCHEMA_VERSION` | Applied revision for databases managed through Alembic. |
 
 The [models](../servers/fastapi/models/sql) define the current schema and
@@ -160,9 +160,10 @@ is folded to lowercase and refers to a different object.
 
 ### Migrations and ownership cutover
 
-The current head is `a9b2c4d6e8f0`, the
-[Oracle baseline](../servers/fastapi/alembic/versions/a9b2c4d6e8f0_oracle_baseline.py),
-after `f8c2d4e6a0b3` (canonical Workspace table names). Key milestones are:
+The current head is `b0c2d4e6f8a1`, the
+[presentation operation journal](../servers/fastapi/alembic/versions/b0c2d4e6f8a1_presentation_operations.py),
+after the frozen `a9b2c4d6e8f0` Oracle baseline. Fresh installs use
+[oracle_v2](../servers/fastapi/dbschema/oracle_v2.py); the v1 generator remains unchanged for historical migrations. Key milestones are:
 
 - [Workspace table naming](../servers/fastapi/alembic/versions/f8c2d4e6a0b3_workspace_table_names.py).
 - [Workspace identity/favorites](../servers/fastapi/alembic/versions/a1f0c2d4e6b8_workspace_identity_and_favorites.py).
@@ -191,14 +192,15 @@ but the tracker remains canonical so Alembic can safely record the prior revisio
 This means a code rollback still needs a compatible migration environment; do not
 assume old binaries can read the new tracker.
 
-With `MIGRATE_DATABASE_ON_STARTUP=true`, [startup](../servers/fastapi/api/lifespan.py)
-invokes [migrations.py](../servers/fastapi/migrations.py). For Oracle, the frozen
-baseline installs only an empty dedicated schema, and validation requires its
-tables, columns, keys and tracker. Downgrading Oracle below that baseline is
-refused. SQLite and other supported dialects retain historical upgrade logic;
-schema guards reject mixed/legacy names and incomplete canonical tables before
-`create_all`. Current-table creation is not an upgrade or revision-stamping
-strategy. Review legacy inference/restamping behavior on a restored copy first.
+[Startup](../servers/fastapi/api/lifespan.py) does not invoke Alembic;
+`MIGRATE_DATABASE_ON_STARTUP` does not change this behavior. Oracle startup
+validates the pre-provisioned canonical schema and tracker. SQLite startup
+checks for mixed/legacy names and incomplete canonical tables before creating
+missing current-model tables. A fresh SQLite database therefore contains the
+seven application tables without an Alembic revision tracker. Current-table
+creation is not an upgrade or revision-stamping strategy. Run the explicit
+[migration entry point](../servers/fastapi/migrations.py) for existing schemas;
+review its legacy inference/restamping behavior on a restored copy first.
 
 For controlled deployments, stop writers, back up the database **and application files**, migrate once, verify the revision and start the service. Do not have every replica race to migrate. From `servers/fastapi`, after injecting the intended database configuration:
 
@@ -285,15 +287,28 @@ The runtime is pinned by `presentationExportVersion` in [package.json](../packag
 
 Public chart/table beacon endpoints have payload-count/size limits and path sanitization, but no active server-issued-token registry. Restrict/rate-limit ingress now; expiring one-use capture grants are a required improvement for stronger isolation.
 
-The renderer receives a Workspace cookie through a URL fragment and task data. The current [export service](../servers/fastapi/services/export_task_service.py) logs the full URL at INFO, which can include the credential. Restrict logs/task-file access and redact credential-bearing URLs or replace the handoff with a short-lived render grant before broader deployment.
+The renderer receives a Workspace cookie through a URL fragment and task data. The [export service](../servers/fastapi/services/export_task_service.py) removes the fragment before logging the URL. Restrict task-file access and replace the long-lived cookie handoff with a short-lived render grant before broader deployment.
 
 Visually inspect exported PDF/PPTX and open PowerPoint files in Microsoft PowerPoint when changing OOXML. `python-pptx` serialization does not establish that PowerPoint accepts the file. Some hollow chart-legend swatches still lose their fill in export.
 
 ## Configuration and prerequisites
 
+Maintain the complete application in the versioned `GenAI-Workspace/.env` through
+`python -m tools.workspace`. See the
+[environment workflow](../../GenAI-Workspace/docs/environment-workflow.md).
+Studio-owned values use `STUDIO__<native key>`; the central launcher derives
+authentication, shared JWT/service keys and the UI/export address. It projects
+Studio's own database/model/storage settings without reading sibling dotenv
+files. Relative configured paths resolve against the central file. Corporate
+mode requires authentication and currently supports the Workspace LDAP/HS256
+identity contract while Studio is enabled.
+
+The following loader rules describe legacy direct launches and unversioned
+development profiles; they are not additional inputs to the central workflow.
+
 [Environment loading](../servers/fastapi/utils/environment.py) uses `STUDIO_ENV_FILE` when supplied, loads no file when it is empty, and otherwise loads `servers/fastapi/.env` only in `ENVIRONMENT=development` (the default when omitted). Process values win, duplicates are rejected and dotenv interpolation is disabled. Set `ENVIRONMENT=production` explicitly in deployment and inject the service's configuration.
 
-The local [Workspace launcher](../../GenAI-Workspace/run_all.py) reads Studio's
+The legacy local [Workspace launcher](../../GenAI-Workspace/run_all.py), when using an unversioned backend file, reads Studio's
 actual `.env` for its own Azure/storage/runtime settings on a default launch.
 With explicit `--env-file` or an inherited `WORKSPACE_ENV_FILE`, it uses the
 selected environment without a Studio-file fallback. Both modes derive shared
@@ -302,22 +317,28 @@ Studio selector to prevent a second dotenv load. Configure required Azure values
 in the actual Studio file or deliberately selected profile accordingly. This
 launcher is a local workflow, not a production deployment entry point.
 
+The table uses native process names. Add `STUDIO__` for Studio-owned settings in
+the central file; shared keys and URL/auth controls must use their central names
+instead of independent overrides.
+
 | Setting | Owner and purpose |
 |---|---|
 | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION`, endpoint/base URL, deployment/model | Studio deployment secrets/settings for Azure Responses API, independent of Workspace Admin. |
 | `WORKSPACE_JWT_SECRET`, optional issuer/audience | Workspace identity contract; never use public UI environment variables for secrets. |
 | `STUDIO_SERVICE_API_KEY` | Backend secret matched to Workspace `PRESENTATION_STUDIO_API_KEY`. |
 | `PERSISTENCE_MODE`, `ORACLE_USER/PASSWORD/DSN`, `DATABASE_URL`, `DB_POOL_*` | Studio's own database selection and pool; explicit URL takes precedence. |
+| `ORACLE_CLIENT_PATH` | Instant Client library directory for Studio's thick Oracle runtime; `STUDIO__ORACLE_CLIENT_PATH` in the central file. |
 | `ARTIFACT_STORAGE_BACKEND`, `ARTIFACT_S3_*` | Durable bytes, private object namespace, credentials and TLS settings. |
-| `APP_DATA_DIRECTORY`, `TEMP_DIRECTORY`, `MIGRATE_DATABASE_ON_STARTUP` | Separate application/staging and temporary directories; controlled schema lifecycle. |
+| `APP_DATA_DIRECTORY`, `TEMP_DIRECTORY` | Separate application/staging and temporary directories. |
+| `MIGRATE_DATABASE_ON_STARTUP` | Retained legacy variable; startup does not run Alembic. Apply controlled migrations explicitly. |
 | `NEXT_PUBLIC_URL` | Studio renderer's Workspace UI origin/base path. It is not the Studio API origin. |
 | `FAST_API_INTERNAL_URL` | UI server routing to Studio; belongs in the UI process. |
 | `DISABLE_IMAGE_GENERATION`, image/search providers | Studio capability/egress settings, independent of Workspace toggles. |
 | Export concurrency, `DB_POOL_*`, parser settings | Capacity limits; size against measured CPU, memory and database load. |
 
-Maintain actual direct-launch values in `servers/fastapi/.env`, or configure the deliberately selected Workspace development profile for integrated launches. Consult the [configuration key reference](../../GenAI-Workspace/docs/configuration.md#supported-key-reference-and-validation) for supported names. Keep credentials in protected local files or a deployment secret store. [Docker exclusions](../.dockerignore) and [archive attributes](../.gitattributes) prevent packaging live configuration/databases; they do not erase earlier Git exposure.
+Maintain central values in `GenAI-Workspace/.env`; use `servers/fastapi/.env` or a deliberately selected development profile only for legacy launches. Consult the [configuration key reference](../../GenAI-Workspace/docs/configuration.md#supported-key-reference-and-validation) for supported names. Keep credentials in protected local files or a deployment secret store. [Docker exclusions](../.dockerignore) and [archive attributes](../.gitattributes) prevent packaging live configuration/databases; they do not erase earlier Git exposure.
 
-Required workstation tooling: Python **3.11** (3.12 is outside the declared range), `uv`, the team baseline Node.js **22**, npm, Chromium and a matching export converter. The current Docker image still uses Node 20; validate parity before promoting the same release across these environments. From the repository root:
+Required workstation tooling: Python **3.11** (3.12 is outside the declared range), `uv`, the team baseline Node.js **22**, npm, Chromium and a matching export converter. Oracle runtime connections also require Instant Client. The current Docker image omits Node and the export tools; the export-runtime CI job uses the same Node 22 baseline. From the repository root:
 
 ```text
 npm ci --ignore-scripts
@@ -328,9 +349,9 @@ uv sync --locked --dev --python 3.11
 uv run --locked python server.py --host 127.0.0.1 --port 8002
 ```
 
-Configure Azure/storage before the last command. The runtime check verifies/patches installed files; it is not an end-to-end export test. LiteParse handles document extraction; OCR/conversion paths also need Tesseract and ImageMagick. The [Dockerfile](../Dockerfile) packages Python, Node, Chromium, parser dependencies, fonts and warmed icon-embedding caches, then starts FastAPI on port 8000. Shared local development uses 8002 to avoid Workspace's gateway port.
+The last command is a legacy direct Studio launch and requires its native Azure/storage configuration. For the central workflow, omit it and start from Workspace with `python -m tools.workspace start --detach`. The runtime check verifies/patches installed files; it is not an end-to-end export test. LiteParse handles document extraction; OCR/conversion paths also need Tesseract and ImageMagick. The [Dockerfile](../Dockerfile) packages Python and Oracle Instant Client, then starts FastAPI on port 8000. It does not install Node, Chromium or the presentation export runtime. Shared local development uses 8002 to avoid Workspace's gateway port.
 
-The image is API-only: no nginx or second frontend. It currently has no explicit non-root user or dedicated health/readiness endpoint. Deploy behind private routing/TLS with explicit CORS origins and durable storage. Use a process/TCP probe plus authenticated smoke checks until dependency-aware readiness exists. Startup checks provider configuration, not live Azure connectivity, browser rendering, disk capacity or end-to-end export.
+The image is API-only: no nginx or second frontend. It runs as a non-root user and supplies a TCP health check, which does not establish dependency readiness. Deploy behind private routing/TLS with explicit CORS origins and durable storage; add the export runtime dependencies before expecting layout/export functions to work. Pair process/TCP probes with authenticated smoke checks until dependency-aware readiness exists. Startup checks provider configuration, not live Azure connectivity, browser rendering, disk capacity or end-to-end export.
 
 ### Egress policy
 
@@ -358,9 +379,9 @@ workflows do not establish that an on-prem Oracle or S3 server has passed.
 
 Prioritize these remaining changes:
 
-1. Consistently isolate/sanitize active slide content; redact renderer credentials and introduce short-lived render/capture grants.
-2. Enforce production authentication and approved egress; namespace identities before supporting multiple organizations/issuers.
-3. Add durable generation state/leases and idempotency before multiworker scaling; coordinate render limits and shared files.
+1. Isolate rendering origins, review remaining HTML consumers and introduce short-lived render/capture grants.
+2. Enforce production authentication and approved egress; apply reviewed identity bindings before changing established issuer namespaces.
+3. Add durable generation state/leases and generation idempotency before multiworker scaling; coordinate render limits and shared files. Create operations already have owner-scoped idempotency.
 4. Add readiness, non-sensitive metrics, scheduled retention and tested recovery procedures.
 5. Qualify the chosen Oracle RU and S3 platform, TLS, migrations, concurrent workload and restore procedure before production cutover; preserve the two schema owners and private storage namespaces.
 
