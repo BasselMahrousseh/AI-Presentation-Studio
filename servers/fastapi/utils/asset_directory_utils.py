@@ -166,8 +166,11 @@ def resolve_app_path_to_filesystem(path_or_url: str) -> Optional[str]:
         app_data = get_app_data_directory_env()
         if not app_data or not _app_data_url_allowed(path):
             return None
-        relative = path[len("/app_data/"):]
-        return _existing_file_within(os.path.join(app_data, relative), app_data)
+        from services.asset_storage import AssetAccessDenied, AssetNotFound, get_asset_storage
+        try:
+            return get_asset_storage().materialize(path)
+        except (AssetAccessDenied, AssetNotFound):
+            return None
 
     if path.startswith("/static/"):
         relative = path[len("/static/"):]
@@ -177,10 +180,14 @@ def resolve_app_path_to_filesystem(path_or_url: str) -> Optional[str]:
     if os.path.isabs(path):
         return _resolve_allowed_absolute_file(path)
 
-    return _existing_file_within(
-        os.path.join(get_images_directory(), path),
-        get_images_directory(),
-    )
+    image_root = os.path.realpath(get_images_directory())
+    candidate = os.path.realpath(os.path.join(image_root, path))
+    try:
+        if os.path.commonpath([candidate, image_root]) != image_root:
+            return None
+    except ValueError:
+        return None
+    return _resolve_allowed_absolute_file(candidate)
 
 
 def _existing_file_within(candidate: str, root: str) -> Optional[str]:
@@ -215,11 +222,18 @@ def _app_data_url_allowed(path: str) -> bool:
 def _resolve_allowed_absolute_file(path: str) -> Optional[str]:
     app_data = get_app_data_directory_env()
     if app_data:
-        candidate = _existing_file_within(path, app_data)
-        if candidate:
-            relative = os.path.relpath(candidate, os.path.realpath(app_data))
-            app_url = "/app_data/" + relative.replace(os.sep, "/")
-            return candidate if _app_data_url_allowed(app_url) else None
+        from services.asset_storage import AssetAccessDenied, AssetNotFound, get_asset_storage
+        storage = get_asset_storage()
+        try:
+            reference = storage.reference_for_path(path)
+            if _app_data_url_allowed(reference):
+                return storage.materialize(reference)
+            return None
+        except AssetNotFound:
+            return None
+        except AssetAccessDenied:
+            if _existing_file_within(path, app_data):
+                return None
 
     temp_root = get_temp_directory_env() or "/tmp/presenton"
     owner_id = get_current_owner_id()

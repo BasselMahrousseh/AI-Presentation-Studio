@@ -1,0 +1,70 @@
+name: Studio Oracle persistence
+
+on:
+  pull_request:
+    paths:
+      - "servers/fastapi/**"
+      - ".github/workflows/oracle-persistence.yml"
+  push:
+    branches: [main]
+    paths:
+      - "servers/fastapi/**"
+      - ".github/workflows/oracle-persistence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  oracle-free:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      oracle:
+        image: gvenzl/oracle-free:23-slim-faststart
+        env:
+          ORACLE_PASSWORD: DisposableOracleCi_42
+          APP_USER: GENAI_TEST_STUDIO_CI
+          APP_USER_PASSWORD: DisposableStudioCi_42
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-start-period 60s
+          --health-retries 30
+    defaults:
+      run:
+        working-directory: servers/fastapi
+    env:
+      STUDIO_ENV_FILE: ""
+      WORKSPACE_ENV_FILE: ""
+      PERSISTENCE_MODE: "sqlite"
+      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+      APP_DATA_DIRECTORY: /tmp/studio-oracle-ci/app-data
+      TEMP_DIRECTORY: /tmp/studio-oracle-ci/tmp
+      DISABLE_ANONYMOUS_TRACKING: "true"
+      DISABLE_IMAGE_GENERATION: "true"
+      STUDIO_TEST_ORACLE_URL: "oracle+oracledb://GENAI_TEST_STUDIO_CI:DisposableStudioCi_42@localhost:1521?service_name=FREEPDB1"
+      STUDIO_TEST_ORACLE_ALLOW_DDL: "yes"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: servers/fastapi/uv.lock
+      - name: Install locked dependencies
+        run: uv sync --locked --dev
+      - name: Create isolated test directories
+        run: mkdir -p "$APP_DATA_DIRECTORY" "$TEMP_DIRECTORY"
+      - name: Test real Oracle and existing SQLite migration lifecycle
+        run: >-
+          uv run --locked python -m pytest -q
+          tests/integration/test_oracle_database.py
+          tests/unit/test_oracle_persistence.py
+          tests/unit/test_workspace_table_names.py
+          tests/unit/test_migrations.py

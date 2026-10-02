@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
 )
 from sqlalchemy import event
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, with_loader_criteria
 from sqlmodel import SQLModel
 
@@ -13,26 +14,37 @@ from models.sql.chat_history_message import ChatHistoryMessageModel
 from models.sql.generation_feedback import GenerationFeedback
 from models.sql.image_asset import ImageAsset
 from models.sql.presentation import PresentationModel
+from models.sql.presentation_operation import PresentationOperation
 from models.sql.slide import SlideModel
 from models.sql.user import User
 from api.v1.auth.context import get_current_owner_id
 from utils.schema_names import validate_create_all_schema
-from utils.get_env import get_migrate_database_on_startup_env
 from utils.db_utils import get_database_url_and_connect_args, get_pool_kwargs
+from utils.oracle_thick import open_thick_connection
 
 
 database_url, connect_args = get_database_url_and_connect_args()
+_database_dialect = make_url(database_url).get_backend_name()
 
-# Apply connection-pool settings for server-class databases (PostgreSQL, MySQL).
-# SQLite uses a file-lock model and ignores pool configuration, so we skip it.
-_pool_kwargs = get_pool_kwargs() if "sqlite" not in database_url else {}
+# SQLite uses a file lock and ignores server pool settings.
+_pool_kwargs = {} if _database_dialect == "sqlite" else get_pool_kwargs()
 
-sql_engine: AsyncEngine = create_async_engine(
-    database_url, connect_args=connect_args, **_pool_kwargs
-)
+_engine_kwargs = {
+    "connect_args": connect_args,
+    "hide_parameters": True,
+    **_pool_kwargs,
+}
+if _database_dialect == "oracle":
+    async def _connect_oracle_thick():
+        return await open_thick_connection(database_url)
+
+    # This listener rejects thin mode (DPY-3001). The creator uses Instant Client.
+    _engine_kwargs["async_creator"] = _connect_oracle_thick
+
+sql_engine: AsyncEngine = create_async_engine(database_url, **_engine_kwargs)
 
 
-if "sqlite" in database_url:
+if _database_dialect == "sqlite":
     @event.listens_for(sql_engine.sync_engine, "connect")
     def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
         cursor = dbapi_connection.cursor()
@@ -49,6 +61,7 @@ _STRICT_OWNER_MODELS = (
     ChatHistoryMessageModel,
     ImageAsset,
     GenerationFeedback,
+    PresentationOperation,
 )
 
 
@@ -90,32 +103,35 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-# Create Database and Tables
 async def create_db_and_tables():
-    should_run_alembic = get_migrate_database_on_startup_env() in ["true", "True"]
-    if not should_run_alembic:
-        async with sql_engine.begin() as conn:
-            await conn.run_sync(lambda sync_conn: validate_create_all_schema(sync_conn, SQLModel.metadata))
-            await conn.run_sync(
-                lambda sync_conn: SQLModel.metadata.create_all(
-                    sync_conn,
-                    tables=[
-                        PresentationModel.__table__,
-                        SlideModel.__table__,
-                        ChatHistoryMessageModel.__table__,
-                        ImageAsset.__table__,
-                        User.__table__,
-                        GenerationFeedback.__table__,
-                    ],
-                )
+    """Create any missing tables from the current models. Startup does not run Alembic."""
+    import logging
+    log = logging.getLogger("uvicorn.error")
+    log.info("Reading the Oracle schema")
+    async with sql_engine.begin() as conn:
+        if _database_dialect == "oracle":
+            from dbschema.oracle_bootstrap import validate_runtime_schema
+            await conn.run_sync(validate_runtime_schema)
+            return
+        await conn.run_sync(lambda sync_conn: validate_create_all_schema(sync_conn, SQLModel.metadata))
+        log.info("Schema check finished; ensuring Studio tables")
+        await conn.run_sync(
+            lambda sync_conn: SQLModel.metadata.create_all(
+                sync_conn,
+                tables=[
+                    PresentationModel.__table__,
+                    SlideModel.__table__,
+                    ChatHistoryMessageModel.__table__,
+                    ImageAsset.__table__,
+                    User.__table__,
+                    GenerationFeedback.__table__,
+                    PresentationOperation.__table__,
+                ],
             )
+        )
+    log.info("Studio tables are ready")
 
 
 async def dispose_engines():
-    """Dispose all engine connection pools.
-
-    Call this during application shutdown (e.g. in a FastAPI ``shutdown``
-    event or lifespan context) to release every connection back to the
-    database and prevent stale / leaked connections.
-    """
+    """Release every pooled connection during application shutdown."""
     await sql_engine.dispose()

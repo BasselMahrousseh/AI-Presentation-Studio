@@ -384,8 +384,14 @@ class ExportTaskService:
                 if not root:
                     continue
                 resolved_root = os.path.realpath(root)
+                try:
+                    within_root = os.path.commonpath([resolved, resolved_root]) == resolved_root
+                except ValueError:
+                    # Different Windows drives cannot share a parent. Another
+                    # explicitly allowed root can still contain this output.
+                    continue
                 if (
-                    os.path.commonpath([resolved, resolved_root]) == resolved_root
+                    within_root
                     and os.path.isfile(resolved)
                 ):
                     return resolved

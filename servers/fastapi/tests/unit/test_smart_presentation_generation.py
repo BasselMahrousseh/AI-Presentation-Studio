@@ -1098,11 +1098,13 @@ def test_layout_check_accepts_the_real_reported_full_height_rail_slide(
     assert fit_scale is None
 
 
-def test_build_slide_preview_html_without_extra_css_is_unchanged():
+def test_build_slide_preview_html_without_extra_css_is_unchanged(monkeypatch):
     """Every other caller of _build_slide_preview_html (font previews, PPTX
     slide-to-image rendering) must be byte-for-byte unaffected by adding this
     parameter - it defaults to empty."""
     from templates.fonts_and_slides_preview import _build_slide_preview_html
+
+    monkeypatch.setattr("templates.fonts_and_slides_preview.secrets.token_urlsafe", lambda _size: "test-render-nonce")
 
     without_param = _build_slide_preview_html(
         "<div>content</div>", font_css="", width=100, height=100
@@ -1417,11 +1419,11 @@ def test_prompt_warns_against_outside_anchored_pie_donut_labels_that_clip():
     )
     prompt = str(messages[1].content)
 
-    assert "DIFFERENT datalabel setup than bar charts" in prompt
-    assert "clipped by the canvas boundary" in prompt
-    assert "keep the on-slice datalabel to the value alone" in prompt
-    assert "anchor: 'center'" in prompt
-    assert "align: 'center'" in prompt
+    assert "Place bar value labels outside the bars" in prompt
+    assert "For pie/doughnut" in prompt
+    assert "values stay within each slice" in prompt
+    assert 'anchor: "center"' in prompt
+    assert 'align: "center"' in prompt
 
 
 def test_prompt_forbids_conditionally_blanking_pie_donut_slice_labels():
@@ -1445,9 +1447,9 @@ def test_prompt_forbids_conditionally_blanking_pie_donut_slice_labels():
     )
     prompt = str(messages[1].content)
 
-    assert "empty string for" in prompt
-    assert "small values" in prompt
-    assert "unconditionally" in prompt
+    assert "Keep every value visible" in prompt
+    assert "hiding small values" in prompt
+    assert "Never include formatter functions" in prompt
 
 
 def test_prompt_forbids_fixed_height_title_header_rows():
@@ -2453,9 +2455,9 @@ def test_a_chunk_whose_stream_dies_is_backfilled_slide_by_slide(monkeypatch):
 
 @pytest.mark.parametrize(
     "n_slides, use_outline",
-    ((smart_generation.SMART_LONG_DECK_SLIDE_COUNT, True), (22, False)),
+    ((smart_generation.SMART_LONG_DECK_SLIDE_COUNT, True),),
 )
-def test_short_decks_and_decks_without_an_outline_use_one_stream(
+def test_decks_at_the_long_deck_limit_use_one_stream(
     monkeypatch, n_slides, use_outline
 ):
     calls = []
@@ -2475,6 +2477,29 @@ def test_short_decks_and_decks_without_an_outline_use_one_stream(
     )
 
     assert calls == [1]
+    assert len(result["slides"]) == n_slides
+
+
+def test_a_long_count_without_an_outline_is_still_chunked(monkeypatch):
+    """A chosen count of 33 has no Slide N: markers, but one response still
+    dies partway (observed stuck at slide 8 of 33)."""
+    n_slides = 33
+    calls = []
+
+    async def fake_stream(client, model, messages, on_chunk, **kwargs):
+        assert _is_chunk_call(messages)
+        calls.append(_requested_indices(messages, n_slides)[0])
+        response = ""
+        for index in _requested_indices(messages, n_slides):
+            block = _slide_block(_smart_slide_html(title=f"Slide {index}"))
+            response += block
+            await on_chunk(block)
+        return response, None
+
+    _patch_llm(monkeypatch, fake_stream)
+    result = _generate_outline_deck(n_slides, [], content="A topic with no slide plan")
+
+    assert sorted(calls) == [0, 10, 20, 30]
     assert len(result["slides"]) == n_slides
 
 

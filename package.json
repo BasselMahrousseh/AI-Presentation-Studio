@@ -10,7 +10,11 @@
     "check:presentation-export": "node scripts/sync-presentation-export.cjs --check-only"
   },
   "dependencies": {
-    "@llamaindex/liteparse": "^1.5.2",
-    "sharp": "^0.34.5"
+    "@llamaindex/liteparse": "1.5.2",
+    "sharp": "0.34.5"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22"
   }
 }

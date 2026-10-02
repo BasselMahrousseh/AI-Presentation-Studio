@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 from typing import Literal
 from urllib.parse import urlencode
@@ -12,6 +13,7 @@ from services.export_task_service import EXPORT_TASK_SERVICE
 from services.pptx_native_chart_service import upgrade_flattened_charts_to_native
 from services.pptx_native_table_service import upgrade_flattened_tables_to_native
 from utils.runtime_limits import log_memory
+from services.asset_storage import get_asset_storage
 
 
 LOGGER = logging.getLogger(__name__)
@@ -100,6 +102,12 @@ async def export_presentation(
                 "presentation.export.native_table_upgrade_failed",
             )
 
+    storage = get_asset_storage()
+    result_path = export_result.path
+    if storage.is_s3:
+        # Publish only after native chart/table postprocessing has saved the final bytes.
+        result_path = await asyncio.to_thread(storage.publish_new, result_path, "exports")
+
     log_memory(
         LOGGER,
         "presentation.export.finish",
@@ -108,5 +116,5 @@ async def export_presentation(
     )
     return PresentationAndPath(
         presentation_id=presentation_id,
-        path=export_result.path,
+        path=result_path,
     )

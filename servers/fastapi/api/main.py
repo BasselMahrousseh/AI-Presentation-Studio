@@ -1,3 +1,4 @@
+import logging
 import os
 from utils.environment import load_studio_environment
 
@@ -8,9 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import Request
 from starlette.responses import FileResponse
+from starlette.routing import Match
 
 from api.lifespan import app_lifespan
+from api.asset_files import StoredAssetFiles
 from api.middlewares import SessionAuthMiddleware
+from utils.context_path import ContextPathMiddleware
 from api.v1.admin.router import API_V1_ADMIN_ROUTER
 from api.v1.ppt.router import API_V1_PPT_ROUTER
 from utils.get_env import (
@@ -24,6 +28,8 @@ from utils.path_helpers import get_resource_path
 
 
 init_sandbox_safe_mimetypes()
+
+request_logger = logging.getLogger("uvicorn.error")
 
 
 def _maybe_init_sentry() -> None:
@@ -65,11 +71,11 @@ app = FastAPI(lifespan=app_lifespan)
 app.include_router(API_V1_PPT_ROUTER)
 app.include_router(API_V1_ADMIN_ROUTER)
 
-# Mount app_data and static assets (direct FastAPI access; nginx also serves /static in Docker).
+# App-data bytes come from the selected durable store after ownership checks.
 app_data_dir = get_app_data_directory_env()
 if app_data_dir:
     os.makedirs(app_data_dir, exist_ok=True)
-    app.mount("/app_data", StaticFiles(directory=app_data_dir), name="app_data")
+    app.mount("/app_data", StoredAssetFiles(directory=app_data_dir), name="app_data")
 
 static_dir = get_resource_path("static")
 if os.path.isdir(static_dir):
@@ -113,3 +119,38 @@ async def static_icon_fallback_middleware(request: Request, call_next):
     if not os.path.isfile(placeholder):
         return response
     return FileResponse(placeholder, media_type="image/svg+xml")
+
+
+def _route_matched(request: Request) -> bool:
+    for route in request.app.router.routes:
+        match, _child = route.matches(request.scope)
+        if match == Match.FULL:
+            return True
+    return False
+
+
+@app.middleware("http")
+async def log_http_request(request: Request, call_next):
+    """Record the method and path that actually arrived, and why a 404 happened."""
+    method = request.method
+    path = request.url.path
+    request_logger.info("request %s %s", method, path)
+    response = await call_next(request)
+    if response.status_code != 404:
+        request_logger.info("response %s %s %s", method, path, response.status_code)
+        return response
+    try:
+        registered = _route_matched(request)
+    except Exception:
+        registered = False
+    request_logger.warning(
+        "404 %s %s (%s)",
+        method,
+        path,
+        "a handler returned 404" if registered else "no route is registered for this method and path",
+    )
+    return response
+
+
+# Outermost: a gateway that forwards CONTEXT_PATH, for example /presentation-studio.
+app.add_middleware(ContextPathMiddleware)

@@ -96,6 +96,28 @@ def test_export_output_path_accepts_file_path_key(monkeypatch, tmp_path):
     )
 
 
+def test_export_output_on_another_drive_checks_each_allowed_root(monkeypatch, tmp_path):
+    app_root = tmp_path / "app-data"
+    temp_root = tmp_path / "temp"
+    temp_root.mkdir()
+    output = temp_root / "preview.png"
+    output.write_bytes(b"png")
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"png")
+    monkeypatch.setenv("APP_DATA_DIRECTORY", str(app_root))
+    monkeypatch.setenv("TEMP_DIRECTORY", str(temp_root))
+    original = os.path.commonpath
+
+    def compare(paths):
+        if paths[1] == os.path.realpath(app_root):
+            raise ValueError("Paths are on different drives")
+        return original(paths)
+
+    monkeypatch.setattr(os.path, "commonpath", compare)
+    assert ExportTaskService._resolve_trusted_runtime_path(str(output)) == str(output)
+    assert ExportTaskService._resolve_trusted_runtime_path(str(outside)) is None
+
+
 def test_render_html_to_image_sends_html_task_payload(monkeypatch, tmp_path):
     monkeypatch.setenv("TEMP_DIRECTORY", str(tmp_path))
     output_path = tmp_path / "preview.png"

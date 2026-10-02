@@ -73,9 +73,6 @@ benchmark/
 # local dev runtime data
 servers/fastapi/.runtime-smart/
 
-# Configuration templates are safe to track; live credentials are local.
-!servers/fastapi/.env.example
-
 # Generated verification and dependency caches
 .coverage*
 coverage.xml

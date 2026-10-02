@@ -182,7 +182,7 @@ async def stream_outlines(
 
         additional_context = ""
         if presentation.file_paths:
-            documents_loader = DocumentsLoader(
+            documents_loader = await asyncio.to_thread(DocumentsLoader,
                 file_paths=presentation.file_paths,
                 presentation_language=presentation.language,
             )

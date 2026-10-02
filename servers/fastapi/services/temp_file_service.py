@@ -1,10 +1,11 @@
 import os
 import tempfile
+from pathlib import Path
 from typing import Optional, Union
 
 from fastapi import HTTPException
 
-from utils.get_env import get_temp_directory_env
+from utils.get_env import get_temp_directory_env, get_app_data_directory_env
 from api.v1.auth.context import get_current_owner_id
 import uuid
 
@@ -15,11 +16,18 @@ class TempFileService:
         self.base_dir = get_temp_directory_env() or os.path.join(
             tempfile.gettempdir(), "presenton"
         )
+        self._assert_cleanup_excludes_application_data()
         self.cleanup_base_dir()
         os.makedirs(self.base_dir, exist_ok=True)
 
     def _base_dir_realpath(self) -> str:
         return os.path.realpath(self.base_dir)
+
+    def _assert_cleanup_excludes_application_data(self):
+        if Path(get_app_data_directory_env()).expanduser().resolve().is_relative_to(
+            Path(self.base_dir).resolve()
+        ):
+            raise ValueError("APP_DATA_DIRECTORY must be outside TEMP_DIRECTORY; cleanup refused")
 
     def _owner_base_dir_realpath(self) -> str:
         owner_id = get_current_owner_id()
@@ -54,6 +62,32 @@ class TempFileService:
         if not isinstance(file_path, str) or not file_path.strip():
             raise HTTPException(status_code=400, detail="Invalid file path")
 
+        from services.asset_storage import (
+            AssetAccessDenied, AssetNotFound, AssetStorageError, get_asset_storage,
+        )
+        storage = get_asset_storage()
+        reference = None
+        if file_path.startswith("/app_data/"):
+            reference = file_path
+        elif os.path.isabs(file_path):
+            try:
+                reference = storage.reference_for_path(file_path)
+            except AssetAccessDenied:
+                pass
+        if reference is not None:
+            try:
+                if storage.parts(reference)[0] != "uploads":
+                    raise AssetAccessDenied("Expected an uploaded source document")
+                return storage.materialize(reference)
+            except (AssetAccessDenied, AssetNotFound) as exc:
+                raise HTTPException(status_code=404, detail="Source file not found") from exc
+            except AssetStorageError as exc:
+                raise HTTPException(status_code=503, detail="Studio object storage unavailable") from exc
+
+        return self._resolve_local_temp_path(file_path, must_exist=must_exist)
+
+    def _resolve_local_temp_path(self, file_path: str, must_exist: bool = False) -> str:
+        """Resolve temporary paths only, never durable /app_data references."""
         try:
             resolved_path = os.path.realpath(os.path.abspath(file_path))
         except OSError as exc:
@@ -73,6 +107,21 @@ class TempFileService:
             raise HTTPException(status_code=404, detail="File not found")
 
         return resolved_path
+
+    def validate_file_references(self, file_paths: Optional[list[str]]) -> list[str]:
+        """Validate sources while retaining durable references in database rows."""
+        from services.asset_storage import AssetAccessDenied, get_asset_storage
+        storage = get_asset_storage()
+        references = []
+        for value in file_paths or []:
+            resolved = self.resolve_temp_path(value, must_exist=True)
+            try:
+                references.append(storage.reference_for_path(resolved))
+            except AssetAccessDenied:
+                if storage.is_s3:
+                    raise HTTPException(status_code=400, detail="Re-upload source files to durable storage before using S3")
+                references.append(resolved)  # Compatible legacy temp source.
+        return references
 
     def resolve_existing_temp_paths(self, file_paths: Optional[list[str]]) -> list[str]:
         if not file_paths:
@@ -131,7 +180,8 @@ class TempFileService:
         return file_path
 
     def _delete_dir_files(self, dir_path: str):
-        dir_path = self.resolve_temp_path(dir_path, must_exist=True)
+        self._assert_cleanup_excludes_application_data()
+        dir_path = self._resolve_local_temp_path(dir_path, must_exist=True)
         for root, dirs, files in os.walk(dir_path, topdown=False):
             for name in files:
                 os.remove(os.path.join(root, name))
@@ -149,8 +199,9 @@ class TempFileService:
                     os.rmdir(path)
 
     def cleanup_temp_dir(self, dir_path: str):
+        self._assert_cleanup_excludes_application_data()
         try:
-            dir_path = self.resolve_temp_path(dir_path, must_exist=True)
+            dir_path = self._resolve_local_temp_path(dir_path, must_exist=True)
         except HTTPException as exc:
             if exc.status_code == 404:
                 return

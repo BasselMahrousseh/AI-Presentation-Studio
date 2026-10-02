@@ -1,4 +1,5 @@
 import os
+import asyncio
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Body, HTTPException, UploadFile
 
@@ -6,6 +7,7 @@ from constants.documents import UPLOAD_ACCEPTED_FILE_TYPES
 from models.decomposed_file_info import DecomposedFileInfo
 from services.temp_file_service import TEMP_FILE_SERVICE
 from services.documents_loader import DocumentsLoader
+from services.asset_storage import get_asset_storage
 import uuid
 from utils.validators import validate_files
 
@@ -31,7 +33,9 @@ async def upload_files(files: Optional[List[UploadFile]]):
                 content = await each_file.read()
                 f.write(content)
 
-            temp_files.append(temp_path)
+            temp_files.append(await asyncio.to_thread(
+                get_asset_storage().publish_new, temp_path, "uploads"
+            ))
 
     return temp_files
 
@@ -42,7 +46,8 @@ async def decompose_files(
     language: Annotated[Optional[str], Body()] = None,
 ):
     temp_dir = TEMP_FILE_SERVICE.create_temp_dir(str(uuid.uuid4()))
-    resolved_file_paths = TEMP_FILE_SERVICE.resolve_existing_temp_paths(file_paths)
+    references = await asyncio.to_thread(TEMP_FILE_SERVICE.validate_file_references, file_paths)
+    resolved_file_paths = await asyncio.to_thread(TEMP_FILE_SERVICE.resolve_existing_temp_paths, references)
 
     txt_files = []
     other_files = []
@@ -52,7 +57,9 @@ async def decompose_files(
         else:
             other_files.append(file_path)
 
-    documents_loader = DocumentsLoader(file_paths=other_files, presentation_language=language)
+    documents_loader = await asyncio.to_thread(
+        DocumentsLoader, file_paths=other_files, presentation_language=language
+    )
     await documents_loader.load_documents(temp_dir)
     parsed_documents = documents_loader.documents
 
@@ -64,16 +71,18 @@ async def decompose_files(
         parsed_doc = parsed_doc.replace("<br>", "\n")
         with open(file_path, "w", encoding="utf-8") as text_file:
             text_file.write(parsed_doc)
+        durable_path = await asyncio.to_thread(get_asset_storage().publish_new, file_path, "uploads")
         response.append(
             DecomposedFileInfo(
-                name=os.path.basename(other_files[index]), file_path=file_path
+                name=os.path.basename(other_files[index]), file_path=durable_path
             )
         )
 
     # Return the txt documents as it is
     for each_file in txt_files:
+        source_reference = references[resolved_file_paths.index(each_file)]
         response.append(
-            DecomposedFileInfo(name=os.path.basename(each_file), file_path=each_file)
+            DecomposedFileInfo(name=os.path.basename(each_file), file_path=source_reference)
         )
 
     return response

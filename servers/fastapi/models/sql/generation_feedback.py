@@ -2,21 +2,12 @@ from datetime import datetime
 from typing import List, Literal, Optional
 import uuid
 
-from sqlalchemy import (
-    JSON,
-    Column,
-    DateTime,
-    ForeignKey,
-    SmallInteger,
-    String,
-    Text,
-    UniqueConstraint,
-    Uuid,
-)
+from sqlalchemy import Column, ForeignKey, SmallInteger, String, Text, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from api.v1.auth.context import get_current_owner_id
 from utils.datetime_utils import get_current_utc_datetime
+from utils.sql_types import PortableUUID, PortableJSON, UTCDateTime
 
 
 FeedbackStage = Literal["outline", "deck"]
@@ -41,7 +32,7 @@ class GenerationFeedback(SQLModel, table=True):
         ),
     )
 
-    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, sa_column=Column(PortableUUID, primary_key=True, default=uuid.uuid4))
     owner_id: Optional[uuid.UUID] = Field(
         default_factory=get_current_owner_id,
         sa_column=Column(
@@ -57,21 +48,21 @@ class GenerationFeedback(SQLModel, table=True):
         ),
     )
     stage: str = Field(sa_column=Column(String(16), nullable=False))
-    generation_id: uuid.UUID = Field(sa_column=Column(Uuid, nullable=False))
+    generation_id: uuid.UUID = Field(sa_column=Column(PortableUUID, nullable=False))
     # +1 thumbs up, -1 thumbs down.
     rating: int = Field(sa_column=Column(SmallInteger, nullable=False))
-    reasons: Optional[List[str]] = Field(sa_column=Column(JSON), default=None)
+    reasons: Optional[List[str]] = Field(sa_column=Column(PortableJSON), default=None)
     comment: Optional[str] = Field(sa_column=Column(Text), default=None)
     # Snapshot of the deck's settings when the rating was saved (mode, slide count, template, ...).
-    context: Optional[dict] = Field(sa_column=Column(JSON), default=None)
+    context: Optional[dict] = Field(sa_column=Column(PortableJSON), default=None)
     created_at: datetime = Field(
         sa_column=Column(
-            DateTime(timezone=True), nullable=False, default=get_current_utc_datetime
+            UTCDateTime(), nullable=False, default=get_current_utc_datetime
         ),
     )
     updated_at: datetime = Field(
         sa_column=Column(
-            DateTime(timezone=True),
+            UTCDateTime(),
             nullable=False,
             default=get_current_utc_datetime,
             onupdate=get_current_utc_datetime,

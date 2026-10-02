@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -13,6 +15,8 @@ from api.v1.auth.principal import resolve_request_principal
 from api.v1.auth.workspace_jwt import WORKSPACE_TOKEN_COOKIE_NAME
 from services.database import async_session_maker
 from utils.get_env import is_disable_auth_enabled
+
+logger = logging.getLogger(__name__)
 
 
 class SessionAuthMiddleware(BaseHTTPMiddleware):
@@ -43,6 +47,15 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
         "/app_data/templates/",
     )
     _PROTECTED_NON_API_PATHS = {"/docs", "/openapi.json", "/redoc"}
+    _AUTHENTICATION_HEADERS = (
+        "Authorization",
+        "X-On-Behalf-Of",
+        "X-Workspace-Issuer",
+        "X-Workspace-Org",
+        "X-Workspace-Action",
+        "X-Workspace-Resource",
+        "X-Operation-Id",
+    )
 
     def _requires_auth(self, path: str) -> bool:
         if any(path.startswith(prefix) for prefix in self._PUBLIC_AUTH_PREFIXES):
@@ -56,10 +69,6 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
         return path in self._PROTECTED_NON_API_PATHS
 
     async def dispatch(self, request: Request, call_next):
-        if is_disable_auth_enabled():
-            # Local development only: single user, rows keep a null owner_id.
-            return await call_next(request)
-
         path = request.url.path
         if (
             request.method == "OPTIONS"
@@ -68,9 +77,21 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
         ):
             return await call_next(request)
 
+        if is_disable_auth_enabled():
+            # Only anonymous local requests bypass authentication. A Workspace
+            # handoff still needs its verified owner for operation reconciliation;
+            # malformed or incomplete credentials must not become anonymous writes.
+            has_authentication = (
+                any(header in request.headers for header in self._AUTHENTICATION_HEADERS)
+                or WORKSPACE_TOKEN_COOKIE_NAME in request.cookies
+            )
+            if not has_authentication:
+                return await call_next(request)
+
         async with async_session_maker() as session:
             principal, user = await resolve_request_principal(request, session)
             if principal is None:
+                logger.info("auth rejected %s %s: no principal", request.method, path)
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Unauthorized"},
@@ -78,6 +99,7 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
             # The bare service key may only read the admin surface (feedback export); everything
             # else needs a user, either a Workspace JWT or the service key with X-On-Behalf-Of.
             if path.startswith("/api/v1/admin/") != principal.is_admin:
+                logger.info("auth rejected %s %s: admin surface mismatch", request.method, path)
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "Forbidden"},
@@ -101,6 +123,7 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
                     user_id=principal.user_id,
                     is_admin=principal.is_admin,
                 ):
+                    logger.info("auth rejected %s %s: asset not owned", request.method, path)
                     return JSONResponse(
                         status_code=404,
                         content={"detail": "Asset not found"},

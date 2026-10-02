@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Annotated, Any, List, Literal, Optional
 from fastapi import (
     APIRouter,
@@ -38,6 +39,8 @@ from models.sse_response import (
 
 from services.database import get_async_session
 from services.database import async_session_maker
+from services.presentation_operations import (commit_presentation, find_operation, replay_operation,
+                                               request_hash, validate_operation_id)
 from models.sql.presentation import PresentationModel, PresentationVersion
 from utils.llm_utils import TextGenerationMetrics
 from utils.sse import safe_sse_stream
@@ -157,7 +160,7 @@ async def get_all_presentations(
     # that the Workspace can no longer open; they stay in the database untouched.
     query = query.where(PresentationModel.generation_mode == "smart")
     if favorites_only:
-        query = query.where(PresentationModel.is_favorite.is_(True))
+        query = query.where(PresentationModel.is_favorite == True)  # noqa: E712
     if include_slides and include_unfinished:
         query = query.where(
             or_(
@@ -294,13 +297,14 @@ async def duplicate_presentation(
 
 
 def _existing_source_file_paths(file_paths: Optional[List[str]]) -> List[str]:
-    """Resolve stored source file paths, dropping any that no longer exist
-    (TempFileService wipes the temp dir on every backend start)."""
+    """Retain durable references and tolerate only missing legacy temp sources."""
     existing: List[str] = []
     for file_path in file_paths or []:
         try:
-            existing.append(TEMP_FILE_SERVICE.resolve_temp_path(file_path, must_exist=True))
-        except HTTPException:
+            existing.extend(TEMP_FILE_SERVICE.validate_file_references([file_path]))
+        except HTTPException as exc:
+            if exc.status_code == 503 or file_path.startswith("/app_data/"):
+                raise
             logger.warning("[smart-workflow] source file unavailable, skipping: %s", file_path)
     return existing
 
@@ -308,6 +312,7 @@ def _existing_source_file_paths(file_paths: Optional[List[str]]) -> List[str]:
 @PRESENTATION_ROUTER.post("/create", response_model=PresentationModel)
 async def create_presentation(
     content: Annotated[str, Body()],
+    request: Request = None,
     n_slides: Annotated[Optional[int], Body()] = None,
     language: Annotated[Optional[str], Body()] = None,
     file_paths: Annotated[Optional[List[str]], Body()] = None,
@@ -326,6 +331,28 @@ async def create_presentation(
     source_presentation_id: Annotated[Optional[uuid.UUID], Body()] = None,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
+    operation_id = validate_operation_id(request.headers.get("X-Operation-Id") if request else None)
+    owner_id = get_current_owner_id()
+    if operation_id and owner_id is None:
+        raise HTTPException(401, "An operation identity requires an authenticated owner")
+    fingerprint = request_hash({
+        "content": content, "n_slides": n_slides, "language": language, "file_paths": file_paths,
+        "tone": tone, "verbosity": verbosity, "instructions": instructions,
+        "include_table_of_contents": include_table_of_contents, "include_title_slide": include_title_slide,
+        "web_search": web_search, "web_search_mode": web_search_mode, "generation_mode": generation_mode,
+        "smart_template": smart_template, "smart_brand_colors": smart_brand_colors,
+        "source_presentation_id": source_presentation_id,
+    })
+    if operation_id:
+        previous = await replay_operation(sql_session, owner_id, operation_id, fingerprint)
+        if previous is not None:
+            return previous
+    logger.info(
+        "create_presentation entered mode=%s template=%s n_slides=%s",
+        generation_mode,
+        smart_template,
+        n_slides,
+    )
 
     if n_slides is not None and n_slides < 1:
         raise HTTPException(
@@ -391,7 +418,7 @@ async def create_presentation(
     presentation_id = uuid.uuid4()
     language_to_store = (language or "").strip()
     if file_paths:
-        validated_file_paths = TEMP_FILE_SERVICE.resolve_existing_temp_paths(file_paths)
+        validated_file_paths = await asyncio.to_thread(TEMP_FILE_SERVICE.validate_file_references, file_paths)
     elif source_presentation is not None and source_presentation.file_paths:
         # A deck built from an approved outline (the outline page's Smart/e&
         # buttons) must see the same source documents the outline was grounded
@@ -399,8 +426,8 @@ async def create_presentation(
         # lost. Inherited files may have been removed since (the temp dir is
         # wiped on every backend start), so skip missing ones instead of
         # failing the whole deck with a 404.
-        validated_file_paths = _existing_source_file_paths(
-            source_presentation.file_paths
+        validated_file_paths = await asyncio.to_thread(
+            _existing_source_file_paths, source_presentation.file_paths
         ) or None
     else:
         validated_file_paths = None
@@ -431,8 +458,7 @@ async def create_presentation(
         source_presentation_id=source_presentation_id,
     )
 
-    sql_session.add(presentation)
-    await sql_session.commit()
+    presentation = await commit_presentation(sql_session, presentation, owner_id, operation_id, fingerprint)
 
     logger.info(
         "[smart-workflow] created presentation_id=%s mode=%s requested_slides=%s stored_slides=%s files=%s smart_template=%s",
@@ -457,6 +483,20 @@ async def create_presentation(
     )
 
     return presentation
+
+
+@PRESENTATION_ROUTER.get("/operations/{operation_id}")
+async def get_presentation_operation(operation_id: str, sql_session: AsyncSession = Depends(get_async_session)):
+    validate_operation_id(operation_id)
+    owner_id = get_current_owner_id()
+    if owner_id is None:
+        raise HTTPException(401, "An operation lookup requires an authenticated owner")
+    outcome = await find_operation(sql_session, owner_id, operation_id)
+    if outcome is None:
+        # Not evidence of failure: an earlier request may still be committing.
+        raise HTTPException(404, "No committed outcome found")
+    return {"status": "completed", "operation_id": outcome.operation_id,
+            "presentation_id": str(outcome.presentation_id)}
 
 
 async def _stream_smart_presentation(
@@ -530,14 +570,14 @@ async def _stream_smart_presentation(
         # start - a restart between creating this deck and streaming it (or
         # resuming an interrupted run) must degrade to outline-only generation,
         # not a 404 mid-stream.
-        source_file_paths = _existing_source_file_paths(presentation.file_paths)
+        source_file_paths = await asyncio.to_thread(_existing_source_file_paths, presentation.file_paths)
         if presentation.file_paths and len(source_file_paths) < len(presentation.file_paths):
             yield SSEStatusResponse(
                 status="Some source documents are no longer available"
             ).to_string()
         if source_file_paths:
             yield SSEStatusResponse(status="Reading source documents").to_string()
-            documents_loader = DocumentsLoader(
+            documents_loader = await asyncio.to_thread(DocumentsLoader,
                 file_paths=source_file_paths,
                 presentation_language=presentation.language,
             )
@@ -765,13 +805,21 @@ async def _stream_smart_presentation(
         )
 
         try:
+            # A long deck can go a minute between slides. With no bytes on the
+            # wire the corporate gateway drops the stream, and the page stays
+            # on the last slide it received (seen as "Generating slide 8 of 33").
+            last_keepalive = time.monotonic()
             while not generation_task.done() or not generation_events.empty():
                 try:
                     event_type, event_value = await asyncio.wait_for(
                         generation_events.get(), timeout=0.1
                     )
                 except asyncio.TimeoutError:
+                    if time.monotonic() - last_keepalive >= 15:
+                        last_keepalive = time.monotonic()
+                        yield ": keepalive\n\n"
                     continue
+                last_keepalive = time.monotonic()
                 if event_type == "metrics":
                     metrics = event_value
                     if not isinstance(metrics, TextGenerationMetrics):

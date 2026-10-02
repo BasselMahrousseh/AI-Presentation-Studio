@@ -4,7 +4,6 @@ import os
 
 from fastapi import FastAPI
 
-from migrations import migrate_database_on_startup
 from services.chart_capture_store import sweep_stale_captures
 from services.table_capture_store import sweep_stale_captures as sweep_stale_table_captures
 from services.database import create_db_and_tables, dispose_engines
@@ -47,15 +46,21 @@ def _configure_application_logging() -> None:
 async def app_lifespan(_: FastAPI):
     """
     Lifespan context manager for FastAPI application.
-    Initializes the application data directory, runs Alembic migrations when
-    MIGRATE_DATABASE_ON_STARTUP=true, creates any missing tables, and checks the Azure OpenAI
-    and image-provider configuration.
+    Initializes the application data directory, creates any missing tables from
+    the application models, and checks the Azure OpenAI and image-provider configuration.
     """
     _configure_application_logging()
-    os.makedirs(get_app_data_directory_env(), exist_ok=True)
+    from utils.context_path import context_path
+
+    prefix = context_path()
+    logger.info("Context path %s", prefix or "/")
+    from services.asset_storage import get_asset_storage
+    get_asset_storage()  # Validate storage configuration without a live network call.
+    app_data_dir = (get_app_data_directory_env() or "").strip()
+    if app_data_dir:
+        os.makedirs(app_data_dir, exist_ok=True)
     sweep_stale_captures()
     sweep_stale_table_captures()
-    await migrate_database_on_startup()
     await create_db_and_tables()
     await check_llm_and_image_provider_api_or_model_availability()
     yield
