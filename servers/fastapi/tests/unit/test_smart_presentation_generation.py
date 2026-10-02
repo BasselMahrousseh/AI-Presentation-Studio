@@ -565,7 +565,9 @@ def test_smart_html_normalization_accepts_separated_positioned_content():
 
 def test_explicit_smart_slide_count_is_bounded():
     assert resolve_smart_slide_count(8) == 8
-    assert resolve_smart_slide_count(200) == smart_generation.MAX_SMART_SLIDE_COUNT == 40
+    assert resolve_smart_slide_count(15) == 15
+    assert resolve_smart_slide_count(16) == 15
+    assert resolve_smart_slide_count(200) == smart_generation.MAX_SMART_SLIDE_COUNT == 15
 
 
 def test_generation_limit_matches_the_outline_limit():
@@ -577,10 +579,10 @@ def test_generation_limit_matches_the_outline_limit():
 
 
 def test_fixed_eand_slides_no_longer_eat_into_an_explicit_count():
-    assert resolve_smart_slide_count(40, fixed_slide_count=2) == 40
+    assert resolve_smart_slide_count(15, fixed_slide_count=2) == 15
 
 
-def test_approved_30_slide_eand_outline_keeps_every_item():
+def test_approved_eand_outline_longer_than_the_limit_is_capped():
     outline = "\n".join(f"Slide: {index}\nSection {index}" for index in range(1, 31))
     count = asyncio.run(
         determine_smart_slide_count(
@@ -593,7 +595,7 @@ def test_approved_30_slide_eand_outline_keeps_every_item():
             fixed_slide_count=2,
         )
     )
-    assert count == 30
+    assert count == 15
 
 
 def test_long_decks_get_a_density_instruction_and_short_ones_do_not():
@@ -643,7 +645,7 @@ def test_smart_slide_count_is_chosen_by_llm(monkeypatch):
 
     assert count == 12
     assert "renewable-energy" in captured["messages"][1].content
-    assert captured["json_schema"]["properties"]["n_slides"]["maximum"] == 20
+    assert captured["json_schema"]["properties"]["n_slides"]["maximum"] == 15
 
 
 def test_eand_explicit_content_plan_keeps_every_supplied_section():
@@ -720,7 +722,7 @@ def test_eand_slide_count_is_capped_so_total_with_fixed_slides_fits(monkeypatch)
         )
     )
 
-    assert captured["json_schema"]["properties"]["n_slides"]["maximum"] == 18
+    assert captured["json_schema"]["properties"]["n_slides"]["maximum"] == 13
     assert count + 2 <= smart_generation.MAX_SMART_SLIDE_COUNT
 
 

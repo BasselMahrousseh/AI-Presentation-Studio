@@ -333,11 +333,10 @@ async def create_presentation(
             detail="Number of slides must be greater than 0",
         )
 
+    # Clamp rather than reject: Workspace chat offers pass the count the user
+    # typed (plus fixed e& slides), and the outline step caps it the same way.
     if n_slides is not None and n_slides > MAX_NUMBER_OF_SLIDES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Number of slides cannot be greater than {MAX_NUMBER_OF_SLIDES}",
-        )
+        n_slides = MAX_NUMBER_OF_SLIDES
 
     if include_table_of_contents and n_slides is not None and n_slides < 3:
         raise HTTPException(

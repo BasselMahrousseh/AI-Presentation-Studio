@@ -2,6 +2,8 @@ import math
 import re
 from typing import Optional
 
+from constants.presentation import MAX_NUMBER_OF_SLIDES
+
 from models.presentation_outline_model import (
     PresentationOutlineModel,
 )
@@ -74,6 +76,9 @@ def get_no_of_outlines_to_generate_for_n_slides(
     toc: bool,
     title_slide: bool,
 ) -> int:
+    # Decks stored before the limit dropped can still carry a larger count;
+    # asking for more than the parser keeps would fail the count check.
+    n_slides = min(n_slides, MAX_NUMBER_OF_SLIDES)
     if toc:
         n_toc_1 = math.ceil(((n_slides - 1) if title_slide else n_slides) / 10)
         n_toc_2 = math.ceil((n_slides - n_toc_1) / 10)

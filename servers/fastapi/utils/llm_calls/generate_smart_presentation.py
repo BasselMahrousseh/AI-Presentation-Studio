@@ -57,9 +57,9 @@ MIN_SMART_SLIDE_COUNT = 1
 # Verified live at 40 slides: one stream, 136-165s, with per-slide repair.
 MAX_SMART_SLIDE_COUNT = MAX_NUMBER_OF_SLIDES
 # Ceiling when the model chooses the count itself (no outline structure),
-# counting any fixed slides. Kept at the pre-existing 20: a vague prompt
-# should not grow into a 40-slide deck.
-MAX_SMART_AUTO_SLIDE_COUNT = 20
+# counting any fixed slides. A vague prompt should not grow past the
+# explicit limit (this was 20 while that limit was 40).
+MAX_SMART_AUTO_SLIDE_COUNT = min(20, MAX_NUMBER_OF_SLIDES)
 # Above this many slides one streamed response starts rationing effort -
 # measured: slides 10-30% lighter at 40 than the same outline as a short
 # deck - so long decks get an explicit density instruction.
