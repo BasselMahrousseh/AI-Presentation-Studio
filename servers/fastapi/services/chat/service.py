@@ -72,6 +72,24 @@ ChatStreamEventType = Literal["chunk", "complete", "status", "trace"]
 ChatStreamEventValue = str | ChatTurnResult | dict[str, Any]
 
 
+def validate_chat_presentation_type(
+    presentation_type: Literal["standard", "smart"],
+    generation_mode: str | None,
+) -> None:
+    """Reject a chat turn whose tool set cannot work on this presentation.
+
+    `presentation_type` picks the chat's tools: "standard" is the outline chat,
+    "smart" edits Smart HTML slides. Smart slide tools need a Smart record, but
+    the outline chat works on any record's outline - including a Smart record
+    still at its outline stage, which is what a Workspace chat hand-off creates.
+    """
+    if presentation_type == "smart" and generation_mode != "smart":
+        raise HTTPException(
+            status_code=400,
+            detail="Smart chat is only available for Smart presentations.",
+        )
+
+
 class PresentationChatService:
     def __init__(
         self,
@@ -269,13 +287,9 @@ class PresentationChatService:
         presentation = await self._sql_session.get(PresentationModel, self._presentation_id)
         if not presentation:
             raise HTTPException(status_code=404, detail="Presentation not found")
-        if presentation.generation_mode != self._presentation_type:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Presentation type does not match the stored generation mode."
-                ),
-            )
+        validate_chat_presentation_type(
+            self._presentation_type, presentation.generation_mode
+        )
 
         self._tools.set_web_search_mode(
             self._requested_web_search_mode or presentation.effective_web_search_mode
