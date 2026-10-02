@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import delete, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 from sqlmodel import select
 from constants.presentation import MAX_NUMBER_OF_SLIDES
 from models.presentation_and_path import PresentationAndPath
@@ -118,18 +119,36 @@ async def get_all_presentations(
     ] = False,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
+    # Every e& cover is the same red title layout, so as a dashboard thumbnail it tells decks apart
+    # only by the title the card already prints. e& decks preview their first content slide
+    # instead; other decks keep their cover. The index-0 join below still decides which decks
+    # are listed and whether one is unfinished.
+    preview_slide = aliased(SlideModel)
+    preview_join_condition = (
+        (preview_slide.presentation == PresentationModel.id)
+        & (preview_slide.index == 1)
+        & (PresentationModel.smart_template == EAND_SMART_TEMPLATE_ID)
+    )
     if include_slides and include_unfinished:
         # Outer join: a deck whose first slide does not exist yet (e& decks add the cover last)
         # must still be listed while its generation is unfinished, so the user can resume or delete
         # it. Slide-less drafts (e.g. the outline step's) are filtered out below.
-        query = select(PresentationModel, SlideModel).outerjoin(
-            SlideModel,
-            (SlideModel.presentation == PresentationModel.id) & (SlideModel.index == 0),
+        query = (
+            select(PresentationModel, SlideModel, preview_slide)
+            .outerjoin(
+                SlideModel,
+                (SlideModel.presentation == PresentationModel.id) & (SlideModel.index == 0),
+            )
+            .outerjoin(preview_slide, preview_join_condition)
         )
     elif include_slides:
-        query = select(PresentationModel, SlideModel).join(
-            SlideModel,
-            (SlideModel.presentation == PresentationModel.id) & (SlideModel.index == 0),
+        query = (
+            select(PresentationModel, SlideModel, preview_slide)
+            .join(
+                SlideModel,
+                (SlideModel.presentation == PresentationModel.id) & (SlideModel.index == 0),
+            )
+            .outerjoin(preview_slide, preview_join_condition)
         )
     else:
         query = select(PresentationModel)
@@ -165,8 +184,13 @@ async def get_all_presentations(
 
     rows = results.all()
     presentations_with_slides = []
-    for presentation, first_slide in rows:
-        slides = [first_slide] if first_slide is not None else []
+    for presentation, first_slide, content_slide in rows:
+        # A deck without its first slide stays slide-less (the UI shows it as unfinished), even
+        # when a later slide already exists: e& generation adds the cover last.
+        if first_slide is None:
+            slides = []
+        else:
+            slides = [content_slide if content_slide is not None else first_slide]
         presentations_with_slides.append(
             PresentationWithSlides(
                 **_presentation_response_data(presentation),
@@ -388,6 +412,10 @@ async def create_presentation(
         id=presentation_id,
         version=PresentationVersion.V2_STANDARD,
         content=content,
+        # A deck built from an approved outline starts with the outline's title, so the dashboard
+        # can name it before generation finishes (its content is the internal outline prompt).
+        # The generated deck title replaces it on completion.
+        title=source_presentation.title if source_presentation is not None else None,
         n_slides=n_slides_to_store,
         language=language_to_store,
         file_paths=validated_file_paths,

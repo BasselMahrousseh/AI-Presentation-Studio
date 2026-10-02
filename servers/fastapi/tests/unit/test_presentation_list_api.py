@@ -6,6 +6,8 @@ from sqlalchemy.dialects import sqlite
 
 from api.v1.ppt.endpoints import presentation as presentation_endpoint
 from models.sql.presentation import PresentationModel, PresentationVersion
+from models.sql.slide import SlideModel
+from utils.smart_brand_templates import EAND_SMART_TEMPLATE_ID
 
 
 class _RowsResult:
@@ -112,7 +114,7 @@ def test_get_all_presentations_returns_an_unfinished_deck_with_no_first_slide():
         created_at=now,
         updated_at=now,
     )
-    session = _CapturingAsyncSession([(unfinished, None)])
+    session = _CapturingAsyncSession([(unfinished, None, None)])
 
     response = asyncio.run(
         presentation_endpoint.get_all_presentations(include_unfinished=True, sql_session=session)
@@ -129,5 +131,72 @@ def test_get_all_presentations_keeps_inner_join_unless_unfinished_is_requested()
     asyncio.run(presentation_endpoint.get_all_presentations(sql_session=session))
 
     compiled = _compile_statement(session.executed_statement)
-    assert "LEFT OUTER JOIN" not in compiled
+    # The first slide is inner-joined; only the e& preview slide (an alias) is optional.
+    assert 'FROM "GENAI_WORKSPACE_PRESENTATION" JOIN "GENAI_WORKSPACE_SLIDE" ON' in compiled
+    assert 'LEFT OUTER JOIN "GENAI_WORKSPACE_SLIDE" ON' not in compiled
     assert "'in_progress'" not in compiled
+
+
+def _smart_deck(**overrides):
+    now = datetime.now(timezone.utc)
+    values = dict(
+        version=PresentationVersion.V2_STANDARD,
+        content="Deck",
+        n_slides=5,
+        language="en",
+        title="Deck",
+        generation_mode="smart",
+        created_at=now,
+        updated_at=now,
+    )
+    values.update(overrides)
+    return PresentationModel(**values)
+
+
+def _slide(presentation, index):
+    return SlideModel(
+        presentation=presentation.id,
+        index=index,
+        layout_group="smart",
+        layout="smart",
+        content={},
+        html_content=f"<p>{index}</p>",
+    )
+
+
+def test_get_all_presentations_previews_e_and_decks_by_their_first_content_slide():
+    deck = _smart_deck(smart_template=EAND_SMART_TEMPLATE_ID)
+    cover, content = _slide(deck, 0), _slide(deck, 1)
+    session = _CapturingAsyncSession([(deck, cover, content)])
+
+    response = asyncio.run(
+        presentation_endpoint.get_all_presentations(include_unfinished=True, sql_session=session)
+    )
+
+    assert [slide.index for slide in response[0].slides] == [1]
+    compiled = _compile_statement(session.executed_statement)
+    # The preview join is restricted to e& decks; other decks keep previewing their cover.
+    assert f"smart_template = '{EAND_SMART_TEMPLATE_ID}'" in compiled
+    assert '"GENAI_WORKSPACE_SLIDE_1"."index" = 1' in compiled
+
+
+def test_get_all_presentations_falls_back_to_the_cover_without_a_content_slide():
+    deck = _smart_deck(smart_template=None)
+    cover = _slide(deck, 0)
+    session = _CapturingAsyncSession([(deck, cover, None)])
+
+    response = asyncio.run(presentation_endpoint.get_all_presentations(sql_session=session))
+
+    assert [slide.index for slide in response[0].slides] == [0]
+
+
+def test_get_all_presentations_keeps_a_coverless_e_and_deck_unfinished():
+    # e& generation adds the cover last: a deck with content slides but no cover is still unfinished.
+    deck = _smart_deck(smart_template=EAND_SMART_TEMPLATE_ID, generation_status="in_progress")
+    session = _CapturingAsyncSession([(deck, None, _slide(deck, 1))])
+
+    response = asyncio.run(
+        presentation_endpoint.get_all_presentations(include_unfinished=True, sql_session=session)
+    )
+
+    assert response[0].slides == []

@@ -173,3 +173,20 @@ def test_brand_colors_are_rejected_outside_smart_mode(env):
     created = _create(env, {"generation_mode": "standard", "smart_brand_colors": ["#FF0000"]})
 
     assert created.status_code == 400
+
+
+def test_deck_starts_with_the_outlines_title(env):
+    alice = env.user_id("alice")
+    source = env.make_deck(alice, with_slides=False)
+
+    async def name_outline():
+        async with env.maker() as s:
+            p = await s.get(type(source), source.id)
+            p.title = "Green technology strategy"
+            await s.commit()
+    asyncio.run(name_outline())
+
+    created = _create(env, {"source_presentation_id": str(source.id)})
+
+    assert created.status_code == 200
+    assert env.presentation(uuid.UUID(created.json()["id"])).title == "Green technology strategy"
